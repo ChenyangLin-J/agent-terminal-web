@@ -1,7 +1,5 @@
 const loginScreen = document.querySelector("#login-screen");
 const loginForm = document.querySelector("#login-form");
-const passwordInput = document.querySelector("#password");
-const loginError = document.querySelector("#login-error");
 const startScreen = document.querySelector("#start-screen");
 const sessionScreen = document.querySelector("#session-screen");
 const projectSelect = document.querySelector("#project");
@@ -75,7 +73,7 @@ promptInput.addEventListener("keydown", (event) => {
 });
 
 bootstrap().catch(() => {
-  showLoginScreen();
+  redirectToLogin();
 });
 
 async function bootstrap() {
@@ -86,34 +84,20 @@ async function bootstrap() {
     await loadProjects();
     await refreshLists();
   } else {
-    showLoginScreen();
+    redirectToLogin(data.loginUrl);
   }
 }
 
 async function login(event) {
   event.preventDefault();
-  loginError.textContent = "";
-  const response = await fetch("/api/login", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password: passwordInput.value }),
-  });
-
-  if (!response.ok) {
-    loginError.textContent = "Login failed.";
-    return;
-  }
-
-  passwordInput.value = "";
-  showStartScreen();
-  await loadProjects();
-  await refreshLists();
+  redirectToLogin();
 }
 
 async function logout() {
-  await fetch("/api/logout", { method: "POST" });
   detach(false);
-  showLoginScreen();
+  const response = await fetch("/api/logout", { method: "POST" });
+  const data = await response.json();
+  window.location.href = data.logoutUrl || "https://auth.chenyanglin.com/logout";
 }
 
 async function loadProjects() {
@@ -461,10 +445,15 @@ function installTerminalTouchScroll() {
 async function apiJson(url) {
   const response = await fetch(url);
   if (response.status === 401) {
-    showLoginScreen();
+    redirectToLogin();
     return null;
   }
   return response.json();
+}
+
+function redirectToLogin(loginUrl = "") {
+  window.location.href =
+    loginUrl || `https://auth.chenyanglin.com/login?next=${encodeURIComponent(window.location.href)}`;
 }
 
 function formatLaunch(status) {

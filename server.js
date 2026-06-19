@@ -6,7 +6,6 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import bcrypt from "bcryptjs";
 import express from "express";
 import { WebSocketServer } from "ws";
 
@@ -19,10 +18,9 @@ const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT || path.join(__di
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 3030);
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 60 * 60 * 1000);
-const AUTH_COOKIE = "agent_auth";
-const AUTH_MAX_AGE_SECONDS = Number(process.env.AUTH_MAX_AGE_SECONDS || 30 * 24 * 60 * 60);
-const AUTH_BCRYPT_HASH = process.env.AGENT_AUTH_BCRYPT_HASH || "";
-const AUTH_SECRET = process.env.AGENT_AUTH_SECRET || crypto.randomBytes(32).toString("hex");
+const AUTH_VERIFY_URL = process.env.PRIVATE_AUTH_VERIFY_URL || "http://127.0.0.1:3060/api/verify";
+const AUTH_LOGIN_URL = process.env.PRIVATE_AUTH_LOGIN_URL || "https://auth.chenyanglin.com/login";
+const AUTH_LOGOUT_URL = process.env.PRIVATE_AUTH_LOGOUT_URL || "https://auth.chenyanglin.com/logout";
 const CODEX_SESSIONS_ROOT = path.join(process.env.CODEX_HOME || path.join(process.env.HOME, ".codex"), "sessions");
 const MAX_RAW_BUFFER = 1024 * 1024;
 const MAX_TEXT_BUFFER = 200_000;
@@ -41,30 +39,28 @@ app.use(
   express.static(path.join(__dirname, "node_modules", "@xterm", "addon-fit", "lib")),
 );
 
-app.get("/api/auth", (req, res) => {
-  res.json({ authenticated: isAuthenticated(req) });
+app.get("/api/auth", async (req, res) => {
+  res.json({
+    authenticated: await isAuthenticated(req),
+    loginUrl: loginUrl(req),
+    logoutUrl: logoutUrl(req),
+  });
 });
 
-app.post("/api/login", async (req, res) => {
-  if (!AUTH_BCRYPT_HASH) {
-    res.status(503).json({ error: "Auth is not configured." });
-    return;
-  }
-
-  const password = String(req.body?.password || "");
-  const ok = await bcrypt.compare(password, AUTH_BCRYPT_HASH);
-  if (!ok) {
-    res.status(401).json({ error: "Invalid password." });
-    return;
-  }
-
-  res.setHeader("Set-Cookie", serializeAuthCookie(createAuthToken(), req));
-  res.json({ authenticated: true });
+app.post("/api/login", (req, res) => {
+  res.status(410).json({ loginUrl: loginUrl(req) });
 });
 
-app.post("/api/logout", (_req, res) => {
-  res.setHeader("Set-Cookie", `${AUTH_COOKIE}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0`);
-  res.json({ authenticated: false });
+app.post("/api/logout", (req, res) => {
+  res.json({ authenticated: false, logoutUrl: logoutUrl(req) });
+});
+
+app.get("/login", (req, res) => {
+  res.redirect(loginUrl(req));
+});
+
+app.get("/logout", (req, res) => {
+  res.redirect(logoutUrl(req));
 });
 
 app.use("/api", requireAuth);
@@ -109,8 +105,8 @@ app.get("/api/git-status", async (req, res) => {
   }
 });
 
-wss.on("connection", (ws, req) => {
-  if (!isAuthenticated(req)) {
+wss.on("connection", async (ws, req) => {
+  if (!(await isAuthenticated(req))) {
     send(ws, "error", { message: "Not authenticated." });
     ws.close();
     return;
@@ -153,68 +149,47 @@ server.listen(PORT, HOST, () => {
   console.log(`Detached session TTL: ${Math.round(SESSION_TTL_MS / 60000)} minutes`);
 });
 
-function requireAuth(req, res, next) {
-  if (isAuthenticated(req)) {
+async function requireAuth(req, res, next) {
+  if (await isAuthenticated(req)) {
     next();
     return;
   }
   res.status(401).json({ error: "Not authenticated." });
 }
 
-function isAuthenticated(req) {
-  const token = parseCookies(req.headers.cookie || "")[AUTH_COOKIE];
-  return Boolean(token && verifyAuthToken(token));
-}
-
-function createAuthToken() {
-  const payload = Buffer.from(
-    JSON.stringify({ exp: Date.now() + AUTH_MAX_AGE_SECONDS * 1000 }),
-    "utf8",
-  ).toString("base64url");
-  const signature = crypto.createHmac("sha256", AUTH_SECRET).update(payload).digest("base64url");
-  return `${payload}.${signature}`;
-}
-
-function verifyAuthToken(token) {
-  const [payload, signature] = String(token).split(".");
-  if (!payload || !signature) return false;
-
-  const expected = crypto.createHmac("sha256", AUTH_SECRET).update(payload).digest("base64url");
-  const actualBuffer = Buffer.from(signature);
-  const expectedBuffer = Buffer.from(expected);
-  if (actualBuffer.length !== expectedBuffer.length) return false;
-  if (!crypto.timingSafeEqual(actualBuffer, expectedBuffer)) return false;
-
+async function isAuthenticated(req) {
   try {
-    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    return Number(data.exp) > Date.now();
-  } catch {
+    const response = await fetch(AUTH_VERIFY_URL, {
+      headers: {
+        cookie: req.headers.cookie || "",
+      },
+    });
+    if (!response.ok) return false;
+
+    const data = await response.json();
+    return Boolean(data.authenticated);
+  } catch (error) {
+    console.error(`Auth verify failed: ${error.message}`);
     return false;
   }
 }
 
-function serializeAuthCookie(token, req) {
-  const secure = req.headers["x-forwarded-proto"] === "https" || req.socket.encrypted;
-  return [
-    `${AUTH_COOKIE}=${token}`,
-    "HttpOnly",
-    "Path=/",
-    "SameSite=Lax",
-    `Max-Age=${AUTH_MAX_AGE_SECONDS}`,
-    secure ? "Secure" : "",
-  ]
-    .filter(Boolean)
-    .join("; ");
+function loginUrl(req) {
+  return `${AUTH_LOGIN_URL}?next=${encodeURIComponent(getRequestUrl(req))}`;
 }
 
-function parseCookies(cookieHeader) {
-  const cookies = {};
-  for (const part of cookieHeader.split(";")) {
-    const index = part.indexOf("=");
-    if (index === -1) continue;
-    cookies[part.slice(0, index).trim()] = part.slice(index + 1).trim();
-  }
-  return cookies;
+function logoutUrl(req) {
+  return `${AUTH_LOGOUT_URL}?next=${encodeURIComponent(getOrigin(req))}`;
+}
+
+function getRequestUrl(req) {
+  return `${getOrigin(req)}${req.originalUrl || "/"}`;
+}
+
+function getOrigin(req) {
+  const protocol = req.headers["x-forwarded-proto"] || (req.socket.encrypted ? "https" : "http");
+  const host = req.headers["x-forwarded-host"] || req.headers.host || "agent.chenyanglin.com";
+  return `${protocol}://${host}`;
 }
 
 function createSession(cwd, launch) {

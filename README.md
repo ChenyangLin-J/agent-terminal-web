@@ -21,7 +21,7 @@ Production route:
 https://agent.chenyanglin.com
 ```
 
-The production route is reverse proxied by Caddy. The app handles login itself with an HttpOnly cookie that lasts 30 days by default.
+The production route is reverse proxied by Caddy. Authentication is delegated to Private Auth Web.
 
 ## What It Does
 
@@ -85,4 +85,11 @@ Private environment values live in:
 
 ```text
 /home/ubuntu/.config/agent-terminal-web.env
+```
+
+Auth service:
+
+```text
+http://127.0.0.1:3060/api/verify
+https://auth.chenyanglin.com/login
 ```

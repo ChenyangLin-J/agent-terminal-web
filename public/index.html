@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent Terminal Web</title>
+    <link rel="stylesheet" href="/vendor/xterm-css/xterm.css?v=20260619-12" />
+    <link rel="stylesheet" href="/styles.css?v=20260619-12" />
+  </head>
+  <body>
+    <main class="app">
+      <section id="login-screen" class="login-screen" aria-label="Login">
+        <form id="login-form" class="login-box">
+          <h1>Codex Agent</h1>
+          <label>
+            <span>Password</span>
+            <input id="password" type="password" autocomplete="current-password" />
+          </label>
+          <button class="primary" type="submit">Login</button>
+          <p id="login-error" class="error"></p>
+        </form>
+      </section>
+
+      <section id="start-screen" class="start-screen hidden" aria-label="Start session">
+        <header class="start-header">
+          <div>
+            <h1>Codex Agent</h1>
+            <p>Start, reconnect, or resume a Codex CLI session.</p>
+          </div>
+          <button id="logout" type="button">Logout</button>
+        </header>
+
+        <div class="start-grid">
+          <label>
+            <span>Project</span>
+            <select id="project"></select>
+          </label>
+
+          <label>
+            <span>Launch</span>
+            <select id="launch-mode">
+              <option value="new">New session</option>
+              <option value="resume-last">Resume last</option>
+            </select>
+          </label>
+
+          <label>
+            <span>Session ID</span>
+            <input id="session-id" type="text" spellcheck="false" placeholder="optional" />
+          </label>
+        </div>
+
+        <div class="start-actions">
+          <button id="connect" class="primary" type="button">Start</button>
+          <button id="refresh-sessions" type="button">Refresh</button>
+        </div>
+
+        <section class="recent">
+          <h2>Live Sessions</h2>
+          <div id="sessions-list" class="sessions-list"></div>
+        </section>
+
+        <section class="recent">
+          <h2>Saved Codex Sessions</h2>
+          <div id="codex-sessions-list" class="sessions-list"></div>
+        </section>
+      </section>
+
+      <section id="session-screen" class="session-screen hidden" aria-label="Codex session">
+        <header class="session-header">
+          <button id="back" type="button">Sessions</button>
+          <div class="session-title">
+            <strong id="session-project">.</strong>
+            <span id="connection">idle</span>
+          </div>
+          <div class="session-controls">
+            <button id="disconnect" type="button">Leave</button>
+            <button id="kill-session" class="danger" type="button">Stop Codex</button>
+          </div>
+        </header>
+
+        <section class="view-tabs" aria-label="Terminal view mode">
+          <button id="terminal-tab" class="active" type="button">Terminal</button>
+          <button id="text-tab" type="button">Text</button>
+        </section>
+
+        <section class="terminal-view">
+          <div id="terminal" aria-label="Codex terminal"></div>
+        </section>
+
+        <section id="text-view" class="text-view hidden" aria-label="Terminal text">
+          <textarea id="terminal-text" readonly spellcheck="false" wrap="soft"></textarea>
+        </section>
+
+        <section class="quick-actions" aria-label="Quick commands">
+          <button id="page-up" type="button">Page Up</button>
+          <button id="page-down" type="button">Page Down</button>
+          <button id="key-up" type="button">Up</button>
+          <button id="key-down" type="button">Down</button>
+          <button id="key-enter" type="button">Enter</button>
+          <button id="key-esc" type="button">Esc</button>
+          <button id="send-status" type="button">/status</button>
+          <button id="send-permissions" type="button">/permissions</button>
+        </section>
+
+        <section class="composer" aria-label="Prompt composer">
+          <textarea
+            id="prompt"
+            rows="5"
+            placeholder="Dictate or type a prompt. You can tap to edit before sending."
+          ></textarea>
+          <button id="send-prompt" class="primary" type="button">Send</button>
+        </section>
+      </section>
+    </main>
+
+    <script src="/vendor/xterm/xterm.js?v=20260619-12"></script>
+    <script src="/vendor/xterm-fit/addon-fit.js?v=20260619-12"></script>
+    <script src="/app.js?v=20260619-12"></script>
+  </body>
+</html>

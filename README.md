@@ -84,7 +84,7 @@ systemctl --user restart agent-terminal-web.service
 Private environment values live in:
 
 ```text
-/home/ubuntu/.config/agent-terminal-web.env
+/home/ubuntu/.config/private-web.env
 ```
 
 Auth service:

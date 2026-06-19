@@ -1,5 +1,3 @@
-const loginScreen = document.querySelector("#login-screen");
-const loginForm = document.querySelector("#login-form");
 const startScreen = document.querySelector("#start-screen");
 const sessionScreen = document.querySelector("#session-screen");
 const projectSelect = document.querySelector("#project");
@@ -46,7 +44,6 @@ window.addEventListener("resize", () => {
   sendResize();
 });
 
-loginForm.addEventListener("submit", login);
 logoutButton.addEventListener("click", logout);
 connectButton.addEventListener("click", () => startSession());
 refreshSessionsButton.addEventListener("click", refreshLists);
@@ -86,11 +83,6 @@ async function bootstrap() {
   } else {
     redirectToLogin(data.loginUrl);
   }
-}
-
-async function login(event) {
-  event.preventDefault();
-  redirectToLogin();
 }
 
 async function logout() {
@@ -307,14 +299,7 @@ function setConnectedState(state) {
   killSessionButton.disabled = !connected;
 }
 
-function showLoginScreen() {
-  loginScreen.classList.remove("hidden");
-  startScreen.classList.add("hidden");
-  sessionScreen.classList.add("hidden");
-}
-
 function showStartScreen() {
-  loginScreen.classList.add("hidden");
   startScreen.classList.remove("hidden");
   sessionScreen.classList.add("hidden");
   window.clearInterval(sessionsTimer);
@@ -323,7 +308,6 @@ function showStartScreen() {
 }
 
 function showSessionScreen() {
-  loginScreen.classList.add("hidden");
   startScreen.classList.add("hidden");
   sessionScreen.classList.remove("hidden");
   closeTextView();

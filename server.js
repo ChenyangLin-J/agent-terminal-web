@@ -42,13 +42,13 @@ app.use(
 app.get("/api/auth", async (req, res) => {
   res.json({
     authenticated: await isAuthenticated(req),
-    loginUrl: loginUrl(req),
+    loginUrl: loginUrlForNext(req, getOrigin(req)),
     logoutUrl: logoutUrl(req),
   });
 });
 
 app.post("/api/login", (req, res) => {
-  res.status(410).json({ loginUrl: loginUrl(req) });
+  res.status(410).json({ loginUrl: loginUrlForNext(req, getOrigin(req)) });
 });
 
 app.post("/api/logout", (req, res) => {
@@ -56,7 +56,7 @@ app.post("/api/logout", (req, res) => {
 });
 
 app.get("/login", (req, res) => {
-  res.redirect(loginUrl(req));
+  res.redirect(loginUrlForNext(req, getLoginNext(req)));
 });
 
 app.get("/logout", (req, res) => {
@@ -174,22 +174,34 @@ async function isAuthenticated(req) {
   }
 }
 
-function loginUrl(req) {
-  return `${AUTH_LOGIN_URL}?next=${encodeURIComponent(getRequestUrl(req))}`;
+function loginUrlForNext(req, next) {
+  return `${AUTH_LOGIN_URL}?next=${encodeURIComponent(next || getOrigin(req))}`;
 }
 
 function logoutUrl(req) {
   return `${AUTH_LOGOUT_URL}?next=${encodeURIComponent(getOrigin(req))}`;
 }
 
-function getRequestUrl(req) {
-  return `${getOrigin(req)}${req.originalUrl || "/"}`;
-}
-
 function getOrigin(req) {
   const protocol = req.headers["x-forwarded-proto"] || (req.socket.encrypted ? "https" : "http");
   const host = req.headers["x-forwarded-host"] || req.headers.host || "agent.chenyanglin.com";
   return `${protocol}://${host}`;
+}
+
+function getLoginNext(req) {
+  const next = String(req.query?.next || "");
+  if (next.startsWith("/") && !next.startsWith("//")) return `${getOrigin(req)}${next}`;
+
+  try {
+    const url = new URL(next);
+    if (url.hostname === "chenyanglin.com" || url.hostname.endsWith(".chenyanglin.com")) {
+      return url.toString();
+    }
+  } catch {
+    return getOrigin(req);
+  }
+
+  return getOrigin(req);
 }
 
 function createSession(cwd, launch) {

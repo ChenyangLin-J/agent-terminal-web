@@ -21,7 +21,9 @@ const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 60 * 60 * 1000);
 const AUTH_VERIFY_URL = process.env.PRIVATE_AUTH_VERIFY_URL || "http://127.0.0.1:3060/api/verify";
 const AUTH_LOGIN_URL = process.env.PRIVATE_AUTH_LOGIN_URL || "https://auth.chenyanglin.com/login";
 const AUTH_LOGOUT_URL = process.env.PRIVATE_AUTH_LOGOUT_URL || "https://auth.chenyanglin.com/logout";
-const CODEX_SESSIONS_ROOT = path.join(process.env.CODEX_HOME || path.join(process.env.HOME, ".codex"), "sessions");
+const CODEX_HOME = process.env.CODEX_HOME || path.join(process.env.HOME, ".codex");
+const CODEX_SESSIONS_ROOT = path.join(CODEX_HOME, "sessions");
+const CODEX_SESSION_TITLES_FILE = path.join(CODEX_HOME, "session-titles.json");
 const MAX_RAW_BUFFER = 1024 * 1024;
 const MAX_TEXT_BUFFER = 200_000;
 
@@ -88,6 +90,29 @@ app.get("/api/sessions", (_req, res) => {
 app.get("/api/codex-sessions", async (_req, res) => {
   const codexSessions = await listCodexSessions();
   res.json({ sessions: codexSessions });
+});
+
+app.put("/api/codex-sessions/:id/title", async (req, res) => {
+  const id = String(req.params.id || "").trim();
+  const title = cleanCustomTitle(req.body?.title);
+
+  if (!isValidSessionId(id)) {
+    res.status(400).json({ error: "Invalid session id." });
+    return;
+  }
+
+  try {
+    const titles = await readSessionTitles();
+    if (title) {
+      titles[id] = title;
+    } else {
+      delete titles[id];
+    }
+    await writeSessionTitles(titles);
+    res.json({ id, customTitle: title });
+  } catch (error) {
+    res.status(500).json({ error: `Failed to save title: ${error.message}` });
+  }
 });
 
 app.get("/api/git-status", async (req, res) => {
@@ -413,11 +438,12 @@ function getLaunchConfig(searchParams) {
 
 async function listCodexSessions() {
   const files = await walkFiles(CODEX_SESSIONS_ROOT);
+  const customTitles = await readSessionTitles();
   const items = [];
 
   for (const file of files) {
     if (!file.endsWith(".jsonl")) continue;
-    const meta = await readCodexSessionMeta(file);
+    const meta = await readCodexSessionMeta(file, customTitles);
     if (meta) items.push(meta);
   }
 
@@ -442,7 +468,7 @@ async function walkFiles(root) {
   }
 }
 
-async function readCodexSessionMeta(file) {
+async function readCodexSessionMeta(file, customTitles = {}) {
   const firstLine = await readFirstLine(file);
   if (!firstLine) return null;
 
@@ -453,9 +479,12 @@ async function readCodexSessionMeta(file) {
     const cwd = payload.cwd || "";
     const stat = await fs.stat(file);
     const title = await readCodexSessionTitle(file);
+    const customTitle = customTitles[id] || "";
     return {
       id,
-      title,
+      title: customTitle || title,
+      originalTitle: title,
+      customTitle,
       cwd,
       project: projectFromCwd(cwd),
       source: payload.source || payload.originator || "",
@@ -466,6 +495,49 @@ async function readCodexSessionMeta(file) {
   } catch {
     return null;
   }
+}
+
+async function readSessionTitles() {
+  try {
+    const raw = await fs.readFile(CODEX_SESSION_TITLES_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .map(([id, title]) => [String(id), cleanCustomTitle(title)])
+        .filter(([id, title]) => isValidSessionId(id) && title),
+    );
+  } catch (error) {
+    if (error.code === "ENOENT") return {};
+    console.error(`Failed to read session titles: ${error.message}`);
+    return {};
+  }
+}
+
+async function writeSessionTitles(titles) {
+  await fs.mkdir(path.dirname(CODEX_SESSION_TITLES_FILE), { recursive: true });
+  const cleaned = Object.fromEntries(
+    Object.entries(titles)
+      .map(([id, title]) => [String(id), cleanCustomTitle(title)])
+      .filter(([id, title]) => isValidSessionId(id) && title)
+      .sort(([a], [b]) => a.localeCompare(b)),
+  );
+  const tempFile = `${CODEX_SESSION_TITLES_FILE}.${process.pid}.tmp`;
+  await fs.writeFile(tempFile, `${JSON.stringify(cleaned, null, 2)}\n`, { mode: 0o600 });
+  await fs.rename(tempFile, CODEX_SESSION_TITLES_FILE);
+}
+
+function cleanCustomTitle(value) {
+  return truncateTitle(
+    String(value || "")
+      .replace(/\s+/g, " ")
+      .trim(),
+  );
+}
+
+function isValidSessionId(value) {
+  return /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(String(value || ""));
 }
 
 async function readCodexSessionTitle(file) {

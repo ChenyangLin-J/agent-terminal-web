@@ -169,6 +169,22 @@ input {
   font-size: 12px;
 }
 
+.session-card-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.session-card-actions button {
+  min-height: 36px;
+  padding: 0 10px;
+}
+
+.session-card-actions .secondary {
+  color: #cbd2df;
+  background: #151a23;
+}
+
 .empty {
   color: #858b99;
   font-size: 14px;

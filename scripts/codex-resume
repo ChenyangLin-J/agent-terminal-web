@@ -1,0 +1,365 @@
+#!/usr/bin/env node
+import fs from "node:fs/promises";
+import fsSync from "node:fs";
+import path from "node:path";
+import readline from "node:readline/promises";
+import { spawn } from "node:child_process";
+
+const CODEX_HOME = process.env.CODEX_HOME || path.join(process.env.HOME, ".codex");
+const SESSIONS_ROOT = path.join(CODEX_HOME, "sessions");
+const TITLES_FILE = path.join(CODEX_HOME, "session-titles.json");
+const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || "/home/ubuntu/workspace";
+const LIMIT = Number(process.env.CODEX_RESUME_LIMIT || 40);
+
+const mode = process.argv.includes("--rename") ? "rename" : "resume";
+
+main().catch((error) => {
+  console.error(error.message);
+  process.exit(1);
+});
+
+async function main() {
+  const sessions = await listSessions();
+  if (!sessions.length) {
+    console.log("No Codex sessions found.");
+    return;
+  }
+
+  printSessions(sessions);
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  try {
+    const answer = await rl.question(mode === "rename" ? "Rename session number: " : "Resume session number: ");
+    const trimmed = answer.trim().toLowerCase();
+    if (!trimmed || trimmed === "q" || trimmed === "quit") return;
+
+    const index = Number.parseInt(trimmed, 10) - 1;
+    const session = sessions[index];
+    if (!session) {
+      console.error("Invalid selection.");
+      process.exitCode = 1;
+      return;
+    }
+
+    if (mode === "rename") {
+      const title = await rl.question("New title, blank to clear: ");
+      await saveTitle(session.id, title);
+      console.log(title.trim() ? "Title saved." : "Title cleared.");
+      return;
+    }
+
+    await resumeSession(session.id);
+  } finally {
+    rl.close();
+  }
+}
+
+async function listSessions() {
+  const customTitles = await readTitles();
+  const files = await walkFiles(SESSIONS_ROOT);
+  const sessions = [];
+
+  for (const file of files) {
+    if (!file.endsWith(".jsonl")) continue;
+    const meta = await readSessionMeta(file, customTitles);
+    if (meta) sessions.push(meta);
+  }
+
+  return sessions
+    .sort((a, b) => b.updatedAtMs - a.updatedAtMs)
+    .slice(0, LIMIT);
+}
+
+async function readSessionMeta(file, customTitles) {
+  const firstLine = await readFirstLine(file);
+  if (!firstLine) return null;
+
+  try {
+    const parsed = JSON.parse(firstLine);
+    const payload = parsed.payload || {};
+    const id = payload.id || sessionIdFromFilename(file);
+    if (!isValidSessionId(id)) return null;
+
+    const stat = await fs.stat(file);
+    const cwd = payload.cwd || "";
+    const originalTitle = await readSessionTitle(file);
+    const customTitle = customTitles[id] || "";
+
+    return {
+      id,
+      title: customTitle || originalTitle || "Untitled session",
+      project: projectFromCwd(cwd),
+      updatedAt: stat.mtime,
+      updatedAtMs: stat.mtimeMs,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function printSessions(sessions) {
+  const titleWidth = Math.min(
+    46,
+    Math.max(22, ...sessions.map((session) => displayWidth(session.title))),
+  );
+  const projectWidth = Math.min(
+    24,
+    Math.max(9, ...sessions.map((session) => displayWidth(session.project))),
+  );
+
+  for (const [index, session] of sessions.entries()) {
+    const number = String(index + 1).padStart(2, " ");
+    const title = padEnd(truncateDisplay(session.title, titleWidth), titleWidth);
+    const project = padEnd(truncateDisplay(session.project, projectWidth), projectWidth);
+    console.log(`${number}. ${title}  ${project}  ${formatTime(session.updatedAt)}`);
+  }
+  console.log("");
+}
+
+async function resumeSession(id) {
+  await new Promise((resolve, reject) => {
+    const child = spawn("codex", ["resume", id], {
+      stdio: "inherit",
+      env: process.env,
+    });
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      if (signal) {
+        reject(new Error(`codex exited with signal ${signal}`));
+        return;
+      }
+      process.exitCode = code || 0;
+      resolve();
+    });
+  });
+}
+
+async function readTitles() {
+  try {
+    const raw = await fs.readFile(TITLES_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .map(([id, title]) => [String(id), cleanTitle(title)])
+        .filter(([id, title]) => isValidSessionId(id) && title),
+    );
+  } catch (error) {
+    if (error.code === "ENOENT") return {};
+    return {};
+  }
+}
+
+async function saveTitle(id, value) {
+  const titles = await readTitles();
+  const title = cleanTitle(value);
+  if (title) {
+    titles[id] = title;
+  } else {
+    delete titles[id];
+  }
+
+  await fs.mkdir(path.dirname(TITLES_FILE), { recursive: true });
+  const cleaned = Object.fromEntries(
+    Object.entries(titles)
+      .map(([entryId, entryTitle]) => [String(entryId), cleanTitle(entryTitle)])
+      .filter(([entryId, entryTitle]) => isValidSessionId(entryId) && entryTitle)
+      .sort(([a], [b]) => a.localeCompare(b)),
+  );
+  const tempFile = `${TITLES_FILE}.${process.pid}.tmp`;
+  await fs.writeFile(tempFile, `${JSON.stringify(cleaned, null, 2)}\n`, { mode: 0o600 });
+  await fs.rename(tempFile, TITLES_FILE);
+}
+
+async function walkFiles(root) {
+  try {
+    const entries = await fs.readdir(root, { withFileTypes: true });
+    const files = await Promise.all(
+      entries.map(async (entry) => {
+        const fullPath = path.join(root, entry.name);
+        if (entry.isDirectory()) return walkFiles(fullPath);
+        return entry.isFile() ? [fullPath] : [];
+      }),
+    );
+    return files.flat();
+  } catch {
+    return [];
+  }
+}
+
+async function readSessionTitle(file) {
+  const stream = fsSync.createReadStream(file, { encoding: "utf8", highWaterMark: 16_384 });
+  let buffer = "";
+  let linesRead = 0;
+
+  for await (const chunk of stream) {
+    buffer += chunk;
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      linesRead += 1;
+      const title = titleFromJsonLine(line);
+      if (title) return title;
+      if (linesRead > 300) {
+        stream.destroy();
+        return "";
+      }
+    }
+  }
+
+  return titleFromJsonLine(buffer);
+}
+
+function titleFromJsonLine(line) {
+  if (!line.trim()) return "";
+
+  try {
+    const parsed = JSON.parse(line);
+    const payload = parsed.payload || {};
+
+    if (parsed.type === "event_msg" && payload.type === "user_message") {
+      return cleanOriginalTitle(payload.message);
+    }
+
+    if (parsed.type === "response_item" && payload.type === "message" && payload.role === "user") {
+      return cleanOriginalTitle(textFromContent(payload.content));
+    }
+  } catch {
+    return "";
+  }
+
+  return "";
+}
+
+function textFromContent(content) {
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((item) => item?.text || "")
+    .filter(Boolean)
+    .join("\n");
+}
+
+function cleanOriginalTitle(value) {
+  const text = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "";
+  if (text.startsWith("# AGENTS.md instructions")) return "";
+  if (text.startsWith("<environment_context>")) return "";
+  if (text.startsWith("You are Codex,")) return "";
+  if (text.length > 500 && /<daily_monitoring_playbook>|<agent_rules>|<INSTRUCTIONS>/.test(text)) {
+    return summarizeLongPrompt(text);
+  }
+  return truncate(text, 72);
+}
+
+function summarizeLongPrompt(text) {
+  const candidates = [
+    /你是[“"]([^”"]+)[”"]/,
+    /核心问题：\s*>?\s*([^<。]+[。]?)/,
+    /^(.{1,80}?)(?:。|\.|\n)/,
+  ];
+
+  for (const pattern of candidates) {
+    const match = text.match(pattern);
+    if (match?.[1]) return truncate(match[1], 72);
+  }
+
+  return truncate(text, 72);
+}
+
+function cleanTitle(value) {
+  return truncate(
+    String(value || "")
+      .replace(/\s+/g, " ")
+      .trim(),
+    72,
+  );
+}
+
+function readFirstLine(file) {
+  return new Promise((resolve) => {
+    let data = "";
+    const stream = fsSync.createReadStream(file, { encoding: "utf8", highWaterMark: 4096 });
+    stream.on("data", (chunk) => {
+      data += chunk;
+      const index = data.indexOf("\n");
+      if (index !== -1) {
+        stream.destroy();
+        resolve(data.slice(0, index));
+      }
+      if (data.length > 64_000) {
+        stream.destroy();
+        resolve(data);
+      }
+    });
+    stream.on("end", () => resolve(data));
+    stream.on("error", () => resolve(""));
+  });
+}
+
+function sessionIdFromFilename(file) {
+  const match = path.basename(file).match(/([0-9a-f]{8}-[0-9a-f-]{27,})/i);
+  return match ? match[1] : "";
+}
+
+function projectFromCwd(cwd) {
+  if (!cwd) return "workspace";
+  const relative = path.relative(WORKSPACE_ROOT, cwd);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) return cwd;
+  return relative && relative !== "." ? relative : "workspace";
+}
+
+function isValidSessionId(value) {
+  return /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(String(value || ""));
+}
+
+function formatTime(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  const hh = String(date.getHours()).padStart(2, "0");
+  const min = String(date.getMinutes()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+}
+
+function truncate(value, max) {
+  const text = String(value || "");
+  return text.length > max ? `${text.slice(0, max - 1)}...` : text;
+}
+
+function truncateDisplay(value, maxWidth) {
+  const text = String(value || "");
+  if (displayWidth(text) <= maxWidth) return text;
+
+  const chars = [...text];
+  let width = 0;
+  let result = "";
+
+  for (const char of chars) {
+    const nextWidth = width + displayWidth(char);
+    if (nextWidth > maxWidth - 3) return `${result}...`;
+    result += char;
+    width = nextWidth;
+  }
+
+  return result;
+}
+
+function padEnd(value, width) {
+  const text = String(value || "");
+  return `${text}${" ".repeat(Math.max(0, width - displayWidth(text)))}`;
+}
+
+function displayWidth(value) {
+  return [...String(value || "")].reduce((width, char) => {
+    return width + (char.charCodeAt(0) > 255 ? 2 : 1);
+  }, 0);
+}

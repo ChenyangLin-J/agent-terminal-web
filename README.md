@@ -62,6 +62,21 @@ codex resume <SESSION_ID>
 
 手机上不再需要使用 Codex CLI 的 resume picker；网页会列出 `~/.codex/sessions` 里的最近会话，点 `Resume` 即可。
 
+Saved session titles can be renamed in the web UI. Custom titles are stored outside the repo:
+
+```text
+~/.codex/session-titles.json
+```
+
+The terminal helper uses the same title file:
+
+```bash
+codex-resume
+codex-resume --rename
+```
+
+`codex-resume` lists numbered sessions with title, project, and update time, then runs `codex resume <session-id>` internally after selection. It does not show the session id in the list.
+
 ## Notes
 
 - 默认只监听 `127.0.0.1`，不要直接暴露公网。

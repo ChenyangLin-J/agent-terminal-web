@@ -99,7 +99,7 @@ async function loadProjects() {
   projectSelect.innerHTML = "";
   const rootOption = document.createElement("option");
   rootOption.value = ".";
-  rootOption.textContent = ".";
+  rootOption.textContent = "workspace";
   projectSelect.append(rootOption);
 
   for (const project of data.projects) {
@@ -136,7 +136,7 @@ function renderLiveSessions(sessions) {
   for (const session of sessions) {
     sessionsList.append(
       sessionCard({
-        title: session.project || ".",
+        title: displayProject(session.project),
         subtitle: `${formatLaunch(session)} · ${formatTime(session.lastActivityAt)}`,
         action: "Reconnect",
         onClick: () => attachSession(session.id),
@@ -155,28 +155,66 @@ function renderSavedCodexSessions(sessions) {
   for (const session of sessions) {
     codexSessionsList.append(
       sessionCard({
-        title: session.title || session.project || session.cwd || session.id,
-        subtitle: `${session.project || "."} · ${shortId(session.id)} · ${formatTime(
-          session.updatedAt,
-        )}`,
+        title: session.title || "Untitled session",
+        subtitle: `${displayProject(session.project)} · ${formatTime(session.updatedAt)}`,
         action: "Resume",
         onClick: () => startSession({ sessionId: session.id, cwd: projectForSession(session) }),
+        secondaryAction: "Rename",
+        onSecondaryClick: () => renameCodexSession(session),
       }),
     );
   }
 }
 
-function sessionCard({ title, subtitle, action, onClick }) {
+function sessionCard({ title, subtitle, action, onClick, secondaryAction, onSecondaryClick }) {
   const card = document.createElement("div");
   card.className = "session-card";
   const meta = document.createElement("div");
   meta.innerHTML = `<strong>${escapeHtml(title)}</strong><span>${escapeHtml(subtitle)}</span>`;
+  const actions = document.createElement("div");
+  actions.className = "session-card-actions";
+  if (secondaryAction) {
+    const secondaryButton = document.createElement("button");
+    secondaryButton.type = "button";
+    secondaryButton.className = "secondary";
+    secondaryButton.textContent = secondaryAction;
+    secondaryButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onSecondaryClick?.();
+    });
+    actions.append(secondaryButton);
+  }
   const button = document.createElement("button");
   button.type = "button";
   button.textContent = action;
-  button.addEventListener("click", onClick);
-  card.append(meta, button);
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    onClick?.();
+  });
+  actions.append(button);
+  card.append(meta, actions);
   return card;
+}
+
+async function renameCodexSession(session) {
+  const currentTitle = session.customTitle || session.title || "";
+  const title = window.prompt("Session title", currentTitle);
+  if (title === null) return;
+
+  const response = await fetch(`/api/codex-sessions/${encodeURIComponent(session.id)}/title`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  if (response.status === 401) {
+    redirectToLogin();
+    return;
+  }
+  if (!response.ok) {
+    window.alert("Failed to save title.");
+    return;
+  }
+  await loadSavedCodexSessions();
 }
 
 function empty(text) {
@@ -279,7 +317,7 @@ function sendResize() {
 }
 
 function renderStatus(status) {
-  statusEls.project.textContent = status.project || ".";
+  statusEls.project.textContent = displayProject(status.project);
   statusEls.connection.textContent = status.exited ? "exited" : "connected";
 }
 
@@ -460,6 +498,11 @@ function projectForSession(session) {
     return session.project;
   }
   return ".";
+}
+
+function displayProject(value) {
+  if (!value || value === ".") return "workspace";
+  return value;
 }
 
 function escapeHtml(value) {

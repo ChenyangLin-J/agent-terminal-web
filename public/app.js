@@ -115,6 +115,7 @@ async function loadProjects() {
 
 async function refreshLists() {
   await Promise.all([loadLiveSessions(), loadSavedCodexSessions(), loadArchivedCodexSessions()]);
+  scrollStartScreenToBottom();
 }
 
 async function loadLiveSessions() {
@@ -417,6 +418,13 @@ function showStartScreen() {
   window.clearInterval(sessionsTimer);
   refreshLists();
   sessionsTimer = window.setInterval(refreshLists, 10_000);
+}
+
+function scrollStartScreenToBottom() {
+  if (startScreen.classList.contains("hidden")) return;
+  requestAnimationFrame(() => {
+    window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "auto" });
+  });
 }
 
 function showSessionScreen() {

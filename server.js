@@ -116,6 +116,9 @@ app.put("/api/codex-sessions/:id/title", async (req, res) => {
       delete titles[id];
     }
     await writeSessionTitles(titles);
+    for (const session of sessions.values()) {
+      if (session.sessionId === id && title) session.title = title;
+    }
     res.json({ id, customTitle: title });
   } catch (error) {
     res.status(500).json({ error: `Failed to save title: ${error.message}` });
@@ -181,6 +184,7 @@ wss.on("connection", async (ws, req) => {
       return;
     }
 
+    launch.title = await titleForLaunch(launch);
     session = createSession(cwd, launch);
     if (session.error) {
       send(ws, "error", { message: session.error });
@@ -285,6 +289,7 @@ function createSession(cwd, launch) {
     args: launch.args,
     mode: launch.mode,
     sessionId: launch.sessionId,
+    title: launch.title || "",
     terminal,
     clients: new Set(),
     cleanupTimer: null,
@@ -348,8 +353,10 @@ function attachClient(session, ws) {
     if (message.type === "submit" && typeof message.data === "string") {
       const normalized = message.data.trim();
       if (normalized) {
+        if (!session.title) session.title = cleanTitle(normalized) || "New Codex session";
         writeAndSubmit(session, normalized, { paste: true });
         session.lastActivityAt = new Date().toISOString();
+        broadcast(session, "status", publicSession(session));
       }
       return;
     }
@@ -412,6 +419,7 @@ function publicSession(session) {
     id: session.id,
     cwd: session.cwd,
     project: session.project,
+    title: session.title || "New Codex session",
     pid: session.pid,
     command: session.command,
     args: session.args,
@@ -457,6 +465,38 @@ function getLaunchConfig(searchParams) {
   if (mode === "resume-last") {
     return { mode, sessionId: "", args: ["--no-alt-screen", "resume", "--last"] };
   }
+  return null;
+}
+
+async function titleForLaunch(launch) {
+  if (launch.sessionId) {
+    const meta = await readCodexSessionById(launch.sessionId);
+    return meta?.title || "";
+  }
+
+  if (launch.mode === "resume-last") {
+    const [latest] = await listCodexSessions({ archived: false });
+    return latest?.title || "";
+  }
+
+  return "";
+}
+
+async function readCodexSessionById(id) {
+  const activeFiles = (await walkFiles(CODEX_SESSIONS_ROOT)).map((file) => ({ file, fileArchived: false }));
+  const archivedFiles = (await walkFiles(CODEX_ARCHIVED_SESSIONS_ROOT)).map((file) => ({
+    file,
+    fileArchived: true,
+  }));
+  const customTitles = await readSessionTitles();
+  const archivedSessions = await readSessionArchive();
+
+  for (const { file, fileArchived } of [...activeFiles, ...archivedFiles]) {
+    if (!file.endsWith(".jsonl")) continue;
+    if (sessionIdFromFilename(file) !== id) continue;
+    return readCodexSessionMeta(file, customTitles, archivedSessions, fileArchived);
+  }
+
   return null;
 }
 

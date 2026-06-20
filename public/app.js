@@ -142,8 +142,10 @@ function renderLiveSessions(sessions) {
   for (const session of sessions) {
     sessionsList.append(
       sessionCard({
-        title: displayProject(session.project),
-        subtitle: `${formatLaunch(session)} · ${formatTime(session.lastActivityAt)}`,
+        title: session.title || "New Codex session",
+        subtitle: `${displayProject(session.project)} · ${formatLaunch(session)} · ${formatTime(
+          session.lastActivityAt,
+        )}`,
         action: "Reconnect",
         onClick: () => attachSession(session.id),
       }),
@@ -389,7 +391,7 @@ function sendResize() {
 }
 
 function renderStatus(status) {
-  statusEls.project.textContent = displayProject(status.project);
+  statusEls.project.textContent = status.title || displayProject(status.project);
   statusEls.connection.textContent = status.exited ? "exited" : "connected";
 }
 
@@ -551,7 +553,7 @@ function redirectToLogin(loginUrl = "") {
 }
 
 function formatLaunch(status) {
-  if (status.sessionId) return `resume ${shortId(status.sessionId)}`;
+  if (status.sessionId) return "resumed";
   if (status.mode === "resume-last") return "resume last";
   return "new session";
 }
@@ -559,10 +561,6 @@ function formatLaunch(status) {
 function formatTime(value) {
   if (!value) return "-";
   return new Date(value).toLocaleString();
-}
-
-function shortId(value) {
-  return String(value || "").slice(0, 8);
 }
 
 function projectForSession(session) {

@@ -7,11 +7,13 @@ import { spawn } from "node:child_process";
 
 const CODEX_HOME = process.env.CODEX_HOME || path.join(process.env.HOME, ".codex");
 const SESSIONS_ROOT = path.join(CODEX_HOME, "sessions");
+const ARCHIVED_SESSIONS_ROOT = path.join(CODEX_HOME, "archived_sessions");
 const TITLES_FILE = path.join(CODEX_HOME, "session-titles.json");
+const ARCHIVE_FILE = path.join(CODEX_HOME, "session-archive.json");
 const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || "/home/ubuntu/workspace";
 const LIMIT = Number(process.env.CODEX_RESUME_LIMIT || 40);
 
-const mode = process.argv.includes("--rename") ? "rename" : "resume";
+const mode = getMode();
 
 main().catch((error) => {
   console.error(error.message);
@@ -33,7 +35,7 @@ async function main() {
   });
 
   try {
-    const answer = await rl.question(mode === "rename" ? "Rename session number: " : "Resume session number: ");
+    const answer = await rl.question(promptForMode(mode));
     const trimmed = answer.trim().toLowerCase();
     if (!trimmed || trimmed === "q" || trimmed === "quit") return;
 
@@ -52,6 +54,18 @@ async function main() {
       return;
     }
 
+    if (mode === "unarchive") {
+      await setArchived(session.id, false);
+      console.log("Session restored.");
+      return;
+    }
+
+    if (mode === "archived") {
+      await setArchived(session.id, false);
+      await resumeSession(session.id);
+      return;
+    }
+
     await resumeSession(session.id);
   } finally {
     rl.close();
@@ -60,13 +74,25 @@ async function main() {
 
 async function listSessions() {
   const customTitles = await readTitles();
-  const files = await walkFiles(SESSIONS_ROOT);
+  const archive = await readArchive();
+  const activeFiles = (await walkFiles(SESSIONS_ROOT)).map((file) => ({ file, fileArchived: false }));
+  const archivedFiles = (await walkFiles(ARCHIVED_SESSIONS_ROOT)).map((file) => ({
+    file,
+    fileArchived: true,
+  }));
+  const files = [...activeFiles, ...archivedFiles];
   const sessions = [];
 
-  for (const file of files) {
+  for (const { file, fileArchived } of files) {
     if (!file.endsWith(".jsonl")) continue;
-    const meta = await readSessionMeta(file, customTitles);
-    if (meta) sessions.push(meta);
+    const meta = await readSessionMeta(file, customTitles, archive, fileArchived);
+    if (!meta) continue;
+    const isArchived = Boolean(meta.archived);
+    if (mode === "archived" || mode === "unarchive") {
+      if (isArchived) sessions.push(meta);
+    } else if (!isArchived) {
+      sessions.push(meta);
+    }
   }
 
   return sessions
@@ -74,7 +100,7 @@ async function listSessions() {
     .slice(0, LIMIT);
 }
 
-async function readSessionMeta(file, customTitles) {
+async function readSessionMeta(file, customTitles, archive, fileArchived) {
   const firstLine = await readFirstLine(file);
   if (!firstLine) return null;
 
@@ -93,12 +119,28 @@ async function readSessionMeta(file, customTitles) {
       id,
       title: customTitle || originalTitle || "Untitled session",
       project: projectFromCwd(cwd),
+      archived: fileArchived || Boolean(archive[id]),
+      archivedAt: archive[id]?.archivedAt || "",
       updatedAt: stat.mtime,
       updatedAtMs: stat.mtimeMs,
     };
   } catch {
     return null;
   }
+}
+
+function getMode() {
+  if (process.argv.includes("--rename")) return "rename";
+  if (process.argv.includes("--archived")) return "archived";
+  if (process.argv.includes("--unarchive")) return "unarchive";
+  return "resume";
+}
+
+function promptForMode(value) {
+  if (value === "rename") return "Rename session number: ";
+  if (value === "unarchive") return "Restore session number: ";
+  if (value === "archived") return "Restore and resume session number: ";
+  return "Resume session number: ";
 }
 
 function printSessions(sessions) {
@@ -153,6 +195,62 @@ async function readTitles() {
     if (error.code === "ENOENT") return {};
     return {};
   }
+}
+
+async function readArchive() {
+  try {
+    const raw = await fs.readFile(ARCHIVE_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .map(([id, record]) => {
+          const archivedAt =
+            record && typeof record === "object" ? String(record.archivedAt || "") : String(record || "");
+          return [String(id), { archivedAt }];
+        })
+        .filter(([id]) => isValidSessionId(id)),
+    );
+  } catch (error) {
+    if (error.code === "ENOENT") return {};
+    return {};
+  }
+}
+
+async function writeArchive(archive) {
+  await fs.mkdir(path.dirname(ARCHIVE_FILE), { recursive: true });
+  const cleaned = Object.fromEntries(
+    Object.entries(archive)
+      .map(([id, record]) => [
+        String(id),
+        { archivedAt: String(record?.archivedAt || new Date().toISOString()) },
+      ])
+      .filter(([id]) => isValidSessionId(id))
+      .sort(([a], [b]) => a.localeCompare(b)),
+  );
+  const tempFile = `${ARCHIVE_FILE}.${process.pid}.tmp`;
+  await fs.writeFile(tempFile, `${JSON.stringify(cleaned, null, 2)}\n`, { mode: 0o600 });
+  await fs.rename(tempFile, ARCHIVE_FILE);
+}
+
+async function setArchived(id, archived) {
+  const archive = await readArchive();
+  if (archived) {
+    archive[id] = { archivedAt: new Date().toISOString() };
+  } else {
+    delete archive[id];
+  }
+  await writeArchive(archive);
+
+  await new Promise((resolve) => {
+    const child = spawn("codex", [archived ? "archive" : "unarchive", id], {
+      stdio: "ignore",
+      env: process.env,
+    });
+    child.on("error", resolve);
+    child.on("exit", resolve);
+  });
 }
 
 async function saveTitle(id, value) {

@@ -23,7 +23,9 @@ const AUTH_LOGIN_URL = process.env.PRIVATE_AUTH_LOGIN_URL || "https://auth.cheny
 const AUTH_LOGOUT_URL = process.env.PRIVATE_AUTH_LOGOUT_URL || "https://auth.chenyanglin.com/logout";
 const CODEX_HOME = process.env.CODEX_HOME || path.join(process.env.HOME, ".codex");
 const CODEX_SESSIONS_ROOT = path.join(CODEX_HOME, "sessions");
+const CODEX_ARCHIVED_SESSIONS_ROOT = path.join(CODEX_HOME, "archived_sessions");
 const CODEX_SESSION_TITLES_FILE = path.join(CODEX_HOME, "session-titles.json");
+const CODEX_SESSION_ARCHIVE_FILE = path.join(CODEX_HOME, "session-archive.json");
 const MAX_RAW_BUFFER = 1024 * 1024;
 const MAX_TEXT_BUFFER = 200_000;
 
@@ -88,7 +90,12 @@ app.get("/api/sessions", (_req, res) => {
 });
 
 app.get("/api/codex-sessions", async (_req, res) => {
-  const codexSessions = await listCodexSessions();
+  const codexSessions = await listCodexSessions({ archived: false });
+  res.json({ sessions: codexSessions });
+});
+
+app.get("/api/codex-sessions/archived", async (_req, res) => {
+  const codexSessions = await listCodexSessions({ archived: true });
   res.json({ sessions: codexSessions });
 });
 
@@ -112,6 +119,23 @@ app.put("/api/codex-sessions/:id/title", async (req, res) => {
     res.json({ id, customTitle: title });
   } catch (error) {
     res.status(500).json({ error: `Failed to save title: ${error.message}` });
+  }
+});
+
+app.put("/api/codex-sessions/:id/archive", async (req, res) => {
+  const id = String(req.params.id || "").trim();
+  const archived = Boolean(req.body?.archived);
+
+  if (!isValidSessionId(id)) {
+    res.status(400).json({ error: "Invalid session id." });
+    return;
+  }
+
+  try {
+    await setSessionArchived(id, archived);
+    res.json({ id, archived });
+  } catch (error) {
+    res.status(500).json({ error: `Failed to update archive: ${error.message}` });
   }
 });
 
@@ -436,15 +460,22 @@ function getLaunchConfig(searchParams) {
   return null;
 }
 
-async function listCodexSessions() {
-  const files = await walkFiles(CODEX_SESSIONS_ROOT);
+async function listCodexSessions({ archived }) {
+  const activeFiles = (await walkFiles(CODEX_SESSIONS_ROOT)).map((file) => ({ file, fileArchived: false }));
+  const archivedFiles = (await walkFiles(CODEX_ARCHIVED_SESSIONS_ROOT)).map((file) => ({
+    file,
+    fileArchived: true,
+  }));
+  const files = [...activeFiles, ...archivedFiles];
   const customTitles = await readSessionTitles();
+  const archivedSessions = await readSessionArchive();
   const items = [];
 
-  for (const file of files) {
+  for (const { file, fileArchived } of files) {
     if (!file.endsWith(".jsonl")) continue;
-    const meta = await readCodexSessionMeta(file, customTitles);
-    if (meta) items.push(meta);
+    const meta = await readCodexSessionMeta(file, customTitles, archivedSessions, fileArchived);
+    if (!meta) continue;
+    if (Boolean(meta.archived) === archived) items.push(meta);
   }
 
   return items
@@ -468,7 +499,7 @@ async function walkFiles(root) {
   }
 }
 
-async function readCodexSessionMeta(file, customTitles = {}) {
+async function readCodexSessionMeta(file, customTitles = {}, archivedSessions = {}, fileArchived = false) {
   const firstLine = await readFirstLine(file);
   if (!firstLine) return null;
 
@@ -480,11 +511,15 @@ async function readCodexSessionMeta(file, customTitles = {}) {
     const stat = await fs.stat(file);
     const title = await readCodexSessionTitle(file);
     const customTitle = customTitles[id] || "";
+    const archiveRecord = archivedSessions[id] || null;
+    const isArchived = fileArchived || Boolean(archiveRecord);
     return {
       id,
       title: customTitle || title,
       originalTitle: title,
       customTitle,
+      archived: isArchived,
+      archivedAt: archiveRecord?.archivedAt || "",
       cwd,
       project: projectFromCwd(cwd),
       source: payload.source || payload.originator || "",
@@ -526,6 +561,60 @@ async function writeSessionTitles(titles) {
   const tempFile = `${CODEX_SESSION_TITLES_FILE}.${process.pid}.tmp`;
   await fs.writeFile(tempFile, `${JSON.stringify(cleaned, null, 2)}\n`, { mode: 0o600 });
   await fs.rename(tempFile, CODEX_SESSION_TITLES_FILE);
+}
+
+async function readSessionArchive() {
+  try {
+    const raw = await fs.readFile(CODEX_SESSION_ARCHIVE_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .map(([id, record]) => {
+          const archivedAt =
+            record && typeof record === "object" ? String(record.archivedAt || "") : String(record || "");
+          return [String(id), { archivedAt }];
+        })
+        .filter(([id]) => isValidSessionId(id)),
+    );
+  } catch (error) {
+    if (error.code === "ENOENT") return {};
+    console.error(`Failed to read session archive: ${error.message}`);
+    return {};
+  }
+}
+
+async function writeSessionArchive(archive) {
+  await fs.mkdir(path.dirname(CODEX_SESSION_ARCHIVE_FILE), { recursive: true });
+  const cleaned = Object.fromEntries(
+    Object.entries(archive)
+      .map(([id, record]) => [
+        String(id),
+        { archivedAt: String(record?.archivedAt || new Date().toISOString()) },
+      ])
+      .filter(([id]) => isValidSessionId(id))
+      .sort(([a], [b]) => a.localeCompare(b)),
+  );
+  const tempFile = `${CODEX_SESSION_ARCHIVE_FILE}.${process.pid}.tmp`;
+  await fs.writeFile(tempFile, `${JSON.stringify(cleaned, null, 2)}\n`, { mode: 0o600 });
+  await fs.rename(tempFile, CODEX_SESSION_ARCHIVE_FILE);
+}
+
+async function setSessionArchived(id, archived) {
+  const archive = await readSessionArchive();
+  if (archived) {
+    archive[id] = { archivedAt: new Date().toISOString() };
+  } else {
+    delete archive[id];
+  }
+  await writeSessionArchive(archive);
+
+  try {
+    await execFileText("codex", [archived ? "archive" : "unarchive", id], WORKSPACE_ROOT);
+  } catch (error) {
+    console.warn(`Codex ${archived ? "archive" : "unarchive"} failed for ${id}: ${error.message}`);
+  }
 }
 
 function cleanCustomTitle(value) {

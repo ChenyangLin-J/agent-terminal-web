@@ -8,6 +8,7 @@ const refreshSessionsButton = document.querySelector("#refresh-sessions");
 const logoutButton = document.querySelector("#logout");
 const sessionsList = document.querySelector("#sessions-list");
 const codexSessionsList = document.querySelector("#codex-sessions-list");
+const archivedCodexSessionsList = document.querySelector("#archived-codex-sessions-list");
 const backButton = document.querySelector("#back");
 const disconnectButton = document.querySelector("#disconnect");
 const terminalTabButton = document.querySelector("#terminal-tab");
@@ -113,7 +114,7 @@ async function loadProjects() {
 }
 
 async function refreshLists() {
-  await Promise.all([loadLiveSessions(), loadSavedCodexSessions()]);
+  await Promise.all([loadLiveSessions(), loadSavedCodexSessions(), loadArchivedCodexSessions()]);
 }
 
 async function loadLiveSessions() {
@@ -124,6 +125,11 @@ async function loadLiveSessions() {
 async function loadSavedCodexSessions() {
   const data = await apiJson("/api/codex-sessions");
   if (data) renderSavedCodexSessions(data.sessions || []);
+}
+
+async function loadArchivedCodexSessions() {
+  const data = await apiJson("/api/codex-sessions/archived");
+  if (data) renderArchivedCodexSessions(data.sessions || []);
 }
 
 function renderLiveSessions(sessions) {
@@ -161,12 +167,46 @@ function renderSavedCodexSessions(sessions) {
         onClick: () => startSession({ sessionId: session.id, cwd: projectForSession(session) }),
         secondaryAction: "Rename",
         onSecondaryClick: () => renameCodexSession(session),
+        tertiaryAction: "Archive",
+        onTertiaryClick: () => archiveCodexSession(session, true),
       }),
     );
   }
 }
 
-function sessionCard({ title, subtitle, action, onClick, secondaryAction, onSecondaryClick }) {
+function renderArchivedCodexSessions(sessions) {
+  archivedCodexSessionsList.innerHTML = "";
+  if (!sessions.length) {
+    archivedCodexSessionsList.append(empty("No archived Codex sessions."));
+    return;
+  }
+
+  for (const session of sessions) {
+    archivedCodexSessionsList.append(
+      sessionCard({
+        title: session.title || "Untitled session",
+        subtitle: `${displayProject(session.project)} · archived ${formatTime(
+          session.archivedAt || session.updatedAt,
+        )}`,
+        action: "Restore",
+        onClick: () => archiveCodexSession(session, false),
+        secondaryAction: "Rename",
+        onSecondaryClick: () => renameCodexSession(session),
+      }),
+    );
+  }
+}
+
+function sessionCard({
+  title,
+  subtitle,
+  action,
+  onClick,
+  secondaryAction,
+  onSecondaryClick,
+  tertiaryAction,
+  onTertiaryClick,
+}) {
   const card = document.createElement("div");
   card.className = "session-card";
   const meta = document.createElement("div");
@@ -183,6 +223,17 @@ function sessionCard({ title, subtitle, action, onClick, secondaryAction, onSeco
       onSecondaryClick?.();
     });
     actions.append(secondaryButton);
+  }
+  if (tertiaryAction) {
+    const tertiaryButton = document.createElement("button");
+    tertiaryButton.type = "button";
+    tertiaryButton.className = "secondary";
+    tertiaryButton.textContent = tertiaryAction;
+    tertiaryButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onTertiaryClick?.();
+    });
+    actions.append(tertiaryButton);
   }
   const button = document.createElement("button");
   button.type = "button";
@@ -215,6 +266,27 @@ async function renameCodexSession(session) {
     return;
   }
   await loadSavedCodexSessions();
+  await loadArchivedCodexSessions();
+}
+
+async function archiveCodexSession(session, archived) {
+  const ok = archived ? window.confirm("Archive this session?") : true;
+  if (!ok) return;
+
+  const response = await fetch(`/api/codex-sessions/${encodeURIComponent(session.id)}/archive`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ archived }),
+  });
+  if (response.status === 401) {
+    redirectToLogin();
+    return;
+  }
+  if (!response.ok) {
+    window.alert(archived ? "Failed to archive session." : "Failed to restore session.");
+    return;
+  }
+  await Promise.all([loadSavedCodexSessions(), loadArchivedCodexSessions()]);
 }
 
 function empty(text) {

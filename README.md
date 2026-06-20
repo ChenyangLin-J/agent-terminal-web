@@ -68,14 +68,24 @@ Saved session titles can be renamed in the web UI. Custom titles are stored outs
 ~/.codex/session-titles.json
 ```
 
+Saved sessions can also be archived from the web UI. The web UI keeps a small archive record here:
+
+```text
+~/.codex/session-archive.json
+```
+
+Archive also calls Codex's native `codex archive <session-id>` when possible, so archived sessions are moved out of the normal Codex sessions directory. The web UI scans both `~/.codex/sessions` and `~/.codex/archived_sessions`, so archived sessions can still be restored.
+
 The terminal helper uses the same title file:
 
 ```bash
 codex-resume
 codex-resume --rename
+codex-resume --archived
+codex-resume --unarchive
 ```
 
-`codex-resume` lists numbered sessions with title, project, and update time, then runs `codex resume <session-id>` internally after selection. It does not show the session id in the list.
+`codex-resume` lists numbered active sessions with title, project, and update time, then runs `codex resume <session-id>` internally after selection. It does not show the session id in the list. Archived sessions are hidden unless `--archived` or `--unarchive` is used.
 
 ## Notes
 

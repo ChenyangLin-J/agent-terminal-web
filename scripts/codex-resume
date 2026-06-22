@@ -29,7 +29,7 @@ async function main() {
 
   printSessions(sessions);
 
-  const rl = readline.createInterface({
+  let rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
   });
@@ -62,13 +62,17 @@ async function main() {
 
     if (mode === "archived") {
       await setArchived(session.id, false);
+      rl.close();
+      rl = null;
       await resumeSession(session.id);
       return;
     }
 
+    rl.close();
+    rl = null;
     await resumeSession(session.id);
   } finally {
-    rl.close();
+    rl?.close();
   }
 }
 

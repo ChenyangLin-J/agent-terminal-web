@@ -87,6 +87,12 @@ codex-resume --unarchive
 
 `codex-resume` lists numbered active sessions with title, project, and update time, then runs `codex resume <session-id>` internally after selection. It does not show the session id in the list. Archived sessions are hidden unless `--archived` or `--unarchive` is used.
 
+The shell command is installed as a symlink, so edits to the project script take effect immediately:
+
+```text
+/usr/local/bin/codex-resume -> /home/ubuntu/workspace/agent-terminal-web/scripts/codex-resume
+```
+
 ## Notes
 
 - 默认只监听 `127.0.0.1`，不要直接暴露公网。

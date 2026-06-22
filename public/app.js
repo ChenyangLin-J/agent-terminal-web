@@ -22,8 +22,12 @@ const keyEscButton = document.querySelector("#key-esc");
 const sendStatusButton = document.querySelector("#send-status");
 const sendPermissionsButton = document.querySelector("#send-permissions");
 const killSessionButton = document.querySelector("#kill-session");
+const attachFileButton = document.querySelector("#attach-file");
 const sendPromptButton = document.querySelector("#send-prompt");
+const fileInput = document.querySelector("#file-input");
 const promptInput = document.querySelector("#prompt");
+const composer = document.querySelector("#composer");
+const uploadStatus = document.querySelector("#upload-status");
 const terminalView = document.querySelector(".terminal-view");
 const textView = document.querySelector("#text-view");
 const terminalText = document.querySelector("#terminal-text");
@@ -43,6 +47,7 @@ let reconnectTimer = null;
 let reconnectAttempts = 0;
 let activeSessionId = "";
 let currentSessionExited = false;
+let uploadStatusTimer = null;
 
 window.addEventListener("resize", () => {
   fitTerminal();
@@ -65,7 +70,12 @@ keyEscButton.addEventListener("click", () => sendTerminalKey("\x1b"));
 sendStatusButton.addEventListener("click", () => command("/status"));
 sendPermissionsButton.addEventListener("click", () => command("/permissions"));
 killSessionButton.addEventListener("click", endSession);
+attachFileButton.addEventListener("click", () => fileInput.click());
 sendPromptButton.addEventListener("click", submitPrompt);
+fileInput.addEventListener("change", async () => {
+  await uploadFiles(fileInput.files);
+  fileInput.value = "";
+});
 promptInput.addEventListener("keydown", (event) => {
   if (event.isComposing) return;
   if (event.key === "Enter" && !event.shiftKey) {
@@ -73,6 +83,7 @@ promptInput.addEventListener("keydown", (event) => {
     submitPrompt();
   }
 });
+installComposerDragUpload();
 
 bootstrap().catch(() => {
   redirectToLogin();
@@ -421,6 +432,112 @@ function endSession() {
 function send(message) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify(message));
+}
+
+async function uploadFiles(fileList) {
+  const files = [...(fileList || [])];
+  if (!files.length) return;
+
+  const form = new FormData();
+  for (const file of files) form.append("files", file);
+
+  setUploading(true);
+  setUploadStatus("Uploading...");
+
+  try {
+    const response = await fetch("/api/uploads", {
+      method: "POST",
+      body: form,
+    });
+
+    if (response.status === 401) {
+      redirectToLogin();
+      return;
+    }
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "Upload failed.");
+
+    insertUploadedFiles(data.files || []);
+    setUploadStatus(`Attached ${(data.files || []).length} file${(data.files || []).length === 1 ? "" : "s"}.`, {
+      clear: true,
+    });
+  } catch (error) {
+    setUploadStatus(error.message || "Upload failed.");
+  } finally {
+    setUploading(false);
+  }
+}
+
+function installComposerDragUpload() {
+  if (!composer) return;
+
+  composer.addEventListener("dragenter", (event) => {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    composer.classList.add("drag-over");
+  });
+
+  composer.addEventListener("dragover", (event) => {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    composer.classList.add("drag-over");
+  });
+
+  composer.addEventListener("dragleave", (event) => {
+    if (event.relatedTarget && composer.contains(event.relatedTarget)) return;
+    composer.classList.remove("drag-over");
+  });
+
+  composer.addEventListener("drop", (event) => {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    composer.classList.remove("drag-over");
+    uploadFiles(event.dataTransfer.files);
+  });
+}
+
+function hasDraggedFiles(event) {
+  return [...(event.dataTransfer?.types || [])].includes("Files");
+}
+
+function insertUploadedFiles(files) {
+  const paths = files.map((file) => file.path).filter(Boolean);
+  if (!paths.length) return;
+  insertPromptText(paths.map((filePath) => `请读取这个文件：${filePath}`).join("\n"));
+}
+
+function insertPromptText(text) {
+  const value = promptInput.value;
+  const start = promptInput.selectionStart ?? value.length;
+  const end = promptInput.selectionEnd ?? value.length;
+  const before = value.slice(0, start);
+  const after = value.slice(end);
+  const prefix = before && !before.endsWith("\n") ? "\n" : "";
+  const suffix = after && !text.endsWith("\n") ? "\n" : "";
+  const nextValue = `${before}${prefix}${text}${suffix}${after}`;
+  const nextCursor = before.length + prefix.length + text.length;
+
+  promptInput.value = nextValue;
+  promptInput.focus();
+  promptInput.setSelectionRange(nextCursor, nextCursor);
+}
+
+function setUploading(uploading) {
+  attachFileButton.disabled = uploading;
+  attachFileButton.textContent = uploading ? "Uploading" : "Attach";
+}
+
+function setUploadStatus(message, { clear = false } = {}) {
+  window.clearTimeout(uploadStatusTimer);
+  uploadStatus.textContent = message;
+  uploadStatus.classList.toggle("active", Boolean(message));
+  if (clear) {
+    uploadStatusTimer = window.setTimeout(() => {
+      uploadStatus.textContent = "";
+      uploadStatus.classList.remove("active");
+    }, 2500);
+  }
 }
 
 function sendResize() {

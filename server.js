@@ -5,7 +5,9 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import busboy from "busboy";
 import express from "express";
 import { WebSocketServer } from "ws";
 
@@ -26,6 +28,9 @@ const CODEX_SESSIONS_ROOT = path.join(CODEX_HOME, "sessions");
 const CODEX_ARCHIVED_SESSIONS_ROOT = path.join(CODEX_HOME, "archived_sessions");
 const CODEX_SESSION_TITLES_FILE = path.join(CODEX_HOME, "session-titles.json");
 const CODEX_SESSION_ARCHIVE_FILE = path.join(CODEX_HOME, "session-archive.json");
+const UPLOADS_ROOT = path.resolve(process.env.UPLOADS_ROOT || path.join(WORKSPACE_ROOT, "uploads"));
+const MAX_UPLOAD_FILES = Number(process.env.MAX_UPLOAD_FILES || 5);
+const MAX_UPLOAD_FILE_BYTES = Number(process.env.MAX_UPLOAD_FILE_BYTES || 50 * 1024 * 1024);
 const MAX_RAW_BUFFER = 1024 * 1024;
 const MAX_TEXT_BUFFER = 200_000;
 
@@ -72,7 +77,7 @@ app.use("/api", requireAuth);
 app.get("/api/projects", async (_req, res) => {
   const entries = await fs.readdir(WORKSPACE_ROOT, { withFileTypes: true });
   const projects = entries
-    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "uploads")
     .map((entry) => entry.name)
     .sort((a, b) => a.localeCompare(b));
 
@@ -81,6 +86,8 @@ app.get("/api/projects", async (_req, res) => {
     projects,
   });
 });
+
+app.post("/api/uploads", handleUpload);
 
 app.get("/api/sessions", (_req, res) => {
   res.json({
@@ -469,6 +476,115 @@ function scheduleCleanup(session) {
       codexSessionId: session.sessionId,
     });
   }, SESSION_TTL_MS);
+}
+
+async function handleUpload(req, res) {
+  if (!String(req.headers["content-type"] || "").includes("multipart/form-data")) {
+    res.status(400).json({ error: "Expected multipart form upload." });
+    return;
+  }
+
+  const uploadDir = path.join(UPLOADS_ROOT, dateDirectoryName(new Date()));
+  await fs.mkdir(uploadDir, { recursive: true, mode: 0o700 });
+
+  const savedFiles = [];
+  const pendingWrites = [];
+  let fileCount = 0;
+  let rejected = "";
+  let responded = false;
+
+  const form = busboy({
+    headers: req.headers,
+    limits: {
+      files: MAX_UPLOAD_FILES,
+      fileSize: MAX_UPLOAD_FILE_BYTES,
+    },
+  });
+
+  const fail = async (status, message) => {
+    if (responded) return;
+    responded = true;
+    await cleanupUploadedFiles(savedFiles);
+    res.status(status).json({ error: message });
+  };
+
+  form.on("file", (_fieldName, file, info) => {
+    fileCount += 1;
+    if (fileCount > MAX_UPLOAD_FILES) {
+      rejected = `Upload at most ${MAX_UPLOAD_FILES} files at a time.`;
+      file.resume();
+      return;
+    }
+
+    const originalName = cleanUploadOriginalName(info.filename);
+    const storedName = uploadStoredName(originalName);
+    const filePath = path.join(uploadDir, storedName);
+    let size = 0;
+    let hitSizeLimit = false;
+
+    file.on("data", (chunk) => {
+      size += chunk.length;
+    });
+
+    file.on("limit", () => {
+      hitSizeLimit = true;
+      rejected = `Each file must be ${formatBytes(MAX_UPLOAD_FILE_BYTES)} or smaller.`;
+    });
+
+    const output = fsSync.createWriteStream(filePath, { mode: 0o600 });
+    const write = finished(output)
+      .then(async () => {
+        if (hitSizeLimit || file.truncated) {
+          await fs.rm(filePath, { force: true });
+          throw new Error(`Each file must be ${formatBytes(MAX_UPLOAD_FILE_BYTES)} or smaller.`);
+        }
+        const saved = {
+          path: filePath,
+          originalName,
+          storedName,
+          size,
+          mime: info.mimeType || "application/octet-stream",
+        };
+        savedFiles.push(saved);
+      })
+      .catch(async (error) => {
+        await fs.rm(filePath, { force: true });
+        throw error;
+      });
+
+    pendingWrites.push(write);
+    file.pipe(output);
+  });
+
+  form.on("filesLimit", () => {
+    rejected = `Upload at most ${MAX_UPLOAD_FILES} files at a time.`;
+  });
+
+  form.on("error", (error) => {
+    fail(400, `Upload failed: ${error.message}`);
+  });
+
+  form.on("finish", async () => {
+    if (responded) return;
+
+    try {
+      await Promise.all(pendingWrites);
+      if (rejected) {
+        await fail(400, rejected);
+        return;
+      }
+      if (!savedFiles.length) {
+        await fail(400, "No files uploaded.");
+        return;
+      }
+      responded = true;
+      res.json({ files: savedFiles });
+    } catch (error) {
+      await fail(400, `Upload failed: ${error.message}`);
+    }
+  });
+
+  req.pipe(form);
 }
 
 function writeAndSubmit(session, text, { paste }) {
@@ -908,4 +1024,31 @@ function trimStart(value, maxLength) {
 
 function cryptoRandomId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function cleanupUploadedFiles(files) {
+  await Promise.all(files.map((file) => fs.rm(file.path, { force: true }).catch(() => {})));
+}
+
+function cleanUploadOriginalName(value) {
+  return path.basename(String(value || "upload").replace(/\0/g, "")).slice(0, 180) || "upload";
+}
+
+function uploadStoredName(originalName) {
+  return `${Date.now()}-${crypto.randomUUID()}${safeUploadExtension(originalName)}`;
+}
+
+function safeUploadExtension(originalName) {
+  const extension = path.extname(originalName).toLowerCase();
+  if (!extension || extension.length > 20) return "";
+  return /^\.[a-z0-9][a-z0-9._-]*$/.test(extension) ? extension : "";
+}
+
+function dateDirectoryName(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function formatBytes(bytes) {
+  const mb = bytes / (1024 * 1024);
+  return `${Number.isInteger(mb) ? mb : mb.toFixed(1)}MB`;
 }

@@ -40,6 +40,10 @@ const statusEls = {
 let terminal = null;
 let fitAddon = null;
 let terminalTouchY = null;
+let fitFrame = null;
+let fitTimer = null;
+let lastSentCols = 0;
+let lastSentRows = 0;
 
 let socket = null;
 let sessionsTimer = null;
@@ -49,10 +53,7 @@ let activeSessionId = "";
 let currentSessionExited = false;
 let uploadStatusTimer = null;
 
-window.addEventListener("resize", () => {
-  fitTerminal();
-  sendResize();
-});
+window.addEventListener("resize", () => fitTerminal({ delay: 120 }));
 
 logoutButton.addEventListener("click", logout);
 connectButton.addEventListener("click", () => startSession());
@@ -327,23 +328,26 @@ function attachSession(id) {
 }
 
 function openSocket(params, options = {}) {
+  const isReconnect = Boolean(options.reconnect);
   closeSocket();
   ensureTerminal();
-  terminal?.clear();
+  if (!isReconnect) terminal?.clear();
   activeSessionId = params.attach || "";
   currentSessionExited = false;
-  setConnectedState(options.reconnect ? "reconnecting" : "connecting");
+  setConnectedState(isReconnect ? "reconnecting" : "connecting");
   showSessionScreen();
 
   const query = new URLSearchParams(params);
+  if (isReconnect) query.set("replay", "0");
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   socket = new WebSocket(`${protocol}//${window.location.host}/terminal?${query.toString()}`);
 
   socket.addEventListener("open", () => {
     reconnectAttempts = 0;
     setConnectedState("connected");
+    lastSentCols = 0;
+    lastSentRows = 0;
     fitTerminal();
-    sendResize();
   });
 
   socket.addEventListener("message", (event) => {
@@ -353,6 +357,7 @@ function openSocket(params, options = {}) {
       return;
     }
     if (message.type === "replay") {
+      if (isReconnect) return;
       writeTerminalOutput(message.payload.raw, { replay: true });
       return;
     }
@@ -542,6 +547,9 @@ function setUploadStatus(message, { clear = false } = {}) {
 
 function sendResize() {
   if (!terminal || !terminal.cols || !terminal.rows) return;
+  if (terminal.cols === lastSentCols && terminal.rows === lastSentRows) return;
+  lastSentCols = terminal.cols;
+  lastSentRows = terminal.rows;
   send({ type: "resize", cols: terminal.cols, rows: terminal.rows });
 }
 
@@ -591,9 +599,19 @@ function showSessionScreen() {
   fitTerminal();
 }
 
-function fitTerminal() {
+function fitTerminal({ delay = 0 } = {}) {
   if (!terminal || !fitAddon) return;
-  requestAnimationFrame(() => {
+
+  window.clearTimeout(fitTimer);
+  if (delay > 0) {
+    fitTimer = window.setTimeout(() => fitTerminal(), delay);
+    return;
+  }
+
+  if (fitFrame) cancelAnimationFrame(fitFrame);
+  fitFrame = requestAnimationFrame(() => {
+    fitFrame = null;
+    if (sessionScreen.classList.contains("hidden") || textView.classList.contains("hidden") === false) return;
     fitAddon.fit();
     sendResize();
   });

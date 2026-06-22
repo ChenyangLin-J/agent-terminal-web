@@ -174,6 +174,7 @@ wss.on("connection", async (ws, req) => {
 
   const url = new URL(req.url || "", `http://${req.headers.host}`);
   const attachId = String(url.searchParams.get("attach") || "").trim();
+  const shouldReplay = url.searchParams.get("replay") !== "0";
 
   let session = attachId ? sessions.get(attachId) : null;
   if (!session) {
@@ -210,7 +211,7 @@ wss.on("connection", async (ws, req) => {
     });
   }
 
-  attachClient(session, ws);
+  attachClient(session, ws, { replay: shouldReplay });
 });
 
 server.listen(PORT, HOST, () => {
@@ -365,7 +366,7 @@ function createSession(cwd, launch) {
   return session;
 }
 
-function attachClient(session, ws) {
+function attachClient(session, ws, { replay = true } = {}) {
   if (session.cleanupTimer) {
     clearTimeout(session.cleanupTimer);
     session.cleanupTimer = null;
@@ -378,13 +379,18 @@ function attachClient(session, ws) {
     clients: session.clients.size,
   });
   send(ws, "status", publicSession(session));
-  if (session.rawBuffer) {
+  if (replay && session.rawBuffer) {
     logAgentEvent("ws-replay", {
       webSessionId: session.id,
       codexSessionId: session.sessionId,
       rawBytes: Buffer.byteLength(session.rawBuffer, "utf8"),
     });
     send(ws, "replay", { raw: session.rawBuffer, text: session.textBuffer });
+  } else if (!replay) {
+    logAgentEvent("ws-replay-skip", {
+      webSessionId: session.id,
+      codexSessionId: session.sessionId,
+    });
   }
 
   ws.on("message", (raw) => {

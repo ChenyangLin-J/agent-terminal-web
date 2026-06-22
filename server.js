@@ -159,6 +159,7 @@ app.get("/api/git-status", async (req, res) => {
 
 wss.on("connection", async (ws, req) => {
   if (!(await isAuthenticated(req))) {
+    logAgentEvent("ws-reject", { reason: "not-authenticated" });
     send(ws, "error", { message: "Not authenticated." });
     ws.close();
     return;
@@ -173,12 +174,14 @@ wss.on("connection", async (ws, req) => {
     const launch = getLaunchConfig(url.searchParams);
 
     if (!cwd) {
+      logAgentEvent("ws-reject", { reason: "invalid-cwd" });
       send(ws, "error", { message: "Invalid cwd outside workspace root." });
       ws.close();
       return;
     }
 
     if (!launch) {
+      logAgentEvent("ws-reject", { reason: "invalid-launch" });
       send(ws, "error", { message: "Invalid launch mode or session ID." });
       ws.close();
       return;
@@ -187,10 +190,17 @@ wss.on("connection", async (ws, req) => {
     launch.title = await titleForLaunch(launch);
     session = createSession(cwd, launch);
     if (session.error) {
+      logAgentEvent("session-start-failed", { reason: session.error });
       send(ws, "error", { message: session.error });
       ws.close();
       return;
     }
+  } else {
+    logAgentEvent("session-reconnect", {
+      webSessionId: session.id,
+      codexSessionId: session.sessionId,
+      clients: session.clients.size,
+    });
   }
 
   attachClient(session, ws);
@@ -257,6 +267,17 @@ function getLoginNext(req) {
   return getOrigin(req);
 }
 
+function logAgentEvent(event, fields = {}) {
+  console.log(
+    JSON.stringify({
+      scope: "agent-terminal-web",
+      event,
+      at: new Date().toISOString(),
+      ...fields,
+    }),
+  );
+}
+
 function createSession(cwd, launch) {
   const id = cryptoRandomId();
   const startedAt = new Date().toISOString();
@@ -304,6 +325,13 @@ function createSession(cwd, launch) {
     rows: 30,
   };
   sessions.set(id, session);
+  logAgentEvent("session-start", {
+    webSessionId: session.id,
+    codexSessionId: session.sessionId,
+    mode: session.mode,
+    project: session.project,
+    pid: session.pid,
+  });
 
   terminal.onData((data) => {
     session.lastActivityAt = new Date().toISOString();
@@ -316,6 +344,12 @@ function createSession(cwd, launch) {
     session.exited = true;
     session.exitCode = exitCode;
     session.signal = signal;
+    logAgentEvent("terminal-exit", {
+      webSessionId: session.id,
+      codexSessionId: session.sessionId,
+      exitCode,
+      signal,
+    });
     broadcast(session, "status", publicSession(session));
     for (const client of session.clients) client.close();
     scheduleCleanup(session);
@@ -331,8 +365,20 @@ function attachClient(session, ws) {
   }
 
   session.clients.add(ws);
+  logAgentEvent("ws-attach", {
+    webSessionId: session.id,
+    codexSessionId: session.sessionId,
+    clients: session.clients.size,
+  });
   send(ws, "status", publicSession(session));
-  if (session.rawBuffer) send(ws, "replay", { raw: session.rawBuffer, text: session.textBuffer });
+  if (session.rawBuffer) {
+    logAgentEvent("ws-replay", {
+      webSessionId: session.id,
+      codexSessionId: session.sessionId,
+      rawBytes: Buffer.byteLength(session.rawBuffer, "utf8"),
+    });
+    send(ws, "replay", { raw: session.rawBuffer, text: session.textBuffer });
+  }
 
   ws.on("message", (raw) => {
     let message;
@@ -378,21 +424,50 @@ function attachClient(session, ws) {
     }
 
     if (message.type === "kill") {
+      logAgentEvent("terminal-kill", {
+        webSessionId: session.id,
+        codexSessionId: session.sessionId,
+        reason: "client-request",
+      });
       session.terminal.kill();
     }
   });
 
-  ws.on("close", () => {
+  ws.on("close", (code, reason) => {
     session.clients.delete(ws);
+    logAgentEvent("ws-close", {
+      webSessionId: session.id,
+      codexSessionId: session.sessionId,
+      code,
+      reason: reason?.toString() || "",
+      clients: session.clients.size,
+      exited: session.exited,
+    });
     if (session.clients.size === 0) scheduleCleanup(session);
   });
 }
 
 function scheduleCleanup(session) {
   if (session.cleanupTimer) return;
+  logAgentEvent("cleanup-scheduled", {
+    webSessionId: session.id,
+    codexSessionId: session.sessionId,
+    ttlMs: SESSION_TTL_MS,
+  });
   session.cleanupTimer = setTimeout(() => {
-    if (!session.exited) session.terminal.kill();
+    if (!session.exited) {
+      logAgentEvent("terminal-kill", {
+        webSessionId: session.id,
+        codexSessionId: session.sessionId,
+        reason: "detached-ttl",
+      });
+      session.terminal.kill();
+    }
     sessions.delete(session.id);
+    logAgentEvent("session-cleanup", {
+      webSessionId: session.id,
+      codexSessionId: session.sessionId,
+    });
   }, SESSION_TTL_MS);
 }
 

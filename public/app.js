@@ -39,6 +39,10 @@ let terminalTouchY = null;
 
 let socket = null;
 let sessionsTimer = null;
+let reconnectTimer = null;
+let reconnectAttempts = 0;
+let activeSessionId = "";
+let currentSessionExited = false;
 
 window.addEventListener("resize", () => {
   fitTerminal();
@@ -311,11 +315,13 @@ function attachSession(id) {
   openSocket({ attach: id });
 }
 
-function openSocket(params) {
-  detach(false);
+function openSocket(params, options = {}) {
+  closeSocket();
   ensureTerminal();
   terminal?.clear();
-  setConnectedState("connecting");
+  activeSessionId = params.attach || "";
+  currentSessionExited = false;
+  setConnectedState(options.reconnect ? "reconnecting" : "connecting");
   showSessionScreen();
 
   const query = new URLSearchParams(params);
@@ -323,6 +329,7 @@ function openSocket(params) {
   socket = new WebSocket(`${protocol}//${window.location.host}/terminal?${query.toString()}`);
 
   socket.addEventListener("open", () => {
+    reconnectAttempts = 0;
     setConnectedState("connected");
     fitTerminal();
     sendResize();
@@ -335,7 +342,7 @@ function openSocket(params) {
       return;
     }
     if (message.type === "replay") {
-      writeTerminalOutput(message.payload.raw);
+      writeTerminalOutput(message.payload.raw, { replay: true });
       return;
     }
     if (message.type === "status") {
@@ -347,7 +354,13 @@ function openSocket(params) {
     }
   });
 
-  socket.addEventListener("close", () => {
+  socket.addEventListener("close", (event) => {
+    if (socket === event.currentTarget) socket = null;
+    if (event.currentTarget.intentionalClose) return;
+    if (!currentSessionExited && activeSessionId && !sessionScreen.classList.contains("hidden")) {
+      scheduleReconnect();
+      return;
+    }
     setConnectedState("detached");
     refreshLists();
   });
@@ -369,11 +382,35 @@ function sendTerminalKey(value) {
 }
 
 function detach(goHome = true) {
+  closeSocket();
+  if (goHome) showStartScreen();
+}
+
+function closeSocket() {
+  window.clearTimeout(reconnectTimer);
+  reconnectTimer = null;
   if (socket) {
+    socket.intentionalClose = true;
     socket.close();
     socket = null;
   }
-  if (goHome) showStartScreen();
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  if (reconnectAttempts >= 8) {
+    setConnectedState("detached");
+    refreshLists();
+    return;
+  }
+  setConnectedState("reconnecting");
+  const delay = Math.min(5000, 750 * 2 ** reconnectAttempts);
+  reconnectAttempts += 1;
+  reconnectTimer = window.setTimeout(() => {
+    reconnectTimer = null;
+    if (!activeSessionId || currentSessionExited || sessionScreen.classList.contains("hidden")) return;
+    openSocket({ attach: activeSessionId }, { reconnect: true });
+  }, delay);
 }
 
 function endSession() {
@@ -392,6 +429,8 @@ function sendResize() {
 }
 
 function renderStatus(status) {
+  activeSessionId = status.id || activeSessionId;
+  currentSessionExited = Boolean(status.exited);
   statusEls.project.textContent = status.title || displayProject(status.project);
   statusEls.connection.textContent = status.exited ? "exited" : "connected";
 }
@@ -459,12 +498,27 @@ function getTerminalBufferText() {
   return lines.join("\n").trimEnd();
 }
 
-function writeTerminalOutput(raw) {
+function writeTerminalOutput(raw, { replay = false } = {}) {
+  if (!terminal) return;
+
+  const shouldFollow = replay || isTerminalAtBottom();
+  const previousViewportY = terminal.buffer.active.viewportY;
   terminal?.write(raw, () => {
+    if (shouldFollow) {
+      terminal.scrollToBottom();
+    } else {
+      terminal.scrollToLine(previousViewportY);
+    }
     if (!textView.classList.contains("hidden")) {
       terminalText.value = getTerminalBufferText();
     }
   });
+}
+
+function isTerminalAtBottom() {
+  if (!terminal) return true;
+  const buffer = terminal.buffer.active;
+  return buffer.viewportY >= buffer.baseY - 1;
 }
 
 function openTextView() {

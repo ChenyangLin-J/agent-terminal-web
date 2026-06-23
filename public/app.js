@@ -37,6 +37,11 @@ const statusEls = {
   project: document.querySelector("#session-project"),
 };
 
+const PAGE_SCROLL_OVERLAP_RATIO = 0.18;
+const PAGE_SCROLL_MIN_OVERLAP = 3;
+const PAGE_SCROLL_MAX_OVERLAP = 8;
+const PAGE_DOWN_LONG_PRESS_MS = 450;
+
 let terminal = null;
 let fitAddon = null;
 let terminalTouchY = null;
@@ -44,6 +49,8 @@ let fitFrame = null;
 let fitTimer = null;
 let lastSentCols = 0;
 let lastSentRows = 0;
+let pageDownLongPressTimer = null;
+let pageDownLongPressFired = false;
 
 let socket = null;
 let sessionsTimer = null;
@@ -63,7 +70,14 @@ disconnectButton.addEventListener("click", detach);
 terminalTabButton.addEventListener("click", closeTextView);
 textTabButton.addEventListener("click", openTextView);
 pageUpButton.addEventListener("click", () => scrollTerminalPage(-1));
-pageDownButton.addEventListener("click", () => scrollTerminalPage(1));
+pageDownButton.addEventListener("click", (event) => {
+  if (pageDownLongPressFired) {
+    event.preventDefault();
+    pageDownLongPressFired = false;
+    return;
+  }
+  scrollTerminalPage(1);
+});
 keyUpButton.addEventListener("click", () => sendTerminalKey("\x1b[A"));
 keyDownButton.addEventListener("click", () => sendTerminalKey("\x1b[B"));
 keyEnterButton.addEventListener("click", () => sendTerminalKey("\r"));
@@ -85,6 +99,7 @@ promptInput.addEventListener("keydown", (event) => {
   }
 });
 installComposerDragUpload();
+installPageDownLongPress();
 
 bootstrap().catch(() => {
   redirectToLogin();
@@ -619,7 +634,39 @@ function fitTerminal({ delay = 0 } = {}) {
 
 function scrollTerminalPage(direction) {
   if (!terminal) return;
-  terminal.scrollPages(direction);
+  terminal.scrollLines(direction * pageScrollLines());
+}
+
+function pageScrollLines() {
+  const rows = terminal?.rows || 30;
+  const overlap = Math.max(
+    PAGE_SCROLL_MIN_OVERLAP,
+    Math.min(PAGE_SCROLL_MAX_OVERLAP, Math.round(rows * PAGE_SCROLL_OVERLAP_RATIO)),
+  );
+  return Math.max(1, rows - overlap);
+}
+
+function scrollTerminalToBottom() {
+  terminal?.scrollToBottom();
+}
+
+function installPageDownLongPress() {
+  pageDownButton.addEventListener("pointerdown", (event) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    window.clearTimeout(pageDownLongPressTimer);
+    pageDownLongPressFired = false;
+    pageDownLongPressTimer = window.setTimeout(() => {
+      pageDownLongPressFired = true;
+      scrollTerminalToBottom();
+    }, PAGE_DOWN_LONG_PRESS_MS);
+  });
+
+  for (const eventName of ["pointerup", "pointercancel", "pointerleave"]) {
+    pageDownButton.addEventListener(eventName, () => {
+      window.clearTimeout(pageDownLongPressTimer);
+      pageDownLongPressTimer = null;
+    });
+  }
 }
 
 function getTerminalBufferText() {

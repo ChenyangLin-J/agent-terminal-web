@@ -42,6 +42,10 @@ input {
 button {
   padding: 0 13px;
   cursor: pointer;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 button:disabled {

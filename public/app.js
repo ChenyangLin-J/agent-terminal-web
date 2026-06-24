@@ -374,9 +374,7 @@ function openInitialSessionFromUrl() {
 }
 
 function openSessionTab(params) {
-  const url = sessionUrl(params);
-  const opened = window.open(url, "_blank", "noopener");
-  if (!opened) window.location.href = url;
+  window.open(sessionUrl(params), "_blank", "noopener");
 }
 
 function sessionUrl(params) {

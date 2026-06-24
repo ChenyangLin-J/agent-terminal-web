@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import busboy from "busboy";
 import express from "express";
 import { WebSocketServer } from "ws";
+import { transcribeAudio } from "./stt.js";
 
 const require = createRequire(import.meta.url);
 const pty = require("node-pty");
@@ -88,6 +89,25 @@ app.get("/api/projects", async (_req, res) => {
 });
 
 app.post("/api/uploads", handleUpload);
+
+app.post(
+  "/api/transcribe",
+  express.raw({ type: ["audio/webm", "audio/mp4", "audio/mpeg", "audio/wav"], limit: "25mb" }),
+  async (req, res) => {
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      res.status(400).json({ error: "audio is required" });
+      return;
+    }
+
+    try {
+      const text = await transcribeAudio(req.body, req.headers["content-type"] || "");
+      res.json({ text });
+    } catch (error) {
+      console.error(`Agent transcribe failed: ${error.message}`);
+      res.status(502).json({ error: "speech-to-text failed", detail: error.message });
+    }
+  },
+);
 
 app.get("/api/sessions", (_req, res) => {
   res.json({

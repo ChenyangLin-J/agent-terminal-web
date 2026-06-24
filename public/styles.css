@@ -339,16 +339,40 @@ input {
   background: #151b2a;
 }
 
+.prompt-field {
+  position: relative;
+  min-width: 0;
+}
+
 #prompt {
   width: 100%;
   min-height: 96px;
   max-height: 34vh;
   max-height: 34dvh;
   resize: vertical;
-  padding: 10px 12px;
+  padding: 10px 12px 46px;
   line-height: 1.4;
   background: #151a23;
   overscroll-behavior: contain;
+}
+
+.voice-button {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border-color: #454c5d;
+  background: #202636;
+  color: #d8dce6;
+  font-size: 12px;
+}
+
+.voice-button.recording {
+  border-color: #8a3a48;
+  background: #4b1d27;
+  color: #ffd4dc;
 }
 
 .composer-actions {

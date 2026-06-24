@@ -23,6 +23,7 @@ const sendStatusButton = document.querySelector("#send-status");
 const sendPermissionsButton = document.querySelector("#send-permissions");
 const killSessionButton = document.querySelector("#kill-session");
 const attachFileButton = document.querySelector("#attach-file");
+const voiceInputButton = document.querySelector("#voice-input");
 const sendPromptButton = document.querySelector("#send-prompt");
 const fileInput = document.querySelector("#file-input");
 const promptInput = document.querySelector("#prompt");
@@ -61,6 +62,9 @@ let activeSessionId = "";
 let currentSessionExited = false;
 let uploadStatusTimer = null;
 let liveSessionsByCodexId = new Map();
+let mediaRecorder = null;
+let voiceStream = null;
+let audioChunks = [];
 
 window.addEventListener("resize", () => fitTerminal({ delay: 120 }));
 
@@ -88,6 +92,7 @@ sendStatusButton.addEventListener("click", () => command("/status"));
 sendPermissionsButton.addEventListener("click", () => command("/permissions"));
 killSessionButton.addEventListener("click", endSession);
 attachFileButton.addEventListener("click", () => fileInput.click());
+voiceInputButton.addEventListener("click", toggleVoiceInput);
 sendPromptButton.addEventListener("click", submitPrompt);
 fileInput.addEventListener("change", async () => {
   await uploadFiles(fileInput.files);
@@ -562,6 +567,91 @@ async function uploadFiles(fileList) {
   } finally {
     setUploading(false);
   }
+}
+
+async function toggleVoiceInput() {
+  if (mediaRecorder && mediaRecorder.state === "recording") {
+    mediaRecorder.stop();
+    setVoiceState("transcribing");
+    return;
+  }
+
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+    setUploadStatus("Voice input is not supported in this browser.");
+    return;
+  }
+
+  try {
+    voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioChunks = [];
+    mediaRecorder = new MediaRecorder(voiceStream);
+    mediaRecorder.addEventListener("dataavailable", (event) => {
+      if (event.data.size > 0) audioChunks.push(event.data);
+    });
+    mediaRecorder.addEventListener("stop", transcribeRecordedAudio, { once: true });
+    mediaRecorder.start();
+    setVoiceState("recording");
+    setUploadStatus("Recording...");
+  } catch (error) {
+    stopVoiceStream();
+    setVoiceState("idle");
+    setUploadStatus(error.message || "Failed to start recording.");
+  }
+}
+
+async function transcribeRecordedAudio() {
+  stopVoiceStream();
+
+  const mimeType = mediaRecorder?.mimeType || "audio/webm";
+  const blob = new Blob(audioChunks, { type: mimeType });
+  audioChunks = [];
+
+  if (!blob.size) {
+    setVoiceState("idle");
+    setUploadStatus("No audio recorded.");
+    return;
+  }
+
+  try {
+    const response = await fetch("/api/transcribe", {
+      method: "POST",
+      headers: { "Content-Type": blob.type },
+      body: blob,
+    });
+
+    if (response.status === 401) {
+      redirectToLogin();
+      return;
+    }
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.detail || data.error || "Transcribe failed.");
+
+    if (data.text) {
+      insertPromptText(data.text);
+      setUploadStatus("Transcribed.", { clear: true });
+    } else {
+      setUploadStatus("No speech recognized.");
+    }
+  } catch (error) {
+    setUploadStatus(error.message || "Transcribe failed.");
+  } finally {
+    setVoiceState("idle");
+    mediaRecorder = null;
+  }
+}
+
+function stopVoiceStream() {
+  voiceStream?.getTracks().forEach((track) => track.stop());
+  voiceStream = null;
+}
+
+function setVoiceState(state) {
+  const recording = state === "recording";
+  const transcribing = state === "transcribing";
+  voiceInputButton.classList.toggle("recording", recording);
+  voiceInputButton.disabled = transcribing;
+  voiceInputButton.textContent = recording ? "Stop" : transcribing ? "..." : "Mic";
 }
 
 function installComposerDragUpload() {

@@ -4,8 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agent Terminal Web</title>
-    <link rel="stylesheet" href="/vendor/xterm-css/xterm.css?v=20260624-3" />
-    <link rel="stylesheet" href="/styles.css?v=20260624-3" />
+    <link rel="stylesheet" href="/vendor/xterm-css/xterm.css?v=20260625-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260625-1" />
   </head>
   <body>
     <main class="app">
@@ -98,11 +98,14 @@
 
         <section id="composer" class="composer" aria-label="Prompt composer">
           <input id="file-input" class="hidden" type="file" multiple />
-          <textarea
-            id="prompt"
-            rows="5"
-            placeholder="Dictate or type a prompt. You can tap to edit before sending."
-          ></textarea>
+          <div class="prompt-field">
+            <textarea
+              id="prompt"
+              rows="5"
+              placeholder="Dictate or type a prompt. You can tap to edit before sending."
+            ></textarea>
+            <button id="voice-input" class="voice-button" type="button" aria-label="Voice input">Mic</button>
+          </div>
           <div class="composer-actions">
             <button id="attach-file" type="button">Attach</button>
             <button id="send-prompt" class="primary" type="button">Send</button>
@@ -112,8 +115,8 @@
       </section>
     </main>
 
-    <script src="/vendor/xterm/xterm.js?v=20260624-3"></script>
-    <script src="/vendor/xterm-fit/addon-fit.js?v=20260624-3"></script>
-    <script src="/app.js?v=20260624-3"></script>
+    <script src="/vendor/xterm/xterm.js?v=20260625-1"></script>
+    <script src="/vendor/xterm-fit/addon-fit.js?v=20260625-1"></script>
+    <script src="/app.js?v=20260625-1"></script>
   </body>
 </html>

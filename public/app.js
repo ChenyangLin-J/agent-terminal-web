@@ -41,6 +41,7 @@ const PAGE_SCROLL_OVERLAP_RATIO = 0.18;
 const PAGE_SCROLL_MIN_OVERLAP = 3;
 const PAGE_SCROLL_MAX_OVERLAP = 8;
 const PAGE_DOWN_LONG_PRESS_MS = 450;
+const DEFAULT_DOCUMENT_TITLE = "Agent Terminal Web";
 
 let terminal = null;
 let fitAddon = null;
@@ -109,8 +110,9 @@ async function bootstrap() {
   const response = await fetch("/api/auth");
   const data = await response.json();
   if (data.authenticated) {
-    showStartScreen();
     await loadProjects();
+    if (openInitialSessionFromUrl()) return;
+    showStartScreen();
     await refreshLists();
   } else {
     redirectToLogin(data.loginUrl);
@@ -179,7 +181,7 @@ function renderLiveSessions(sessions) {
           session.lastActivityAt,
         )}`,
         action: "Reconnect",
-        onClick: () => attachSession(session.id),
+        onClick: () => openSessionTab({ attach: session.id, title: session.title || "New Codex session" }),
       }),
     );
   }
@@ -198,7 +200,12 @@ function renderSavedCodexSessions(sessions) {
         title: session.title || "Untitled session",
         subtitle: `${displayProject(session.project)} · ${formatTime(session.updatedAt)}`,
         action: "Resume",
-        onClick: () => startSession({ sessionId: session.id, cwd: projectForSession(session) }),
+        onClick: () =>
+          openSessionTab({
+            cwd: projectForSession(session),
+            sessionId: session.id,
+            title: session.title || "Untitled session",
+          }),
         secondaryAction: "Rename",
         onSecondaryClick: () => renameCodexSession(session),
         tertiaryAction: "Archive",
@@ -340,6 +347,46 @@ function startSession(overrides = {}) {
 
 function attachSession(id) {
   openSocket({ attach: id });
+}
+
+function openInitialSessionFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const attach = params.get("attach") || "";
+  const sessionId = params.get("sessionId") || "";
+  const title = params.get("title") || "";
+
+  if (title) setDocumentTitle(title);
+
+  if (attach) {
+    attachSession(attach);
+    return true;
+  }
+
+  if (sessionId) {
+    startSession({
+      cwd: params.get("cwd") || ".",
+      sessionId,
+    });
+    return true;
+  }
+
+  return false;
+}
+
+function openSessionTab(params) {
+  const url = sessionUrl(params);
+  const opened = window.open(url, "_blank", "noopener");
+  if (!opened) window.location.href = url;
+}
+
+function sessionUrl(params) {
+  const url = new URL(window.location.href);
+  url.search = "";
+  url.hash = "";
+  for (const [key, value] of Object.entries(params)) {
+    if (value) url.searchParams.set(key, value);
+  }
+  return url.toString();
 }
 
 function openSocket(params, options = {}) {
@@ -573,6 +620,7 @@ function renderStatus(status) {
   currentSessionExited = Boolean(status.exited);
   statusEls.project.textContent = status.title || displayProject(status.project);
   statusEls.connection.textContent = status.exited ? "exited" : "connected";
+  setDocumentTitle(status.title || displayProject(status.project));
 }
 
 function setConnectedState(state) {
@@ -592,6 +640,7 @@ function setConnectedState(state) {
 }
 
 function showStartScreen() {
+  setDocumentTitle(DEFAULT_DOCUMENT_TITLE);
   startScreen.classList.remove("hidden");
   sessionScreen.classList.add("hidden");
   window.clearInterval(sessionsTimer);
@@ -817,6 +866,11 @@ function projectForSession(session) {
 function displayProject(value) {
   if (!value || value === ".") return "workspace";
   return value;
+}
+
+function setDocumentTitle(title) {
+  const cleaned = String(title || "").trim();
+  document.title = cleaned ? `${cleaned} · Codex Agent` : DEFAULT_DOCUMENT_TITLE;
 }
 
 function escapeHtml(value) {

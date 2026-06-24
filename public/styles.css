@@ -350,7 +350,7 @@ input {
   max-height: 34vh;
   max-height: 34dvh;
   resize: vertical;
-  padding: 10px 12px 46px;
+  padding: 10px 12px 54px;
   line-height: 1.4;
   background: #151a23;
   overscroll-behavior: contain;
@@ -358,13 +358,13 @@ input {
 
 .voice-button {
   position: absolute;
-  right: 8px;
-  bottom: 8px;
+  right: 10px;
+  bottom: 10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  min-height: 32px;
+  width: 44px;
+  min-height: 44px;
   padding: 0;
   border-radius: 999px;
   border-color: #454c5d;
@@ -373,8 +373,8 @@ input {
 }
 
 .voice-button svg {
-  width: 17px;
-  height: 17px;
+  width: 22px;
+  height: 22px;
   fill: none;
   stroke: currentColor;
   stroke-width: 2;

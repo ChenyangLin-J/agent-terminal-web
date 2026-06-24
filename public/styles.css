@@ -360,13 +360,26 @@ input {
   position: absolute;
   right: 8px;
   bottom: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
   min-height: 32px;
-  padding: 0 10px;
+  padding: 0;
   border-radius: 999px;
   border-color: #454c5d;
   background: #202636;
   color: #d8dce6;
-  font-size: 12px;
+}
+
+.voice-button svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .voice-button.recording {

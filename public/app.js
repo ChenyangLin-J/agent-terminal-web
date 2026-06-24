@@ -43,6 +43,21 @@ const PAGE_SCROLL_MIN_OVERLAP = 3;
 const PAGE_SCROLL_MAX_OVERLAP = 8;
 const PAGE_DOWN_LONG_PRESS_MS = 450;
 const DEFAULT_DOCUMENT_TITLE = "Agent Terminal Web";
+const VOICE_MIC_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true">
+  <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" />
+  <path d="M5 11a7 7 0 0 0 14 0" />
+  <path d="M12 18v3" />
+  <path d="M9 21h6" />
+</svg>`;
+const VOICE_STOP_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true">
+  <path d="M8 8h8v8H8z" />
+</svg>`;
+const VOICE_WAIT_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true">
+  <path d="M12 3v3" />
+  <path d="M12 18v3" />
+  <path d="M3 12h3" />
+  <path d="M18 12h3" />
+</svg>`;
 
 let terminal = null;
 let fitAddon = null;
@@ -577,7 +592,7 @@ async function toggleVoiceInput() {
   }
 
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-    setUploadStatus("Voice input is not supported in this browser.");
+    setUploadStatus("当前浏览器不支持录音。");
     return;
   }
 
@@ -591,11 +606,11 @@ async function toggleVoiceInput() {
     mediaRecorder.addEventListener("stop", transcribeRecordedAudio, { once: true });
     mediaRecorder.start();
     setVoiceState("recording");
-    setUploadStatus("Recording...");
+    setUploadStatus("录音中...");
   } catch (error) {
     stopVoiceStream();
     setVoiceState("idle");
-    setUploadStatus(error.message || "Failed to start recording.");
+    setUploadStatus(error.message || "无法开始录音。");
   }
 }
 
@@ -608,7 +623,7 @@ async function transcribeRecordedAudio() {
 
   if (!blob.size) {
     setVoiceState("idle");
-    setUploadStatus("No audio recorded.");
+    setUploadStatus("没有录到音频。");
     return;
   }
 
@@ -625,16 +640,16 @@ async function transcribeRecordedAudio() {
     }
 
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.detail || data.error || "Transcribe failed.");
+    if (!response.ok) throw new Error(data.detail || data.error || "转写失败。");
 
     if (data.text) {
       insertPromptText(data.text);
-      setUploadStatus("Transcribed.", { clear: true });
+      setUploadStatus("已转写。", { clear: true });
     } else {
-      setUploadStatus("No speech recognized.");
+      setUploadStatus("没有识别到语音。");
     }
   } catch (error) {
-    setUploadStatus(error.message || "Transcribe failed.");
+    setUploadStatus(error.message || "转写失败。");
   } finally {
     setVoiceState("idle");
     mediaRecorder = null;
@@ -651,7 +666,9 @@ function setVoiceState(state) {
   const transcribing = state === "transcribing";
   voiceInputButton.classList.toggle("recording", recording);
   voiceInputButton.disabled = transcribing;
-  voiceInputButton.textContent = recording ? "Stop" : transcribing ? "..." : "Mic";
+  voiceInputButton.innerHTML = recording ? VOICE_STOP_ICON : transcribing ? VOICE_WAIT_ICON : VOICE_MIC_ICON;
+  voiceInputButton.setAttribute("aria-label", recording ? "停止录音" : transcribing ? "转写中" : "语音输入");
+  voiceInputButton.title = recording ? "停止录音" : transcribing ? "转写中" : "语音输入";
 }
 
 function installComposerDragUpload() {

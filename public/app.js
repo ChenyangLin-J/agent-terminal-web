@@ -60,6 +60,7 @@ let reconnectAttempts = 0;
 let activeSessionId = "";
 let currentSessionExited = false;
 let uploadStatusTimer = null;
+let liveSessionsByCodexId = new Map();
 
 window.addEventListener("resize", () => fitTerminal({ delay: 120 }));
 
@@ -147,7 +148,8 @@ async function loadProjects() {
 }
 
 async function refreshLists() {
-  await Promise.all([loadLiveSessions(), loadSavedCodexSessions(), loadArchivedCodexSessions()]);
+  await loadLiveSessions();
+  await Promise.all([loadSavedCodexSessions(), loadArchivedCodexSessions()]);
   scrollStartScreenToBottom();
 }
 
@@ -167,13 +169,17 @@ async function loadArchivedCodexSessions() {
 }
 
 function renderLiveSessions(sessions) {
+  const uniqueSessions = uniqueLiveSessions(sessions);
+  liveSessionsByCodexId = new Map(
+    uniqueSessions.filter((session) => session.sessionId).map((session) => [session.sessionId, session]),
+  );
   sessionsList.innerHTML = "";
-  if (!sessions.length) {
+  if (!uniqueSessions.length) {
     sessionsList.append(empty("No live sessions. Detached sessions stay available for about one hour."));
     return;
   }
 
-  for (const session of sessions) {
+  for (const session of uniqueSessions) {
     sessionsList.append(
       sessionCard({
         title: session.title || "New Codex session",
@@ -187,6 +193,28 @@ function renderLiveSessions(sessions) {
   }
 }
 
+function uniqueLiveSessions(sessions) {
+  const byKey = new Map();
+
+  for (const session of sessions) {
+    const key = session.sessionId || session.id;
+    const current = byKey.get(key);
+    if (!current || compareLiveSession(session, current) > 0) {
+      byKey.set(key, session);
+    }
+  }
+
+  return [...byKey.values()].sort(
+    (a, b) => new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime(),
+  );
+}
+
+function compareLiveSession(a, b) {
+  const clients = (a.connectedClients || 0) - (b.connectedClients || 0);
+  if (clients !== 0) return clients;
+  return new Date(a.lastActivityAt).getTime() - new Date(b.lastActivityAt).getTime();
+}
+
 function renderSavedCodexSessions(sessions) {
   codexSessionsList.innerHTML = "";
   if (!sessions.length) {
@@ -195,15 +223,17 @@ function renderSavedCodexSessions(sessions) {
   }
 
   for (const session of sessions) {
+    const liveSession = liveSessionsByCodexId.get(session.id);
     codexSessionsList.append(
       sessionCard({
         title: session.title || "Untitled session",
         subtitle: `${displayProject(session.project)} · ${formatTime(session.updatedAt)}`,
-        action: "Resume",
+        action: liveSession ? "Open" : "Resume",
         onClick: () =>
           openSessionTab({
-            cwd: projectForSession(session),
-            sessionId: session.id,
+            attach: liveSession?.id || "",
+            cwd: liveSession ? "" : projectForSession(session),
+            sessionId: liveSession ? "" : session.id,
             title: session.title || "Untitled session",
           }),
         secondaryAction: "Rename",
@@ -639,6 +669,7 @@ function setConnectedState(state) {
 
 function showStartScreen() {
   setDocumentTitle(DEFAULT_DOCUMENT_TITLE);
+  clearSessionUrl();
   startScreen.classList.remove("hidden");
   sessionScreen.classList.add("hidden");
   window.clearInterval(sessionsTimer);
@@ -869,6 +900,18 @@ function displayProject(value) {
 function setDocumentTitle(title) {
   const cleaned = String(title || "").trim();
   document.title = cleaned ? `${cleaned} · Codex Agent` : DEFAULT_DOCUMENT_TITLE;
+}
+
+function clearSessionUrl() {
+  if (!window.location.search) return;
+
+  const url = new URL(window.location.href);
+  for (const key of ["attach", "cwd", "sessionId", "title"]) {
+    url.searchParams.delete(key);
+  }
+  if (url.toString() !== window.location.href) {
+    window.history.replaceState(null, "", url.toString());
+  }
 }
 
 function escapeHtml(value) {

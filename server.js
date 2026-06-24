@@ -195,6 +195,20 @@ wss.on("connection", async (ws, req) => {
       return;
     }
 
+    session = findReusableSession(launch);
+    if (session) {
+      logAgentEvent("session-reuse", {
+        webSessionId: session.id,
+        codexSessionId: session.sessionId,
+        clients: session.clients.size,
+      });
+    }
+
+    if (session) {
+      attachClient(session, ws, { replay: shouldReplay });
+      return;
+    }
+
     launch.title = await titleForLaunch(launch);
     session = createSession(cwd, launch);
     if (session.error) {
@@ -364,6 +378,19 @@ function createSession(cwd, launch) {
   });
 
   return session;
+}
+
+function findReusableSession(launch) {
+  if (!launch.sessionId) return null;
+
+  return (
+    [...sessions.values()]
+      .filter((session) => !session.exited && session.sessionId === launch.sessionId)
+      .sort((a, b) => {
+        if (b.clients.size !== a.clients.size) return b.clients.size - a.clients.size;
+        return new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime();
+      })[0] || null
+  );
 }
 
 function attachClient(session, ws, { replay = true } = {}) {

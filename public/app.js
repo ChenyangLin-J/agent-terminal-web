@@ -221,7 +221,7 @@ function renderLiveSessions(sessions) {
         )}`,
         action: "Reconnect",
         onClick: () =>
-          openSessionTab({
+          openSessionFromList({
             attach: session.id,
             cwd: session.project || ".",
             sessionId: session.sessionId || "",
@@ -270,7 +270,7 @@ function renderSavedCodexSessions(sessions) {
         subtitle: `${displayProject(session.project)} · ${formatTime(session.updatedAt)}`,
         action: "Resume",
         onClick: () =>
-          openSessionTab({
+          openSessionFromList({
             cwd: projectForSession(session),
             sessionId: session.id,
             title: session.title || "Untitled session",
@@ -463,8 +463,22 @@ function openInitialSessionFromUrl() {
   return false;
 }
 
+function openSessionFromList(params) {
+  if (shouldOpenSessionInCurrentPage()) {
+    window.history.pushState(null, "", sessionUrl(params));
+    openSocket(params);
+    return;
+  }
+
+  openSessionTab(params);
+}
+
 function openSessionTab(params) {
   window.open(sessionUrl(params), "_blank", "noopener");
+}
+
+function shouldOpenSessionInCurrentPage() {
+  return window.matchMedia("(max-width: 820px), (pointer: coarse)").matches;
 }
 
 function sessionUrl(params) {

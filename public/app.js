@@ -33,6 +33,8 @@ const terminalView = document.querySelector(".terminal-view");
 const textView = document.querySelector("#text-view");
 const terminalText = document.querySelector("#terminal-text");
 
+if ("scrollRestoration" in history) history.scrollRestoration = "manual";
+
 const statusEls = {
   connection: document.querySelector("#connection"),
   project: document.querySelector("#session-project"),
@@ -43,6 +45,10 @@ const PAGE_SCROLL_MIN_OVERLAP = 3;
 const PAGE_SCROLL_MAX_OVERLAP = 8;
 const PAGE_DOWN_LONG_PRESS_MS = 450;
 const DEFAULT_DOCUMENT_TITLE = "Agent Terminal Web";
+const ARCHIVED_SESSIONS_PREVIEW_COUNT = 5;
+const CLIENT_HEARTBEAT_MS = 15_000;
+const CLIENT_STALE_MS = 45_000;
+const CLIENT_ID_KEY = "agent_terminal_client_id";
 const VOICE_MIC_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true">
   <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" />
   <path d="M5 11a7 7 0 0 0 14 0" />
@@ -58,6 +64,7 @@ const VOICE_WAIT_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true">
   <path d="M3 12h3" />
   <path d="M18 12h3" />
 </svg>`;
+const VOICE_DRAFT_KEY = "agent_voice_draft";
 
 let terminal = null;
 let fitAddon = null;
@@ -72,14 +79,17 @@ let pageDownLongPressFired = false;
 let socket = null;
 let sessionsTimer = null;
 let reconnectTimer = null;
+let clientHeartbeatTimer = null;
 let reconnectAttempts = 0;
 let activeSessionId = "";
+let activeSessionParams = {};
 let currentSessionExited = false;
+let lastServerSeenAt = 0;
 let uploadStatusTimer = null;
 let liveSessionsByCodexId = new Map();
-let mediaRecorder = null;
-let voiceStream = null;
-let audioChunks = [];
+let voiceCapture = null;
+let archivedSessionsExpanded = false;
+const clientId = getClientId();
 
 window.addEventListener("resize", () => fitTerminal({ delay: 120 }));
 
@@ -122,6 +132,7 @@ promptInput.addEventListener("keydown", (event) => {
 });
 installComposerDragUpload();
 installPageDownLongPress();
+installClientEventLogging();
 
 bootstrap().catch(() => {
   redirectToLogin();
@@ -134,7 +145,6 @@ async function bootstrap() {
     await loadProjects();
     if (openInitialSessionFromUrl()) return;
     showStartScreen();
-    await refreshLists();
   } else {
     redirectToLogin(data.loginUrl);
   }
@@ -168,9 +178,10 @@ async function loadProjects() {
 }
 
 async function refreshLists() {
+  const savedScrollY = startScreen.classList.contains("hidden") ? null : window.scrollY;
   await loadLiveSessions();
   await Promise.all([loadSavedCodexSessions(), loadArchivedCodexSessions()]);
-  scrollStartScreenToBottom();
+  if (savedScrollY !== null) window.scrollTo({ top: savedScrollY, behavior: "auto" });
 }
 
 async function loadLiveSessions() {
@@ -207,7 +218,13 @@ function renderLiveSessions(sessions) {
           session.lastActivityAt,
         )}`,
         action: "Reconnect",
-        onClick: () => openSessionTab({ attach: session.id, title: session.title || "New Codex session" }),
+        onClick: () =>
+          openSessionTab({
+            attach: session.id,
+            cwd: session.project || ".",
+            sessionId: session.sessionId || "",
+            title: session.title || "New Codex session",
+          }),
       }),
     );
   }
@@ -237,23 +254,23 @@ function compareLiveSession(a, b) {
 
 function renderSavedCodexSessions(sessions) {
   codexSessionsList.innerHTML = "";
-  if (!sessions.length) {
-    codexSessionsList.append(empty("No saved Codex sessions found."));
+  const nonLiveSessions = sessions.filter((session) => !liveSessionsByCodexId.has(session.id));
+
+  if (!nonLiveSessions.length) {
+    codexSessionsList.append(empty(sessions.length ? "No other saved sessions." : "No saved Codex sessions found."));
     return;
   }
 
-  for (const session of sessions) {
-    const liveSession = liveSessionsByCodexId.get(session.id);
+  for (const session of nonLiveSessions) {
     codexSessionsList.append(
       sessionCard({
         title: session.title || "Untitled session",
         subtitle: `${displayProject(session.project)} · ${formatTime(session.updatedAt)}`,
-        action: liveSession ? "Open" : "Resume",
+        action: "Resume",
         onClick: () =>
           openSessionTab({
-            attach: liveSession?.id || "",
-            cwd: liveSession ? "" : projectForSession(session),
-            sessionId: liveSession ? "" : session.id,
+            cwd: projectForSession(session),
+            sessionId: session.id,
             title: session.title || "Untitled session",
           }),
         secondaryAction: "Rename",
@@ -272,7 +289,11 @@ function renderArchivedCodexSessions(sessions) {
     return;
   }
 
-  for (const session of sessions) {
+  const visibleSessions = archivedSessionsExpanded
+    ? sessions
+    : sessions.slice(0, ARCHIVED_SESSIONS_PREVIEW_COUNT);
+
+  for (const session of visibleSessions) {
     archivedCodexSessionsList.append(
       sessionCard({
         title: session.title || "Untitled session",
@@ -285,6 +306,20 @@ function renderArchivedCodexSessions(sessions) {
         onSecondaryClick: () => renameCodexSession(session),
       }),
     );
+  }
+
+  if (sessions.length > ARCHIVED_SESSIONS_PREVIEW_COUNT) {
+    const toggleButton = document.createElement("button");
+    toggleButton.type = "button";
+    toggleButton.className = "archive-toggle";
+    toggleButton.textContent = archivedSessionsExpanded
+      ? "Show less"
+      : `Show ${sessions.length - ARCHIVED_SESSIONS_PREVIEW_COUNT} more`;
+    toggleButton.addEventListener("click", () => {
+      archivedSessionsExpanded = !archivedSessionsExpanded;
+      renderArchivedCodexSessions(sessions);
+    });
+    archivedCodexSessionsList.append(toggleButton);
   }
 }
 
@@ -395,8 +430,8 @@ function startSession(overrides = {}) {
   });
 }
 
-function attachSession(id) {
-  openSocket({ attach: id });
+function attachSession(id, extra = {}) {
+  openSocket({ attach: id, ...extra });
 }
 
 function openInitialSessionFromUrl() {
@@ -408,7 +443,10 @@ function openInitialSessionFromUrl() {
   if (title) setDocumentTitle(title);
 
   if (attach) {
-    attachSession(attach);
+    attachSession(attach, {
+      cwd: params.get("cwd") || ".",
+      sessionId,
+    });
     return true;
   }
 
@@ -443,25 +481,34 @@ function openSocket(params, options = {}) {
   ensureTerminal();
   if (!isReconnect) terminal?.clear();
   activeSessionId = params.attach || "";
+  activeSessionParams = { ...activeSessionParams, ...params };
   currentSessionExited = false;
   setConnectedState(isReconnect ? "reconnecting" : "connecting");
   showSessionScreen();
 
   const query = new URLSearchParams(params);
+  query.set("clientId", clientId);
   if (isReconnect) query.set("replay", "0");
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   socket = new WebSocket(`${protocol}//${window.location.host}/terminal?${query.toString()}`);
 
   socket.addEventListener("open", () => {
+    markServerSeen();
+    logClientEvent("ws-open");
     reconnectAttempts = 0;
     setConnectedState("connected");
     lastSentCols = 0;
     lastSentRows = 0;
     fitTerminal();
+    startClientHeartbeat();
   });
 
   socket.addEventListener("message", (event) => {
+    markServerSeen();
     const message = JSON.parse(event.data);
+    if (message.type === "client-pong" || message.type === "control-ack") {
+      return;
+    }
     if (message.type === "output") {
       writeTerminalOutput(message.payload.raw);
       return;
@@ -477,12 +524,23 @@ function openSocket(params, options = {}) {
     }
     if (message.type === "error") {
       terminal?.writeln(`\r\n${message.payload.message}\r\n`);
+      if (message.payload.goHome) {
+        currentSessionExited = true;
+        setConnectedState("detached");
+        window.setTimeout(showStartScreen, 500);
+      }
     }
   });
 
   socket.addEventListener("close", (event) => {
+    stopClientHeartbeat();
     if (socket === event.currentTarget) socket = null;
     if (event.currentTarget.intentionalClose) return;
+    logClientEvent("ws-close", { closeCode: event.code, wasClean: event.wasClean });
+    if (document.visibilityState !== "visible") {
+      setConnectedState("detached");
+      return;
+    }
     if (!currentSessionExited && activeSessionId && !sessionScreen.classList.contains("hidden")) {
       scheduleReconnect();
       return;
@@ -495,8 +553,11 @@ function openSocket(params, options = {}) {
 function submitPrompt() {
   const prompt = promptInput.value.trim();
   if (!prompt) return;
-  send({ type: "submit", data: prompt });
-  promptInput.value = "";
+  if (send({ type: "submit", data: prompt })) {
+    promptInput.value = "";
+  } else {
+    setUploadStatus("连接恢复中，文本已保留。");
+  }
 }
 
 function command(value) {
@@ -509,17 +570,80 @@ function sendTerminalKey(value) {
 
 function detach(goHome = true) {
   closeSocket();
-  if (goHome) showStartScreen();
+  if (goHome) {
+    activeSessionId = "";
+    activeSessionParams = {};
+    showStartScreen();
+  }
 }
 
 function closeSocket() {
   window.clearTimeout(reconnectTimer);
   reconnectTimer = null;
+  stopClientHeartbeat();
   if (socket) {
     socket.intentionalClose = true;
     socket.close();
     socket = null;
   }
+}
+
+function installClientEventLogging() {
+  logClientEvent("page-load");
+
+  document.addEventListener("visibilitychange", () => {
+    logClientEvent(`visibility-${document.visibilityState}`);
+    if (document.visibilityState === "visible") ensureVisibleConnection("visibility-visible");
+  });
+  window.addEventListener("pageshow", (event) => {
+    logClientEvent("pageshow", { persisted: event.persisted });
+  });
+  window.addEventListener("pagehide", (event) => {
+    logClientEvent("pagehide", { persisted: event.persisted }, { beacon: true });
+  });
+  window.addEventListener("online", () => {
+    logClientEvent("online", { online: true });
+    ensureVisibleConnection("online");
+  });
+  window.addEventListener("offline", () => {
+    logClientEvent("offline", { online: false });
+  });
+  window.addEventListener("beforeunload", () => {
+    logClientEvent("beforeunload", {}, { beacon: true });
+  });
+}
+
+function logClientEvent(event, fields = {}, { beacon = false } = {}) {
+  const payload = {
+    event,
+    webSessionId: activeSessionId || "",
+    visibilityState: document.visibilityState || "",
+    socketState: socketReadyStateName(socket?.readyState),
+    online: navigator.onLine,
+    path: `${window.location.pathname}${window.location.search}`,
+    ...fields,
+  };
+  const body = JSON.stringify(payload);
+
+  if (beacon && navigator.sendBeacon) {
+    navigator.sendBeacon("/api/client-events", new Blob([body], { type: "application/json" }));
+    return;
+  }
+
+  fetch("/api/client-events", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+    keepalive: true,
+  }).catch(() => {});
+}
+
+function socketReadyStateName(value) {
+  if (value === WebSocket.CONNECTING) return "connecting";
+  if (value === WebSocket.OPEN) return "open";
+  if (value === WebSocket.CLOSING) return "closing";
+  if (value === WebSocket.CLOSED) return "closed";
+  return "none";
 }
 
 function scheduleReconnect() {
@@ -535,8 +659,62 @@ function scheduleReconnect() {
   reconnectTimer = window.setTimeout(() => {
     reconnectTimer = null;
     if (!activeSessionId || currentSessionExited || sessionScreen.classList.contains("hidden")) return;
-    openSocket({ attach: activeSessionId }, { reconnect: true });
+    openSocket(currentReconnectParams(), { reconnect: true });
   }, delay);
+}
+
+function startClientHeartbeat() {
+  stopClientHeartbeat();
+  clientHeartbeatTimer = window.setInterval(() => {
+    if (reconnectIfStale("heartbeat-stale")) return;
+    if (!send({ type: "client-ping", sentAt: Date.now() }, { allowStale: true })) {
+      reconnectIfStale("heartbeat-send-failed");
+    }
+  }, CLIENT_HEARTBEAT_MS);
+}
+
+function stopClientHeartbeat() {
+  window.clearInterval(clientHeartbeatTimer);
+  clientHeartbeatTimer = null;
+}
+
+function markServerSeen() {
+  lastServerSeenAt = Date.now();
+}
+
+function connectionLooksStale() {
+  return socket?.readyState === WebSocket.OPEN && lastServerSeenAt > 0 && Date.now() - lastServerSeenAt > CLIENT_STALE_MS;
+}
+
+function reconnectIfStale(reason) {
+  if (!activeSessionId || currentSessionExited || sessionScreen.classList.contains("hidden")) return false;
+  if (!connectionLooksStale()) return false;
+
+  logClientEvent("force-reconnect", { reason, staleMs: Date.now() - lastServerSeenAt });
+  closeSocket();
+  openSocket(currentReconnectParams(), { reconnect: true });
+  return true;
+}
+
+function ensureVisibleConnection(reason) {
+  if (!activeSessionId || currentSessionExited || sessionScreen.classList.contains("hidden")) return false;
+  if (document.visibilityState !== "visible") return false;
+  if (socket?.readyState === WebSocket.OPEN) return reconnectIfStale(reason);
+  if (socket?.readyState === WebSocket.CONNECTING) return false;
+
+  logClientEvent("visible-reconnect", { reason });
+  openSocket(currentReconnectParams(), { reconnect: true });
+  return true;
+}
+
+function currentReconnectParams() {
+  const params = new URLSearchParams(window.location.search);
+  return {
+    attach: activeSessionId,
+    cwd: activeSessionParams.cwd || params.get("cwd") || ".",
+    sessionId: activeSessionParams.sessionId || params.get("sessionId") || "",
+    title: activeSessionParams.title || params.get("title") || "",
+  };
 }
 
 function endSession() {
@@ -544,9 +722,22 @@ function endSession() {
   detach(true);
 }
 
-function send(message) {
-  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+function send(message, { allowStale = false } = {}) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+  if (!allowStale && reconnectIfStale(`before-${message.type || "send"}`)) return false;
   socket.send(JSON.stringify(message));
+  return true;
+}
+
+function getClientId() {
+  const existing = sessionStorage.getItem(CLIENT_ID_KEY);
+  if (existing) return existing;
+
+  const next = globalThis.crypto?.randomUUID
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  sessionStorage.setItem(CLIENT_ID_KEY, next);
+  return next;
 }
 
 async function uploadFiles(fileList) {
@@ -585,80 +776,59 @@ async function uploadFiles(fileList) {
 }
 
 async function toggleVoiceInput() {
-  if (mediaRecorder && mediaRecorder.state === "recording") {
-    mediaRecorder.stop();
-    setVoiceState("transcribing");
-    return;
-  }
+  if (!voiceCapture) installVoiceCapture();
 
-  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-    setUploadStatus("当前浏览器不支持录音。");
+  if (voiceCapture.isRecording()) {
+    await voiceCapture.stop();
     return;
   }
 
   try {
-    voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    audioChunks = [];
-    mediaRecorder = new MediaRecorder(voiceStream);
-    mediaRecorder.addEventListener("dataavailable", (event) => {
-      if (event.data.size > 0) audioChunks.push(event.data);
-    });
-    mediaRecorder.addEventListener("stop", transcribeRecordedAudio, { once: true });
-    mediaRecorder.start();
-    setVoiceState("recording");
-    setUploadStatus("录音中...");
+    await voiceCapture.start();
   } catch (error) {
-    stopVoiceStream();
     setVoiceState("idle");
     setUploadStatus(error.message || "无法开始录音。");
   }
 }
 
-async function transcribeRecordedAudio() {
-  stopVoiceStream();
-
-  const mimeType = mediaRecorder?.mimeType || "audio/webm";
-  const blob = new Blob(audioChunks, { type: mimeType });
-  audioChunks = [];
-
-  if (!blob.size) {
-    setVoiceState("idle");
-    setUploadStatus("没有录到音频。");
-    return;
-  }
-
-  try {
-    const response = await fetch("/api/transcribe", {
-      method: "POST",
-      headers: { "Content-Type": blob.type },
-      body: blob,
-    });
-
-    if (response.status === 401) {
-      redirectToLogin();
-      return;
-    }
-
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.detail || data.error || "转写失败。");
-
-    if (data.text) {
-      insertPromptText(data.text);
-      setUploadStatus("已转写。", { clear: true });
-    } else {
-      setUploadStatus("没有识别到语音。");
-    }
-  } catch (error) {
-    setUploadStatus(error.message || "转写失败。");
-  } finally {
-    setVoiceState("idle");
-    mediaRecorder = null;
-  }
-}
-
-function stopVoiceStream() {
-  voiceStream?.getTracks().forEach((track) => track.stop());
-  voiceStream = null;
+function installVoiceCapture() {
+  voiceCapture = VoiceCapture.create({
+    endpoint: "/api/transcribe",
+    onStart() {
+      VoiceCapture.saveDraft(VOICE_DRAFT_KEY, promptInput.value || "");
+      setVoiceState("recording");
+      setUploadStatus("录音中...");
+    },
+    onStopping() {
+      setVoiceState("transcribing");
+      setUploadStatus("收尾转写中...");
+    },
+    onChunk(event) {
+      if (event.text) {
+        insertVoiceText(event.text);
+        VoiceCapture.saveDraft(VOICE_DRAFT_KEY, promptInput.value || "");
+        setUploadStatus(`已转写 ${event.index} 段，继续录音中...`);
+      } else {
+        setUploadStatus(`第 ${event.index} 段没有识别到语音。`);
+      }
+    },
+    onChunkError(event) {
+      setUploadStatus(event.error?.message || `第 ${event.index} 段转写失败。`);
+    },
+    onProgress(event) {
+      if (event.pending > 0) setUploadStatus(`转写中，剩余 ${event.pending} 段...`);
+    },
+    onComplete(summary) {
+      setVoiceState("idle");
+      if (summary.failed) {
+        setUploadStatus(`完成，但有 ${summary.failed} 段失败。`);
+      } else if (summary.chunks) {
+        setUploadStatus("已转写。", { clear: true });
+      } else {
+        setUploadStatus("没有录到音频。");
+      }
+    },
+  });
 }
 
 function setVoiceState(state) {
@@ -709,6 +879,21 @@ function insertUploadedFiles(files) {
   insertPromptText(paths.map((filePath) => `请读取这个文件：${filePath}`).join("\n"));
 }
 
+function insertVoiceText(text) {
+  const value = promptInput.value;
+  const start = promptInput.selectionStart ?? value.length;
+  const end = promptInput.selectionEnd ?? value.length;
+  const before = value.slice(0, start);
+  const after = value.slice(end);
+  const nextBefore = VoiceCapture.appendTranscript(before, text);
+  const nextValue = `${nextBefore}${after}`;
+  const nextCursor = nextBefore.length;
+
+  promptInput.value = nextValue;
+  promptInput.focus();
+  promptInput.setSelectionRange(nextCursor, nextCursor);
+}
+
 function insertPromptText(text) {
   const value = promptInput.value;
   const start = promptInput.selectionStart ?? value.length;
@@ -752,10 +937,17 @@ function sendResize() {
 
 function renderStatus(status) {
   activeSessionId = status.id || activeSessionId;
+  activeSessionParams = {
+    attach: activeSessionId,
+    cwd: status.project || ".",
+    sessionId: status.sessionId || activeSessionParams.sessionId || "",
+    title: status.title || displayProject(status.project),
+  };
   currentSessionExited = Boolean(status.exited);
   statusEls.project.textContent = status.title || displayProject(status.project);
   statusEls.connection.textContent = status.exited ? "exited" : "connected";
   setDocumentTitle(status.title || displayProject(status.project));
+  syncSessionUrl(status);
 }
 
 function setConnectedState(state) {
@@ -780,14 +972,14 @@ function showStartScreen() {
   startScreen.classList.remove("hidden");
   sessionScreen.classList.add("hidden");
   window.clearInterval(sessionsTimer);
-  refreshLists();
+  refreshLists().then(scrollStartScreenToTop);
   sessionsTimer = window.setInterval(refreshLists, 10_000);
 }
 
-function scrollStartScreenToBottom() {
+function scrollStartScreenToTop() {
   if (startScreen.classList.contains("hidden")) return;
   requestAnimationFrame(() => {
-    window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "auto" });
+    window.scrollTo({ top: 0, behavior: "auto" });
   });
 }
 
@@ -797,6 +989,27 @@ function showSessionScreen() {
   closeTextView();
   window.clearInterval(sessionsTimer);
   fitTerminal();
+}
+
+function syncSessionUrl(status) {
+  if (!status.id || sessionScreen.classList.contains("hidden")) return;
+
+  const url = new URL(window.location.href);
+  const cwd = status.project || ".";
+  const title = status.title || displayProject(status.project);
+  const alreadySynced =
+    url.searchParams.get("attach") === status.id &&
+    (status.sessionId ? url.searchParams.get("sessionId") === status.sessionId : !url.searchParams.has("sessionId")) &&
+    url.searchParams.get("cwd") === cwd &&
+    url.searchParams.get("title") === title;
+  if (alreadySynced) return;
+
+  url.search = "";
+  url.searchParams.set("attach", status.id);
+  url.searchParams.set("cwd", cwd);
+  if (status.sessionId) url.searchParams.set("sessionId", status.sessionId);
+  if (title) url.searchParams.set("title", title);
+  window.history.replaceState(null, "", url.toString());
 }
 
 function fitTerminal({ delay = 0 } = {}) {

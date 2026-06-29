@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import crypto from "node:crypto";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http from "node:http";
@@ -10,7 +10,6 @@ import { fileURLToPath } from "node:url";
 import busboy from "busboy";
 import express from "express";
 import { WebSocketServer } from "ws";
-import { transcribeAudio } from "./stt.js";
 
 const require = createRequire(import.meta.url);
 const pty = require("node-pty");
@@ -24,16 +23,20 @@ const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 60 * 60 * 1000);
 const AUTH_VERIFY_URL = process.env.PRIVATE_AUTH_VERIFY_URL || "http://127.0.0.1:3060/api/verify";
 const AUTH_LOGIN_URL = process.env.PRIVATE_AUTH_LOGIN_URL || "https://auth.chenyanglin.com/login";
 const AUTH_LOGOUT_URL = process.env.PRIVATE_AUTH_LOGOUT_URL || "https://auth.chenyanglin.com/logout";
+const CAPTURE_TRANSCRIBE_URL = process.env.CAPTURE_TRANSCRIBE_URL || "http://127.0.0.1:3050/api/capture/transcribe";
 const CODEX_HOME = process.env.CODEX_HOME || path.join(process.env.HOME, ".codex");
 const CODEX_SESSIONS_ROOT = path.join(CODEX_HOME, "sessions");
 const CODEX_ARCHIVED_SESSIONS_ROOT = path.join(CODEX_HOME, "archived_sessions");
 const CODEX_SESSION_TITLES_FILE = path.join(CODEX_HOME, "session-titles.json");
 const CODEX_SESSION_ARCHIVE_FILE = path.join(CODEX_HOME, "session-archive.json");
+const AGENT_WEB_SESSIONS_FILE = path.join(CODEX_HOME, "agent-web-sessions.json");
 const UPLOADS_ROOT = path.resolve(process.env.UPLOADS_ROOT || path.join(WORKSPACE_ROOT, "uploads"));
 const MAX_UPLOAD_FILES = Number(process.env.MAX_UPLOAD_FILES || 5);
 const MAX_UPLOAD_FILE_BYTES = Number(process.env.MAX_UPLOAD_FILE_BYTES || 50 * 1024 * 1024);
 const MAX_RAW_BUFFER = 1024 * 1024;
 const MAX_TEXT_BUFFER = 200_000;
+const WS_HEARTBEAT_MS = Number(process.env.WS_HEARTBEAT_MS || 25_000);
+const USE_TMUX_SESSIONS = process.env.AGENT_USE_TMUX === "1";
 
 const app = express();
 const server = http.createServer(app);
@@ -41,6 +44,7 @@ const wss = new WebSocketServer({ server, path: "/terminal" });
 const sessions = new Map();
 
 app.use(express.json());
+app.use("/shared", express.static(path.join(WORKSPACE_ROOT, "shared-web")));
 app.use("/", express.static(path.join(__dirname, "public")));
 app.use("/vendor/xterm", express.static(path.join(__dirname, "node_modules", "@xterm", "xterm", "lib")));
 app.use("/vendor/xterm-css", express.static(path.join(__dirname, "node_modules", "@xterm", "xterm", "css")));
@@ -90,6 +94,23 @@ app.get("/api/projects", async (_req, res) => {
 
 app.post("/api/uploads", handleUpload);
 
+app.post("/api/client-events", (req, res) => {
+  const event = cleanClientEventName(req.body?.event);
+  if (event) {
+    logAgentEvent("client-event", {
+      clientEvent: event,
+      webSessionId: cleanClientLogValue(req.body?.webSessionId, 100),
+      visibilityState: cleanClientLogValue(req.body?.visibilityState, 30),
+      socketState: cleanClientLogValue(req.body?.socketState, 30),
+      closeCode: Number.isFinite(Number(req.body?.closeCode)) ? Number(req.body.closeCode) : undefined,
+      wasClean: typeof req.body?.wasClean === "boolean" ? req.body.wasClean : undefined,
+      online: typeof req.body?.online === "boolean" ? req.body.online : undefined,
+      path: cleanClientLogValue(req.body?.path, 300),
+    });
+  }
+  res.json({ ok: true });
+});
+
 app.post(
   "/api/transcribe",
   express.raw({ type: ["audio/webm", "audio/mp4", "audio/mpeg", "audio/wav"], limit: "25mb" }),
@@ -100,8 +121,28 @@ app.post(
     }
 
     try {
-      const text = await transcribeAudio(req.body, req.headers["content-type"] || "");
-      res.json({ text });
+      const upstream = await fetch(CAPTURE_TRANSCRIBE_URL, {
+        method: "POST",
+        redirect: "manual",
+        headers: {
+          "Content-Type": req.headers["content-type"] || "audio/webm",
+          "X-Capture-Recording-Id": req.headers["x-capture-recording-id"] || "",
+          "X-Capture-Chunk-Index": req.headers["x-capture-chunk-index"] || "",
+          cookie: req.headers.cookie || "",
+        },
+        body: req.body,
+      });
+
+      if ([301, 302, 303, 307, 308].includes(upstream.status)) {
+        res.status(401).json({ error: "auth required" });
+        return;
+      }
+
+      const responseBody = await upstream.text();
+      res.status(upstream.status);
+      const contentType = upstream.headers.get("content-type");
+      if (contentType) res.setHeader("Content-Type", contentType);
+      res.send(responseBody);
     } catch (error) {
       console.error(`Agent transcribe failed: ${error.message}`);
       res.status(502).json({ error: "speech-to-text failed", detail: error.message });
@@ -110,9 +151,14 @@ app.post(
 );
 
 app.get("/api/sessions", (_req, res) => {
+  const liveSessions = [...sessions.values()].filter((session) => !session.exited).map(publicSession);
+  const restoredSessions = listDetachedTmuxSessions().filter(
+    (session) => !sessions.has(session.id) && !liveSessions.some((liveSession) => liveSession.id === session.id),
+  );
+
   res.json({
     ttlMs: SESSION_TTL_MS,
-    sessions: [...sessions.values()].filter((session) => !session.exited).map(publicSession),
+    sessions: [...liveSessions, ...restoredSessions],
   });
 });
 
@@ -144,7 +190,10 @@ app.put("/api/codex-sessions/:id/title", async (req, res) => {
     }
     await writeSessionTitles(titles);
     for (const session of sessions.values()) {
-      if (session.sessionId === id && title) session.title = title;
+      if (session.sessionId === id && title) {
+        session.title = title;
+        persistRestorableWebSession(session);
+      }
     }
     res.json({ id, customTitle: title });
   } catch (error) {
@@ -195,8 +244,38 @@ wss.on("connection", async (ws, req) => {
   const url = new URL(req.url || "", `http://${req.headers.host}`);
   const attachId = String(url.searchParams.get("attach") || "").trim();
   const shouldReplay = url.searchParams.get("replay") !== "0";
+  const clientId = cleanWebClientId(url.searchParams.get("clientId"));
 
   let session = attachId ? sessions.get(attachId) : null;
+  if (!session && attachId) {
+    const restored = restoreTmuxSession(attachId);
+    if (restored?.error) {
+      logAgentEvent("session-restore-failed", { webSessionId: attachId, reason: restored.error });
+      send(ws, "error", { message: restored.error, goHome: true });
+      ws.close();
+      return;
+    }
+
+    if (restored) {
+      session = restored;
+      logAgentEvent("session-restore", {
+        webSessionId: session.id,
+        codexSessionId: session.sessionId,
+        tmuxName: session.tmuxName,
+      });
+    } else if (url.searchParams.get("sessionId")) {
+      logAgentEvent("session-attach-missing-fallback", {
+        webSessionId: attachId,
+        codexSessionId: url.searchParams.get("sessionId"),
+      });
+    } else {
+      logAgentEvent("session-attach-missing", { webSessionId: attachId });
+      send(ws, "error", { message: "This web session is no longer running. Returning to Agent home.", goHome: true });
+      ws.close();
+      return;
+    }
+  }
+
   if (!session) {
     const cwd = resolveWorkspacePath(url.searchParams.get("cwd") || ".");
     const launch = getLaunchConfig(url.searchParams);
@@ -225,7 +304,7 @@ wss.on("connection", async (ws, req) => {
     }
 
     if (session) {
-      attachClient(session, ws, { replay: shouldReplay });
+      attachClient(session, ws, { replay: shouldReplay, clientId });
       return;
     }
 
@@ -245,7 +324,7 @@ wss.on("connection", async (ws, req) => {
     });
   }
 
-  attachClient(session, ws, { replay: shouldReplay });
+  attachClient(session, ws, { replay: shouldReplay, clientId });
 });
 
 server.listen(PORT, HOST, () => {
@@ -320,8 +399,31 @@ function logAgentEvent(event, fields = {}) {
   );
 }
 
-function createSession(cwd, launch) {
-  const id = cryptoRandomId();
+function cleanClientEventName(value) {
+  const event = String(value || "")
+    .replace(/[^a-zA-Z0-9_.:-]/g, "-")
+    .slice(0, 80);
+  return event || "";
+}
+
+function cleanClientLogValue(value, maxLength) {
+  return String(value || "")
+    .replace(/[\r\n\t]/g, " ")
+    .slice(0, maxLength);
+}
+
+function cleanWebClientId(value) {
+  return String(value || "")
+    .replace(/[^a-zA-Z0-9_.:-]/g, "")
+    .slice(0, 80);
+}
+
+function shortClientId(value) {
+  return String(value || "").slice(0, 12);
+}
+
+function createSession(cwd, launch, restored = {}) {
+  const id = restored.id || cryptoRandomId();
   const startedAt = new Date().toISOString();
   const shell = process.env.CODEX_COMMAND || "codex";
   const env = {
@@ -329,18 +431,32 @@ function createSession(cwd, launch) {
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
   };
+  const tmuxName = restored.tmuxName || tmuxNameForWebSession(id);
 
   let terminal;
   try {
-    terminal = pty.spawn(shell, launch.args, {
-      name: "xterm-256color",
-      cols: 100,
-      rows: 30,
-      cwd,
-      env,
-    });
+    if (USE_TMUX_SESSIONS && restored.attachExistingTmux) {
+      if (!tmuxHasSession(tmuxName)) return { error: "This web session is no longer running. Returning to Agent home." };
+    } else if (USE_TMUX_SESSIONS) {
+      ensureTmuxSession(tmuxName, cwd, [shell, ...launch.args], env);
+    }
+    terminal = USE_TMUX_SESSIONS
+      ? pty.spawn("tmux", ["attach-session", "-t", tmuxName], {
+          name: "xterm-256color",
+          cols: 100,
+          rows: 30,
+          cwd,
+          env,
+        })
+      : pty.spawn(shell, launch.args, {
+          name: "xterm-256color",
+          cols: 100,
+          rows: 30,
+          cwd,
+          env,
+        });
   } catch (error) {
-    return { error: `Failed to start codex: ${error.message}` };
+    return { error: `Failed to start or attach codex: ${error.message}` };
   }
 
   const session = {
@@ -353,6 +469,7 @@ function createSession(cwd, launch) {
     mode: launch.mode,
     sessionId: launch.sessionId,
     title: launch.title || "",
+    tmuxName,
     terminal,
     clients: new Set(),
     cleanupTimer: null,
@@ -361,18 +478,21 @@ function createSession(cwd, launch) {
     signal: null,
     rawBuffer: "",
     textBuffer: "",
-    startedAt,
-    lastActivityAt: startedAt,
+    startedAt: restored.startedAt || startedAt,
+    lastActivityAt: restored.lastActivityAt || restored.startedAt || startedAt,
     cols: 100,
     rows: 30,
   };
   sessions.set(id, session);
+  persistRestorableWebSession(session);
   logAgentEvent("session-start", {
     webSessionId: session.id,
     codexSessionId: session.sessionId,
     mode: session.mode,
     project: session.project,
     pid: session.pid,
+    tmuxName: USE_TMUX_SESSIONS ? session.tmuxName : "",
+    restored: Boolean(restored.attachExistingTmux),
   });
 
   terminal.onData((data) => {
@@ -386,6 +506,7 @@ function createSession(cwd, launch) {
     session.exited = true;
     session.exitCode = exitCode;
     session.signal = signal;
+    if (USE_TMUX_SESSIONS && !tmuxHasSession(session.tmuxName)) removePersistedWebSession(session.id);
     logAgentEvent("terminal-exit", {
       webSessionId: session.id,
       codexSessionId: session.sessionId,
@@ -413,17 +534,114 @@ function findReusableSession(launch) {
   );
 }
 
-function attachClient(session, ws, { replay = true } = {}) {
+function restoreTmuxSession(id) {
+  if (!isValidWebSessionId(id)) return { error: "Invalid web session id. Returning to Agent home." };
+
+  const record = readPersistedWebSessions()[id];
+  if (!record) return null;
+
+  const cwd = persistedWorkspacePath(record.cwd);
+  if (!cwd) {
+    removePersistedWebSession(id);
+    return { error: "This web session has an invalid directory. Returning to Agent home." };
+  }
+
+  if (!USE_TMUX_SESSIONS) {
+    if (!record.sessionId) return null;
+    const reusable = findReusableSession({ sessionId: record.sessionId });
+    if (reusable) return reusable;
+
+    return createSession(
+      cwd,
+      {
+        mode: "resume-id",
+        sessionId: record.sessionId,
+        args: ["--no-alt-screen", "resume", record.sessionId],
+        title: record.title || "",
+      },
+      {
+        id,
+        startedAt: record.startedAt,
+        lastActivityAt: record.lastActivityAt,
+      },
+    );
+  }
+
+  const tmuxName = cleanTmuxName(record.tmuxName || tmuxNameForWebSession(id));
+  if (!tmuxName || !tmuxHasSession(tmuxName)) {
+    removePersistedWebSession(id);
+    return { error: "This web session is no longer running. Returning to Agent home." };
+  }
+
+  const launch = {
+    mode: record.mode || "new",
+    sessionId: record.sessionId || "",
+    args: Array.isArray(record.args) && record.args.length ? record.args : ["--no-alt-screen"],
+    title: record.title || "",
+  };
+
+  return createSession(cwd, launch, {
+    id,
+    tmuxName,
+    attachExistingTmux: true,
+    startedAt: record.startedAt,
+    lastActivityAt: record.lastActivityAt,
+  });
+}
+
+function listDetachedTmuxSessions() {
+  if (!USE_TMUX_SESSIONS) return [];
+  const records = readPersistedWebSessions();
+  const items = [];
+
+  for (const [id, record] of Object.entries(records)) {
+    if (sessions.has(id) || !isValidWebSessionId(id)) continue;
+    const tmuxName = cleanTmuxName(record.tmuxName || tmuxNameForWebSession(id));
+    if (!tmuxName || !tmuxHasSession(tmuxName)) continue;
+
+    const cwd = persistedWorkspacePath(record.cwd);
+    if (!cwd) continue;
+
+    items.push({
+      id,
+      cwd,
+      project: path.relative(WORKSPACE_ROOT, cwd) || ".",
+      title: record.title || "New Codex session",
+      pid: null,
+      command: record.command || "codex",
+      args: Array.isArray(record.args) ? record.args : [],
+      mode: record.mode || "new",
+      sessionId: record.sessionId || "",
+      startedAt: record.startedAt || new Date().toISOString(),
+      lastActivityAt: record.lastActivityAt || record.startedAt || new Date().toISOString(),
+      cols: 100,
+      rows: 30,
+      connectedClients: 0,
+      detachedExpiresAt: null,
+      exited: false,
+      exitCode: null,
+      signal: null,
+    });
+  }
+
+  return items;
+}
+
+function attachClient(session, ws, { replay = true, clientId = "" } = {}) {
   if (session.cleanupTimer) {
     clearTimeout(session.cleanupTimer);
     session.cleanupTimer = null;
   }
 
+  const heartbeatTimer = startWebSocketHeartbeat(ws, session);
+  ws.clientId = clientId;
+  closeDuplicateClient(session, ws);
   session.clients.add(ws);
   logAgentEvent("ws-attach", {
     webSessionId: session.id,
     codexSessionId: session.sessionId,
     clients: session.clients.size,
+    clientId: clientId ? shortClientId(clientId) : "",
   });
   send(ws, "status", publicSession(session));
   if (replay && session.rawBuffer) {
@@ -448,28 +666,41 @@ function attachClient(session, ws, { replay = true } = {}) {
       return;
     }
 
+    if (message.type === "client-ping") {
+      send(ws, "client-pong", { sentAt: message.sentAt || null, receivedAt: Date.now() });
+      return;
+    }
+
     if (session.exited) return;
 
     if (message.type === "input" && typeof message.data === "string") {
+      logControlMessage(session, ws, "input", message.data);
       session.terminal.write(message.data);
       session.lastActivityAt = new Date().toISOString();
+      send(ws, "control-ack", { kind: "input", receivedAt: Date.now() });
       return;
     }
 
     if (message.type === "submit" && typeof message.data === "string") {
       const normalized = message.data.trim();
       if (normalized) {
+        logControlMessage(session, ws, "submit", normalized);
         if (!session.title) session.title = cleanTitle(normalized) || "New Codex session";
         writeAndSubmit(session, normalized, { paste: true });
         session.lastActivityAt = new Date().toISOString();
+        persistRestorableWebSession(session);
         broadcast(session, "status", publicSession(session));
+        send(ws, "control-ack", { kind: "submit", receivedAt: Date.now() });
       }
       return;
     }
 
     if (message.type === "command" && typeof message.data === "string") {
+      logControlMessage(session, ws, "command", message.data);
       writeAndSubmit(session, message.data.trim(), { paste: false });
       session.lastActivityAt = new Date().toISOString();
+      persistRestorableWebSession(session);
+      send(ws, "control-ack", { kind: "command", receivedAt: Date.now() });
       return;
     }
 
@@ -489,11 +720,12 @@ function attachClient(session, ws, { replay = true } = {}) {
         codexSessionId: session.sessionId,
         reason: "client-request",
       });
-      session.terminal.kill();
+      killSessionTerminal(session);
     }
   });
 
   ws.on("close", (code, reason) => {
+    clearInterval(heartbeatTimer);
     session.clients.delete(ws);
     logAgentEvent("ws-close", {
       webSessionId: session.id,
@@ -504,6 +736,48 @@ function attachClient(session, ws, { replay = true } = {}) {
       exited: session.exited,
     });
     if (session.clients.size === 0) scheduleCleanup(session);
+  });
+}
+
+function startWebSocketHeartbeat(ws, session) {
+  return setInterval(() => {
+    if (ws.readyState !== ws.OPEN) return;
+
+    try {
+      ws.ping();
+    } catch (error) {
+      logAgentEvent("ws-heartbeat-failed", {
+        webSessionId: session.id,
+        codexSessionId: session.sessionId,
+        message: error.message,
+      });
+    }
+  }, WS_HEARTBEAT_MS);
+}
+
+function closeDuplicateClient(session, ws) {
+  if (!ws.clientId) return;
+
+  for (const client of session.clients) {
+    if (client !== ws && client.clientId === ws.clientId && client.readyState === client.OPEN) {
+      logAgentEvent("ws-close-duplicate-client", {
+        webSessionId: session.id,
+        codexSessionId: session.sessionId,
+        clientId: shortClientId(ws.clientId),
+      });
+      client.close(4000, "duplicate-client");
+    }
+  }
+}
+
+function logControlMessage(session, ws, kind, data) {
+  logAgentEvent("client-control", {
+    webSessionId: session.id,
+    codexSessionId: session.sessionId,
+    clientId: ws.clientId ? shortClientId(ws.clientId) : "",
+    kind,
+    dataBytes: Buffer.byteLength(String(data || ""), "utf8"),
+    clients: session.clients.size,
   });
 }
 
@@ -521,9 +795,10 @@ function scheduleCleanup(session) {
         codexSessionId: session.sessionId,
         reason: "detached-ttl",
       });
-      session.terminal.kill();
+      killSessionTerminal(session);
     }
     sessions.delete(session.id);
+    removePersistedWebSession(session.id);
     logAgentEvent("session-cleanup", {
       webSessionId: session.id,
       codexSessionId: session.sessionId,
@@ -680,6 +955,124 @@ function publicSession(session) {
     exitCode: session.exitCode,
     signal: session.signal,
   };
+}
+
+function ensureTmuxSession(tmuxName, cwd, commandWithArgs, env) {
+  if (tmuxHasSession(tmuxName)) return;
+
+  execFileSync("tmux", ["new-session", "-d", "-s", tmuxName, "-c", cwd, shellCommand(commandWithArgs)], {
+    cwd,
+    env,
+    stdio: "pipe",
+  });
+  execFileSync("tmux", ["set-option", "-t", tmuxName, "status", "off"], { stdio: "ignore" });
+  execFileSync("tmux", ["set-option", "-t", tmuxName, "remain-on-exit", "off"], { stdio: "ignore" });
+  execFileSync("tmux", ["set-option", "-t", tmuxName, "history-limit", "50000"], { stdio: "ignore" });
+}
+
+function tmuxHasSession(tmuxName) {
+  if (!tmuxName) return false;
+  try {
+    execFileSync("tmux", ["has-session", "-t", tmuxName], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function killSessionTerminal(session) {
+  try {
+    if (USE_TMUX_SESSIONS && session.tmuxName && tmuxHasSession(session.tmuxName)) {
+      execFileSync("tmux", ["kill-session", "-t", session.tmuxName], { stdio: "ignore" });
+    }
+  } catch (error) {
+    console.error(`Failed to kill tmux session ${session.tmuxName}: ${error.message}`);
+  }
+  removePersistedWebSession(session.id);
+  session.terminal.kill();
+}
+
+function tmuxNameForWebSession(id) {
+  return cleanTmuxName(`codex-agent-${id}`);
+}
+
+function cleanTmuxName(value) {
+  return String(value || "")
+    .replace(/[^a-zA-Z0-9_.-]/g, "-")
+    .slice(0, 80);
+}
+
+function shellCommand(commandWithArgs) {
+  return commandWithArgs.map(shellQuote).join(" ");
+}
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`;
+}
+
+function persistRestorableWebSession(session) {
+  if (USE_TMUX_SESSIONS || session.sessionId) persistWebSession(session);
+}
+
+function persistWebSession(session) {
+  const records = readPersistedWebSessions();
+  records[session.id] = {
+    id: session.id,
+    cwd: session.cwd,
+    command: session.command,
+    args: session.args,
+    mode: session.mode,
+    sessionId: session.sessionId,
+    title: session.title,
+    tmuxName: session.tmuxName,
+    startedAt: session.startedAt,
+    lastActivityAt: session.lastActivityAt,
+  };
+  writePersistedWebSessions(records);
+}
+
+function removePersistedWebSession(id) {
+  const records = readPersistedWebSessions();
+  if (!records[id]) return;
+  delete records[id];
+  writePersistedWebSessions(records);
+}
+
+function readPersistedWebSessions() {
+  try {
+    const parsed = JSON.parse(fsSync.readFileSync(AGENT_WEB_SESSIONS_FILE, "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+function writePersistedWebSessions(records) {
+  try {
+    fsSync.mkdirSync(path.dirname(AGENT_WEB_SESSIONS_FILE), { recursive: true });
+    const cleaned = Object.fromEntries(
+      Object.entries(records)
+        .filter(([id, record]) => isValidWebSessionId(id) && record && typeof record === "object")
+        .sort(([a], [b]) => a.localeCompare(b)),
+    );
+    const tempFile = `${AGENT_WEB_SESSIONS_FILE}.${process.pid}.tmp`;
+    fsSync.writeFileSync(tempFile, `${JSON.stringify(cleaned, null, 2)}\n`, { mode: 0o600 });
+    fsSync.renameSync(tempFile, AGENT_WEB_SESSIONS_FILE);
+  } catch (error) {
+    console.error(`Failed to write agent web sessions: ${error.message}`);
+  }
+}
+
+function isValidWebSessionId(value) {
+  return /^[a-z0-9-]{8,80}$/i.test(String(value || ""));
+}
+
+function persistedWorkspacePath(value) {
+  const requested = path.resolve(String(value || WORKSPACE_ROOT));
+  const relative = path.relative(WORKSPACE_ROOT, requested);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) return null;
+  return requested;
 }
 
 function resolveWorkspacePath(value) {

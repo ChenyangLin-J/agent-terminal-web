@@ -90,6 +90,7 @@ button:disabled {
   max-width: 760px;
   margin: 0 auto;
   padding: 20px 14px 28px;
+  overflow-anchor: none;
 }
 
 .start-header {
@@ -146,6 +147,10 @@ input {
 .sessions-list {
   display: grid;
   gap: 8px;
+}
+
+.archive-toggle {
+  justify-self: start;
 }
 
 .session-card {

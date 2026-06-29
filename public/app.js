@@ -50,6 +50,9 @@ const CLIENT_HEARTBEAT_MS = 15_000;
 const CLIENT_STALE_MS = 45_000;
 const CLIENT_RESUME_PROBE_MS = 1_500;
 const CLIENT_ID_KEY = "agent_terminal_client_id";
+const SESSION_SNAPSHOT_STORE_KEY = "agent_terminal_session_snapshots";
+const SESSION_SNAPSHOT_LIMIT = 8;
+const SESSION_SNAPSHOT_MAX_CHARS = 200_000;
 const VOICE_MIC_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true">
   <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" />
   <path d="M5 11a7 7 0 0 0 14 0" />
@@ -494,9 +497,14 @@ function sessionUrl(params) {
 function openSocket(params, options = {}) {
   const isReconnect = Boolean(options.reconnect);
   const shouldReplay = options.replay ?? !isReconnect;
+  const snapshotKey = sessionSnapshotKey(params);
+  saveActiveSessionSnapshot();
   closeSocket();
   ensureTerminal();
-  if (!isReconnect) terminal?.clear();
+  if (!isReconnect) {
+    terminal?.clear();
+    restoreSessionSnapshot(snapshotKey);
+  }
   activeSessionId = params.attach || "";
   activeSessionParams = { ...activeSessionParams, ...params };
   currentSessionExited = false;
@@ -532,6 +540,7 @@ function openSocket(params, options = {}) {
     }
     if (message.type === "replay") {
       if (isReconnect) return;
+      terminal?.clear();
       writeTerminalOutput(message.payload.raw, { replay: true });
       return;
     }
@@ -586,6 +595,7 @@ function sendTerminalKey(value) {
 }
 
 function detach(goHome = true) {
+  saveActiveSessionSnapshot();
   closeSocket();
   if (goHome) {
     activeSessionId = "";
@@ -607,6 +617,79 @@ function closeSocket() {
   }
 }
 
+function sessionSnapshotKey(params = activeSessionParams) {
+  const sessionId = String(params.sessionId || "").trim();
+  if (sessionId) return `codex:${sessionId}`;
+
+  const attach = String(params.attach || activeSessionId || "").trim();
+  if (attach) return `web:${attach}`;
+
+  return "";
+}
+
+function saveActiveSessionSnapshot() {
+  if (!terminal) return;
+
+  const key = sessionSnapshotKey();
+  if (!key) return;
+
+  const text = getTerminalBufferText();
+  if (!text) return;
+
+  const snapshots = readSessionSnapshots();
+  snapshots[key] = {
+    text: text.slice(-SESSION_SNAPSHOT_MAX_CHARS),
+    savedAt: Date.now(),
+  };
+  trimSessionSnapshots(snapshots);
+  writeSessionSnapshots(snapshots);
+}
+
+function restoreSessionSnapshot(key) {
+  if (!terminal || !key) return false;
+
+  const snapshot = readSessionSnapshots()[key];
+  if (!snapshot?.text) return false;
+
+  terminal.write(snapshot.text.replace(/\n/g, "\r\n"), () => {
+    terminal.scrollToBottom();
+    if (!textView.classList.contains("hidden")) {
+      terminalText.value = getTerminalBufferText();
+    }
+  });
+  return true;
+}
+
+function readSessionSnapshots() {
+  try {
+    const value = sessionStorage.getItem(SESSION_SNAPSHOT_STORE_KEY);
+    if (!value) return {};
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeSessionSnapshots(snapshots) {
+  try {
+    sessionStorage.setItem(SESSION_SNAPSHOT_STORE_KEY, JSON.stringify(snapshots));
+  } catch {
+    try {
+      sessionStorage.removeItem(SESSION_SNAPSHOT_STORE_KEY);
+    } catch {
+      // Ignore storage failures; snapshots are only a display optimization.
+    }
+  }
+}
+
+function trimSessionSnapshots(snapshots) {
+  const entries = Object.entries(snapshots).sort((a, b) => (b[1]?.savedAt || 0) - (a[1]?.savedAt || 0));
+  for (const [key] of entries.slice(SESSION_SNAPSHOT_LIMIT)) {
+    delete snapshots[key];
+  }
+}
+
 function installClientEventLogging() {
   logClientEvent("page-load");
 
@@ -619,6 +702,7 @@ function installClientEventLogging() {
     ensureVisibleConnection("pageshow", { probe: true });
   });
   window.addEventListener("pagehide", (event) => {
+    saveActiveSessionSnapshot();
     logClientEvent("pagehide", { persisted: event.persisted }, { beacon: true });
   });
   window.addEventListener("online", () => {
@@ -629,6 +713,7 @@ function installClientEventLogging() {
     logClientEvent("offline", { online: false });
   });
   window.addEventListener("beforeunload", () => {
+    saveActiveSessionSnapshot();
     logClientEvent("beforeunload", {}, { beacon: true });
   });
 }
@@ -1021,6 +1106,7 @@ function setConnectedState(state) {
 }
 
 function showStartScreen() {
+  saveActiveSessionSnapshot();
   setDocumentTitle(DEFAULT_DOCUMENT_TITLE);
   clearSessionUrl();
   startScreen.classList.remove("hidden");

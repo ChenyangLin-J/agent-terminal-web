@@ -482,7 +482,7 @@ function openSocket(params, options = {}) {
   const shouldReplay = options.replay ?? !isReconnect;
   closeSocket();
   ensureTerminal();
-  if (!isReconnect || shouldReplay) terminal?.clear();
+  if (!isReconnect) terminal?.clear();
   activeSessionId = params.attach || "";
   activeSessionParams = { ...activeSessionParams, ...params };
   currentSessionExited = false;
@@ -609,7 +609,7 @@ function installClientEventLogging() {
   });
   window.addEventListener("online", () => {
     logClientEvent("online", { online: true });
-    ensureVisibleConnection("online", { replay: true });
+    ensureVisibleConnection("online");
   });
   window.addEventListener("offline", () => {
     logClientEvent("offline", { online: false });
@@ -712,7 +712,7 @@ function ensureVisibleConnection(reason, { probe = false, replay = false } = {})
   if (socket?.readyState === WebSocket.CONNECTING) return false;
 
   logClientEvent("visible-reconnect", { reason });
-  openSocket(currentReconnectParams(), { reconnect: true, replay: true });
+  openSocket(currentReconnectParams(), { reconnect: true });
   return true;
 }
 
@@ -726,7 +726,7 @@ function probeVisibleConnection(reason) {
   try {
     socket.send(JSON.stringify({ type: "client-ping", sentAt: probeStartedAt, reason }));
   } catch {
-    openSocket(currentReconnectParams(), { reconnect: true, replay: true });
+    openSocket(currentReconnectParams(), { reconnect: true });
     return true;
   }
 
@@ -737,7 +737,7 @@ function probeVisibleConnection(reason) {
     if (lastServerSeenAt > seenBeforeProbe) return;
 
     logClientEvent("visible-probe-timeout", { reason, waitedMs: Date.now() - probeStartedAt });
-    openSocket(currentReconnectParams(), { reconnect: true, replay: true });
+    openSocket(currentReconnectParams(), { reconnect: true });
   }, CLIENT_RESUME_PROBE_MS);
 
   return false;

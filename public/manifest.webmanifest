@@ -1,0 +1,9 @@
+{
+  "name": "Codex Agent",
+  "short_name": "Agent",
+  "display": "standalone",
+  "start_url": "/",
+  "scope": "/",
+  "theme_color": "#0f1115",
+  "background_color": "#0f1115"
+}

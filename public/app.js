@@ -48,6 +48,7 @@ const DEFAULT_DOCUMENT_TITLE = "Agent Terminal Web";
 const ARCHIVED_SESSIONS_PREVIEW_COUNT = 5;
 const CLIENT_HEARTBEAT_MS = 15_000;
 const CLIENT_STALE_MS = 45_000;
+const CLIENT_RESUME_PROBE_MS = 1_500;
 const CLIENT_ID_KEY = "agent_terminal_client_id";
 const VOICE_MIC_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true">
   <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" />
@@ -80,6 +81,7 @@ let socket = null;
 let sessionsTimer = null;
 let reconnectTimer = null;
 let clientHeartbeatTimer = null;
+let visibleProbeTimer = null;
 let reconnectAttempts = 0;
 let activeSessionId = "";
 let activeSessionParams = {};
@@ -477,9 +479,10 @@ function sessionUrl(params) {
 
 function openSocket(params, options = {}) {
   const isReconnect = Boolean(options.reconnect);
+  const shouldReplay = options.replay ?? !isReconnect;
   closeSocket();
   ensureTerminal();
-  if (!isReconnect) terminal?.clear();
+  if (!isReconnect || shouldReplay) terminal?.clear();
   activeSessionId = params.attach || "";
   activeSessionParams = { ...activeSessionParams, ...params };
   currentSessionExited = false;
@@ -488,7 +491,7 @@ function openSocket(params, options = {}) {
 
   const query = new URLSearchParams(params);
   query.set("clientId", clientId);
-  if (isReconnect) query.set("replay", "0");
+  if (!shouldReplay) query.set("replay", "0");
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   socket = new WebSocket(`${protocol}//${window.location.host}/terminal?${query.toString()}`);
 
@@ -579,7 +582,9 @@ function detach(goHome = true) {
 
 function closeSocket() {
   window.clearTimeout(reconnectTimer);
+  window.clearTimeout(visibleProbeTimer);
   reconnectTimer = null;
+  visibleProbeTimer = null;
   stopClientHeartbeat();
   if (socket) {
     socket.intentionalClose = true;
@@ -593,17 +598,18 @@ function installClientEventLogging() {
 
   document.addEventListener("visibilitychange", () => {
     logClientEvent(`visibility-${document.visibilityState}`);
-    if (document.visibilityState === "visible") ensureVisibleConnection("visibility-visible");
+    if (document.visibilityState === "visible") ensureVisibleConnection("visibility-visible", { probe: true });
   });
   window.addEventListener("pageshow", (event) => {
     logClientEvent("pageshow", { persisted: event.persisted });
+    ensureVisibleConnection("pageshow", { probe: true });
   });
   window.addEventListener("pagehide", (event) => {
     logClientEvent("pagehide", { persisted: event.persisted }, { beacon: true });
   });
   window.addEventListener("online", () => {
     logClientEvent("online", { online: true });
-    ensureVisibleConnection("online");
+    ensureVisibleConnection("online", { replay: true });
   });
   window.addEventListener("offline", () => {
     logClientEvent("offline", { online: false });
@@ -686,25 +692,55 @@ function connectionLooksStale() {
   return socket?.readyState === WebSocket.OPEN && lastServerSeenAt > 0 && Date.now() - lastServerSeenAt > CLIENT_STALE_MS;
 }
 
-function reconnectIfStale(reason) {
+function reconnectIfStale(reason, { replay = false } = {}) {
   if (!activeSessionId || currentSessionExited || sessionScreen.classList.contains("hidden")) return false;
   if (!connectionLooksStale()) return false;
 
   logClientEvent("force-reconnect", { reason, staleMs: Date.now() - lastServerSeenAt });
-  closeSocket();
-  openSocket(currentReconnectParams(), { reconnect: true });
+  openSocket(currentReconnectParams(), { reconnect: true, replay });
   return true;
 }
 
-function ensureVisibleConnection(reason) {
+function ensureVisibleConnection(reason, { probe = false, replay = false } = {}) {
   if (!activeSessionId || currentSessionExited || sessionScreen.classList.contains("hidden")) return false;
   if (document.visibilityState !== "visible") return false;
-  if (socket?.readyState === WebSocket.OPEN) return reconnectIfStale(reason);
+  if (socket?.readyState === WebSocket.OPEN) {
+    if (reconnectIfStale(reason, { replay })) return true;
+    if (probe) return probeVisibleConnection(reason);
+    return false;
+  }
   if (socket?.readyState === WebSocket.CONNECTING) return false;
 
   logClientEvent("visible-reconnect", { reason });
-  openSocket(currentReconnectParams(), { reconnect: true });
+  openSocket(currentReconnectParams(), { reconnect: true, replay: true });
   return true;
+}
+
+function probeVisibleConnection(reason) {
+  if (!socket || socket.readyState !== WebSocket.OPEN || visibleProbeTimer) return false;
+
+  const probeStartedAt = Date.now();
+  const seenBeforeProbe = lastServerSeenAt;
+  logClientEvent("visible-probe", { reason });
+
+  try {
+    socket.send(JSON.stringify({ type: "client-ping", sentAt: probeStartedAt, reason }));
+  } catch {
+    openSocket(currentReconnectParams(), { reconnect: true, replay: true });
+    return true;
+  }
+
+  visibleProbeTimer = window.setTimeout(() => {
+    visibleProbeTimer = null;
+    if (!activeSessionId || currentSessionExited || sessionScreen.classList.contains("hidden")) return;
+    if (document.visibilityState !== "visible") return;
+    if (lastServerSeenAt > seenBeforeProbe) return;
+
+    logClientEvent("visible-probe-timeout", { reason, waitedMs: Date.now() - probeStartedAt });
+    openSocket(currentReconnectParams(), { reconnect: true, replay: true });
+  }, CLIENT_RESUME_PROBE_MS);
+
+  return false;
 }
 
 function currentReconnectParams() {

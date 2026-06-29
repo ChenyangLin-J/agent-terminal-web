@@ -794,6 +794,7 @@ async function toggleVoiceInput() {
 function installVoiceCapture() {
   voiceCapture = VoiceCapture.create({
     endpoint: "/api/transcribe",
+    streamEndpoint: "/api/transcribe/stream",
     onStart() {
       VoiceCapture.saveDraft(VOICE_DRAFT_KEY, promptInput.value || "");
       setVoiceState("recording");
@@ -807,10 +808,13 @@ function installVoiceCapture() {
       if (event.text) {
         insertVoiceText(event.text);
         VoiceCapture.saveDraft(VOICE_DRAFT_KEY, promptInput.value || "");
-        setUploadStatus(`已转写 ${event.index} 段，继续录音中...`);
+        setUploadStatus("已转写，继续录音中...");
       } else {
-        setUploadStatus(`第 ${event.index} 段没有识别到语音。`);
+        setUploadStatus("没有识别到语音。");
       }
+    },
+    onPartial(event) {
+      setUploadStatus(`实时转写中：${event.text.slice(-32)}`);
     },
     onChunkError(event) {
       setUploadStatus(event.error?.message || `第 ${event.index} 段转写失败。`);

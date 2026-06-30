@@ -53,23 +53,6 @@ const CLIENT_ID_KEY = "agent_terminal_client_id";
 const SESSION_SNAPSHOT_STORE_KEY = "agent_terminal_session_snapshots";
 const SESSION_SNAPSHOT_LIMIT = 8;
 const SESSION_SNAPSHOT_MAX_CHARS = 200_000;
-const HOME_CAPTURE_STREAM_ENDPOINT = "https://home.chenyanglin.com/api/capture/transcribe/stream";
-const VOICE_MIC_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true">
-  <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" />
-  <path d="M5 11a7 7 0 0 0 14 0" />
-  <path d="M12 18v3" />
-  <path d="M9 21h6" />
-</svg>`;
-const VOICE_STOP_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true">
-  <path d="M8 8h8v8H8z" />
-</svg>`;
-const VOICE_WAIT_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true">
-  <path d="M12 3v3" />
-  <path d="M12 18v3" />
-  <path d="M3 12h3" />
-  <path d="M18 12h3" />
-</svg>`;
-const VOICE_DRAFT_KEY = "agent_voice_draft";
 
 let terminal = null;
 let fitAddon = null;
@@ -93,7 +76,6 @@ let currentSessionExited = false;
 let lastServerSeenAt = 0;
 let uploadStatusTimer = null;
 let liveSessionsByCodexId = new Map();
-let voiceCapture = null;
 let archivedSessionsExpanded = false;
 const clientId = getClientId();
 
@@ -122,13 +104,7 @@ keyEscButton.addEventListener("click", () => sendTerminalKey("\x1b"));
 sendStatusButton.addEventListener("click", () => command("/status"));
 sendPermissionsButton.addEventListener("click", () => command("/permissions"));
 killSessionButton.addEventListener("click", endSession);
-attachFileButton.addEventListener("click", () => fileInput.click());
-voiceInputButton.addEventListener("click", toggleVoiceInput);
 sendPromptButton.addEventListener("click", submitPrompt);
-fileInput.addEventListener("change", async () => {
-  await uploadFiles(fileInput.files);
-  fileInput.value = "";
-});
 promptInput.addEventListener("keydown", (event) => {
   if (event.isComposing) return;
   if (event.key === "Enter" && !event.shiftKey) {
@@ -136,7 +112,19 @@ promptInput.addEventListener("keydown", (event) => {
     submitPrompt();
   }
 });
-installComposerDragUpload();
+window.AgentUpload.create({
+  attachButton: attachFileButton,
+  fileInput,
+  composer,
+  insertPromptText,
+  setUploadStatus,
+  redirectToLogin,
+}).install();
+window.AgentVoiceInput.create({
+  button: voiceInputButton,
+  promptInput,
+  setUploadStatus,
+}).install();
 installPageDownLongPress();
 installClientEventLogging();
 
@@ -881,163 +869,6 @@ function getClientId() {
   return next;
 }
 
-async function uploadFiles(fileList) {
-  const files = [...(fileList || [])];
-  if (!files.length) return;
-
-  const form = new FormData();
-  for (const file of files) form.append("files", file);
-
-  setUploading(true);
-  setUploadStatus("Uploading...");
-
-  try {
-    const response = await fetch("/api/uploads", {
-      method: "POST",
-      body: form,
-    });
-
-    if (response.status === 401) {
-      redirectToLogin();
-      return;
-    }
-
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || "Upload failed.");
-
-    insertUploadedFiles(data.files || []);
-    setUploadStatus(`Attached ${(data.files || []).length} file${(data.files || []).length === 1 ? "" : "s"}.`, {
-      clear: true,
-    });
-  } catch (error) {
-    setUploadStatus(error.message || "Upload failed.");
-  } finally {
-    setUploading(false);
-  }
-}
-
-async function toggleVoiceInput() {
-  if (!voiceCapture) installVoiceCapture();
-
-  if (voiceCapture.isRecording()) {
-    await voiceCapture.stop();
-    return;
-  }
-
-  try {
-    await voiceCapture.start();
-  } catch (error) {
-    setVoiceState("idle");
-    setUploadStatus(error.message || "无法开始录音。");
-  }
-}
-
-function installVoiceCapture() {
-  voiceCapture = VoiceCapture.create({
-    streamEndpoint: HOME_CAPTURE_STREAM_ENDPOINT,
-    onStart() {
-      VoiceCapture.saveDraft(VOICE_DRAFT_KEY, promptInput.value || "");
-      setVoiceState("recording");
-      setUploadStatus("录音中...");
-    },
-    onStopping() {
-      setVoiceState("transcribing");
-      setUploadStatus("收尾转写中...");
-    },
-    onChunk(event) {
-      if (event.text) {
-        insertVoiceText(event.text);
-        VoiceCapture.saveDraft(VOICE_DRAFT_KEY, promptInput.value || "");
-        setUploadStatus("已转写，继续录音中...");
-      } else {
-        setUploadStatus("没有识别到语音。");
-      }
-    },
-    onPartial(event) {
-      setUploadStatus(`实时转写中：${event.text.slice(-32)}`);
-    },
-    onChunkError(event) {
-      setUploadStatus(event.error?.message || `第 ${event.index} 段转写失败。`);
-    },
-    onProgress(event) {
-      if (event.pending > 0) setUploadStatus(`转写中，剩余 ${event.pending} 段...`);
-    },
-    onComplete(summary) {
-      setVoiceState("idle");
-      if (summary.failed) {
-        setUploadStatus(`完成，但有 ${summary.failed} 段失败。`);
-      } else if (summary.chunks) {
-        setUploadStatus("已转写。", { clear: true });
-      } else {
-        setUploadStatus("没有录到音频。");
-      }
-    },
-  });
-}
-
-function setVoiceState(state) {
-  const recording = state === "recording";
-  const transcribing = state === "transcribing";
-  voiceInputButton.classList.toggle("recording", recording);
-  voiceInputButton.disabled = transcribing;
-  voiceInputButton.innerHTML = recording ? VOICE_STOP_ICON : transcribing ? VOICE_WAIT_ICON : VOICE_MIC_ICON;
-  voiceInputButton.setAttribute("aria-label", recording ? "停止录音" : transcribing ? "转写中" : "语音输入");
-  voiceInputButton.title = recording ? "停止录音" : transcribing ? "转写中" : "语音输入";
-}
-
-function installComposerDragUpload() {
-  if (!composer) return;
-
-  composer.addEventListener("dragenter", (event) => {
-    if (!hasDraggedFiles(event)) return;
-    event.preventDefault();
-    composer.classList.add("drag-over");
-  });
-
-  composer.addEventListener("dragover", (event) => {
-    if (!hasDraggedFiles(event)) return;
-    event.preventDefault();
-    composer.classList.add("drag-over");
-  });
-
-  composer.addEventListener("dragleave", (event) => {
-    if (event.relatedTarget && composer.contains(event.relatedTarget)) return;
-    composer.classList.remove("drag-over");
-  });
-
-  composer.addEventListener("drop", (event) => {
-    if (!hasDraggedFiles(event)) return;
-    event.preventDefault();
-    composer.classList.remove("drag-over");
-    uploadFiles(event.dataTransfer.files);
-  });
-}
-
-function hasDraggedFiles(event) {
-  return [...(event.dataTransfer?.types || [])].includes("Files");
-}
-
-function insertUploadedFiles(files) {
-  const paths = files.map((file) => file.path).filter(Boolean);
-  if (!paths.length) return;
-  insertPromptText(paths.map((filePath) => `请读取这个文件：${filePath}`).join("\n"));
-}
-
-function insertVoiceText(text) {
-  const value = promptInput.value;
-  const start = promptInput.selectionStart ?? value.length;
-  const end = promptInput.selectionEnd ?? value.length;
-  const before = value.slice(0, start);
-  const after = value.slice(end);
-  const nextBefore = VoiceCapture.appendTranscript(before, text);
-  const nextValue = `${nextBefore}${after}`;
-  const nextCursor = nextBefore.length;
-
-  promptInput.value = nextValue;
-  promptInput.focus();
-  promptInput.setSelectionRange(nextCursor, nextCursor);
-}
-
 function insertPromptText(text) {
   const value = promptInput.value;
   const start = promptInput.selectionStart ?? value.length;
@@ -1052,11 +883,6 @@ function insertPromptText(text) {
   promptInput.value = nextValue;
   promptInput.focus();
   promptInput.setSelectionRange(nextCursor, nextCursor);
-}
-
-function setUploading(uploading) {
-  attachFileButton.disabled = uploading;
-  attachFileButton.textContent = uploading ? "Uploading" : "Attach";
 }
 
 function setUploadStatus(message, { clear = false } = {}) {

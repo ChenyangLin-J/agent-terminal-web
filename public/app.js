@@ -53,6 +53,7 @@ const CLIENT_ID_KEY = "agent_terminal_client_id";
 const SESSION_SNAPSHOT_STORE_KEY = "agent_terminal_session_snapshots";
 const SESSION_SNAPSHOT_LIMIT = 8;
 const SESSION_SNAPSHOT_MAX_CHARS = 200_000;
+const HOME_CAPTURE_STREAM_ENDPOINT = "https://home.chenyanglin.com/api/capture/transcribe/stream";
 const VOICE_MIC_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true">
   <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" />
   <path d="M5 11a7 7 0 0 0 14 0" />
@@ -928,8 +929,7 @@ async function toggleVoiceInput() {
 
 function installVoiceCapture() {
   voiceCapture = VoiceCapture.create({
-    endpoint: "/api/transcribe",
-    streamEndpoint: "/api/transcribe/stream",
+    streamEndpoint: HOME_CAPTURE_STREAM_ENDPOINT,
     onStart() {
       VoiceCapture.saveDraft(VOICE_DRAFT_KEY, promptInput.value || "");
       setVoiceState("recording");

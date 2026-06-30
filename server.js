@@ -9,7 +9,7 @@ import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import busboy from "busboy";
 import express from "express";
-import WebSocket, { WebSocketServer } from "ws";
+import { WebSocketServer } from "ws";
 
 const require = createRequire(import.meta.url);
 const pty = require("node-pty");
@@ -23,9 +23,6 @@ const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 60 * 60 * 1000);
 const AUTH_VERIFY_URL = process.env.PRIVATE_AUTH_VERIFY_URL || "http://127.0.0.1:3060/api/verify";
 const AUTH_LOGIN_URL = process.env.PRIVATE_AUTH_LOGIN_URL || "https://auth.chenyanglin.com/login";
 const AUTH_LOGOUT_URL = process.env.PRIVATE_AUTH_LOGOUT_URL || "https://auth.chenyanglin.com/logout";
-const CAPTURE_TRANSCRIBE_URL = process.env.CAPTURE_TRANSCRIBE_URL || "http://127.0.0.1:3050/api/capture/transcribe";
-const CAPTURE_TRANSCRIBE_STREAM_URL =
-  process.env.CAPTURE_TRANSCRIBE_STREAM_URL || "ws://127.0.0.1:3050/api/capture/transcribe/stream";
 const CODEX_HOME = process.env.CODEX_HOME || path.join(process.env.HOME, ".codex");
 const CODEX_SESSIONS_ROOT = path.join(CODEX_HOME, "sessions");
 const CODEX_ARCHIVED_SESSIONS_ROOT = path.join(CODEX_HOME, "archived_sessions");
@@ -43,7 +40,6 @@ const USE_TMUX_SESSIONS = process.env.AGENT_USE_TMUX === "1";
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/terminal" });
-const transcribeStreamWss = new WebSocketServer({ noServer: true });
 const sessions = new Map();
 
 app.use(express.json());
@@ -113,45 +109,6 @@ app.post("/api/client-events", (req, res) => {
   }
   res.json({ ok: true });
 });
-
-app.post(
-  "/api/transcribe",
-  express.raw({ type: ["audio/webm", "audio/mp4", "audio/mpeg", "audio/wav"], limit: "25mb" }),
-  async (req, res) => {
-    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
-      res.status(400).json({ error: "audio is required" });
-      return;
-    }
-
-    try {
-      const upstream = await fetch(CAPTURE_TRANSCRIBE_URL, {
-        method: "POST",
-        redirect: "manual",
-        headers: {
-          "Content-Type": req.headers["content-type"] || "audio/webm",
-          "X-Capture-Recording-Id": req.headers["x-capture-recording-id"] || "",
-          "X-Capture-Chunk-Index": req.headers["x-capture-chunk-index"] || "",
-          cookie: req.headers.cookie || "",
-        },
-        body: req.body,
-      });
-
-      if ([301, 302, 303, 307, 308].includes(upstream.status)) {
-        res.status(401).json({ error: "auth required" });
-        return;
-      }
-
-      const responseBody = await upstream.text();
-      res.status(upstream.status);
-      const contentType = upstream.headers.get("content-type");
-      if (contentType) res.setHeader("Content-Type", contentType);
-      res.send(responseBody);
-    } catch (error) {
-      console.error(`Agent transcribe failed: ${error.message}`);
-      res.status(502).json({ error: "speech-to-text failed", detail: error.message });
-    }
-  },
-);
 
 app.get("/api/sessions", (_req, res) => {
   const liveSessions = [...sessions.values()].filter((session) => !session.exited).map(publicSession);
@@ -330,100 +287,11 @@ wss.on("connection", async (ws, req) => {
   attachClient(session, ws, { replay: shouldReplay, clientId });
 });
 
-server.on("upgrade", async (req, socket, head) => {
-  const url = new URL(req.url || "", `http://${req.headers.host}`);
-  if (url.pathname !== "/api/transcribe/stream") return;
-
-  if (!(await isAuthenticated(req))) {
-    logAgentEvent("transcribe-stream-reject", { reason: "not-authenticated" });
-    socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
-    socket.destroy();
-    return;
-  }
-
-  transcribeStreamWss.handleUpgrade(req, socket, head, (ws) => {
-    transcribeStreamWss.emit("connection", ws, req);
-  });
-});
-
-transcribeStreamWss.on("connection", handleTranscribeStreamProxy);
-
 server.listen(PORT, HOST, () => {
   console.log(`Agent Terminal Web: http://${HOST}:${PORT}`);
   console.log(`Workspace root: ${WORKSPACE_ROOT}`);
   console.log(`Detached session TTL: ${Math.round(SESSION_TTL_MS / 60000)} minutes`);
 });
-
-function handleTranscribeStreamProxy(clientWs, req) {
-  const requestUrl = new URL(req.url || "", `http://${req.headers.host}`);
-  const upstreamUrl = new URL(CAPTURE_TRANSCRIBE_STREAM_URL);
-  for (const [key, value] of requestUrl.searchParams.entries()) {
-    upstreamUrl.searchParams.set(key, value);
-  }
-
-  const upstream = new WebSocket(upstreamUrl.toString(), {
-    headers: {
-      cookie: req.headers.cookie || "",
-    },
-  });
-
-  let upstreamOpen = false;
-  const pending = [];
-  const recordingId = cleanClientLogValue(requestUrl.searchParams.get("recordingId"), 100);
-  logAgentEvent("transcribe-stream-proxy-start", { recordingId, upstream: upstreamUrl.origin });
-
-  upstream.on("open", () => {
-    upstreamOpen = true;
-    logAgentEvent("transcribe-stream-upstream-open", { recordingId, pending: pending.length });
-    for (const [data, isBinary] of pending.splice(0)) {
-      upstream.send(data, { binary: isBinary });
-    }
-  });
-
-  upstream.on("message", (data, isBinary) => {
-    if (clientWs.readyState === clientWs.OPEN) clientWs.send(data, { binary: isBinary });
-  });
-
-  upstream.on("error", (error) => {
-    logAgentEvent("transcribe-stream-upstream-error", { recordingId, message: error.message });
-    sendPlainJson(clientWs, { type: "error", message: error.message || "speech-to-text failed" });
-    clientWs.close();
-  });
-
-  upstream.on("close", (code, reason) => {
-    logAgentEvent("transcribe-stream-upstream-close", {
-      recordingId,
-      code,
-      reason: reason?.toString() || "",
-      opened: upstreamOpen,
-      pending: pending.length,
-    });
-    clientWs.close();
-  });
-
-  clientWs.on("message", (data, isBinary) => {
-    if (upstreamOpen && upstream.readyState === upstream.OPEN) {
-      upstream.send(data, { binary: isBinary });
-    } else {
-      pending.push([data, isBinary]);
-    }
-  });
-
-  clientWs.on("close", (code, reason) => {
-    logAgentEvent("transcribe-stream-client-close", {
-      recordingId,
-      code,
-      reason: reason?.toString() || "",
-      upstreamOpen,
-    });
-    upstream.close();
-  });
-}
-
-function sendPlainJson(ws, payload) {
-  if (ws.readyState !== ws.OPEN) return;
-  ws.send(JSON.stringify(payload));
-}
 
 async function requireAuth(req, res, next) {
   if (await isAuthenticated(req)) {

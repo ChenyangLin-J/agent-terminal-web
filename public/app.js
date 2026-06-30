@@ -497,14 +497,15 @@ function sessionUrl(params) {
 
 function openSocket(params, options = {}) {
   const isReconnect = Boolean(options.reconnect);
-  const shouldReplay = options.replay ?? !isReconnect;
   const snapshotKey = sessionSnapshotKey(params);
   saveActiveSessionSnapshot();
   closeSocket();
   ensureTerminal();
+  const hasSnapshot = !isReconnect && hasSessionSnapshot(snapshotKey);
+  const shouldReplay = options.replay ?? (!isReconnect && !hasSnapshot);
   if (!isReconnect) {
     terminal?.clear();
-    restoreSessionSnapshot(snapshotKey);
+    if (hasSnapshot) restoreSessionSnapshot(snapshotKey);
   }
   activeSessionId = params.attach || "";
   activeSessionParams = { ...activeSessionParams, ...params };
@@ -541,8 +542,7 @@ function openSocket(params, options = {}) {
     }
     if (message.type === "replay") {
       if (isReconnect) return;
-      terminal?.clear();
-      writeTerminalOutput(message.payload.raw, { replay: true });
+      writeTerminalReplay(message.payload.raw);
       return;
     }
     if (message.type === "status") {
@@ -659,6 +659,11 @@ function restoreSessionSnapshot(key) {
     }
   });
   return true;
+}
+
+function hasSessionSnapshot(key) {
+  if (!key) return false;
+  return Boolean(readSessionSnapshots()[key]?.text);
 }
 
 function readSessionSnapshots() {
@@ -1232,6 +1237,21 @@ function writeTerminalOutput(raw, { replay = false } = {}) {
     if (!textView.classList.contains("hidden")) {
       terminalText.value = getTerminalBufferText();
     }
+  });
+}
+
+function writeTerminalReplay(raw) {
+  if (!terminal) return;
+
+  terminalView.classList.add("replaying");
+  terminal.clear();
+  terminal.write(raw, () => {
+    terminal.scrollToBottom();
+    terminalView.classList.remove("replaying");
+    if (!textView.classList.contains("hidden")) {
+      terminalText.value = getTerminalBufferText();
+    }
+    saveActiveSessionSnapshot();
   });
 }
 

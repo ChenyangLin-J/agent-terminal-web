@@ -335,6 +335,7 @@ server.on("upgrade", async (req, socket, head) => {
   if (url.pathname !== "/api/transcribe/stream") return;
 
   if (!(await isAuthenticated(req))) {
+    logAgentEvent("transcribe-stream-reject", { reason: "not-authenticated" });
     socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
     socket.destroy();
     return;
@@ -368,9 +369,12 @@ function handleTranscribeStreamProxy(clientWs, req) {
 
   let upstreamOpen = false;
   const pending = [];
+  const recordingId = cleanClientLogValue(requestUrl.searchParams.get("recordingId"), 100);
+  logAgentEvent("transcribe-stream-proxy-start", { recordingId, upstream: upstreamUrl.origin });
 
   upstream.on("open", () => {
     upstreamOpen = true;
+    logAgentEvent("transcribe-stream-upstream-open", { recordingId, pending: pending.length });
     for (const [data, isBinary] of pending.splice(0)) {
       upstream.send(data, { binary: isBinary });
     }
@@ -381,11 +385,19 @@ function handleTranscribeStreamProxy(clientWs, req) {
   });
 
   upstream.on("error", (error) => {
+    logAgentEvent("transcribe-stream-upstream-error", { recordingId, message: error.message });
     sendPlainJson(clientWs, { type: "error", message: error.message || "speech-to-text failed" });
     clientWs.close();
   });
 
-  upstream.on("close", () => {
+  upstream.on("close", (code, reason) => {
+    logAgentEvent("transcribe-stream-upstream-close", {
+      recordingId,
+      code,
+      reason: reason?.toString() || "",
+      opened: upstreamOpen,
+      pending: pending.length,
+    });
     clientWs.close();
   });
 
@@ -397,7 +409,13 @@ function handleTranscribeStreamProxy(clientWs, req) {
     }
   });
 
-  clientWs.on("close", () => {
+  clientWs.on("close", (code, reason) => {
+    logAgentEvent("transcribe-stream-client-close", {
+      recordingId,
+      code,
+      reason: reason?.toString() || "",
+      upstreamOpen,
+    });
     upstream.close();
   });
 }

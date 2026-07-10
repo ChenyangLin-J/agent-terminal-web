@@ -108,6 +108,45 @@ button:disabled {
   padding: 10px 0 18px;
 }
 
+.start-brand {
+  display: flex;
+  min-width: 0;
+  gap: 12px;
+  align-items: center;
+}
+
+.start-brand > div {
+  min-width: 0;
+}
+
+.start-brand-icon {
+  display: block;
+  width: 56px;
+  height: 56px;
+  flex: 0 0 56px;
+  padding: 4px;
+  border: 1px solid #2b303b;
+  border-radius: 14px;
+  background: #171b24;
+}
+
+@media (max-width: 520px) {
+  .start-brand {
+    gap: 10px;
+    align-items: flex-start;
+  }
+
+  .start-brand-icon {
+    width: 52px;
+    height: 52px;
+    flex-basis: 52px;
+  }
+
+  .start-header h1 {
+    font-size: 27px;
+  }
+}
+
 .start-header p {
   margin: 6px 0 0;
   color: #a7adbc;

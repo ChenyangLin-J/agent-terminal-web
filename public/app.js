@@ -50,6 +50,7 @@ const CLIENT_HEARTBEAT_MS = 15_000;
 const CLIENT_STALE_MS = 45_000;
 const CLIENT_RESUME_PROBE_MS = 1_500;
 const CLIENT_ID_KEY = "agent_terminal_client_id";
+const PUSH_DEVICE_ID_KEY = "agent_terminal_push_device_id";
 const SESSION_SNAPSHOT_STORE_KEY = "agent_terminal_session_snapshots";
 const SESSION_SNAPSHOT_LIMIT = 8;
 const SESSION_SNAPSHOT_MAX_CHARS = 200_000;
@@ -78,6 +79,8 @@ let uploadStatusTimer = null;
 let liveSessionsByCodexId = new Map();
 let archivedSessionsExpanded = false;
 const clientId = getClientId();
+const pushDeviceId = getPushDeviceId();
+let pushRegistrationPromise = null;
 
 window.addEventListener("resize", () => fitTerminal({ delay: 120 }));
 
@@ -137,6 +140,9 @@ async function bootstrap() {
   const data = await response.json();
   if (data.authenticated) {
     await loadProjects();
+    if (globalThis.Notification?.permission === "granted") {
+      void ensureAgentPushSubscription().catch(logPushRegistrationError);
+    }
     if (openInitialSessionFromUrl()) return;
     showStartScreen();
   } else {
@@ -568,7 +574,8 @@ function openSocket(params, options = {}) {
 function submitPrompt() {
   const prompt = promptInput.value.trim();
   if (!prompt) return;
-  if (send({ type: "submit", data: prompt })) {
+  void ensureAgentPushSubscription({ requestPermission: true }).catch(logPushRegistrationError);
+  if (send({ type: "submit", data: prompt, notificationDeviceId: pushDeviceId })) {
     promptInput.value = "";
   } else {
     setUploadStatus("连接恢复中，文本已保留。");
@@ -576,11 +583,11 @@ function submitPrompt() {
 }
 
 function command(value) {
-  send({ type: "command", data: value });
+  send({ type: "command", data: value, notificationDeviceId: pushDeviceId });
 }
 
 function sendTerminalKey(value) {
-  send({ type: "input", data: value });
+  send({ type: "input", data: value, notificationDeviceId: pushDeviceId });
 }
 
 function detach(goHome = true) {
@@ -867,6 +874,72 @@ function getClientId() {
     : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   sessionStorage.setItem(CLIENT_ID_KEY, next);
   return next;
+}
+
+function getPushDeviceId() {
+  const existing = localStorage.getItem(PUSH_DEVICE_ID_KEY);
+  if (existing) return existing;
+
+  const next = globalThis.crypto?.randomUUID
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  localStorage.setItem(PUSH_DEVICE_ID_KEY, next);
+  return next;
+}
+
+function ensureAgentPushSubscription({ requestPermission = false } = {}) {
+  if (pushRegistrationPromise) return pushRegistrationPromise;
+  pushRegistrationPromise = registerAgentPushSubscription({ requestPermission }).finally(() => {
+    pushRegistrationPromise = null;
+  });
+  return pushRegistrationPromise;
+}
+
+async function registerAgentPushSubscription({ requestPermission }) {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return false;
+  if (Notification.permission === "denied") return false;
+  if (Notification.permission === "default") {
+    if (!requestPermission) return false;
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") {
+      setUploadStatus("浏览器通知未开启。", { clear: true });
+      return false;
+    }
+  }
+
+  const [registration, configResponse] = await Promise.all([
+    navigator.serviceWorker.register("/sw.js"),
+    fetch("/api/push/config"),
+  ]);
+  const config = await configResponse.json();
+  if (!configResponse.ok || !config.configured || !config.publicKey) return false;
+
+  let subscription = await registration.pushManager.getSubscription();
+  if (!subscription) {
+    subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(config.publicKey),
+    });
+  }
+
+  const response = await fetch("/api/push/subscribe", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ deviceId: pushDeviceId, subscription: subscription.toJSON() }),
+  });
+  if (!response.ok) throw new Error("Browser notification registration failed");
+  return true;
+}
+
+function urlBase64ToUint8Array(value) {
+  const padding = "=".repeat((4 - (value.length % 4)) % 4);
+  const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
+  return Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+}
+
+function logPushRegistrationError(error) {
+  console.warn("Agent notification registration failed", error);
+  setUploadStatus("浏览器通知连接失败，本次任务仍会正常运行。", { clear: true });
 }
 
 function insertPromptText(text) {

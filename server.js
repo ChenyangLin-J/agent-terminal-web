@@ -38,6 +38,8 @@ const USE_TMUX_SESSIONS = process.env.AGENT_USE_TMUX === "1";
 const CODEX_NOTIFY_SCRIPT = path.join(__dirname, "scripts", "codex-notify.js");
 const AGENT_NOTIFY_URL = process.env.AGENT_NOTIFY_URL || `http://${HOST}:${PORT}/internal/codex-notify`;
 const HOME_PUSH_URL = process.env.HOME_PUSH_URL || "http://127.0.0.1:3050/internal/push";
+const HOME_PUSH_SUBSCRIBE_URL = process.env.HOME_PUSH_SUBSCRIBE_URL || `${HOME_PUSH_URL}/subscriptions`;
+const HOME_VAPID_PUBLIC_KEY = process.env.HOME_VAPID_PUBLIC_KEY || "";
 
 const app = express();
 const server = http.createServer(app);
@@ -136,6 +138,26 @@ app.get("/api/projects", async (_req, res) => {
     workspaceRoot: WORKSPACE_ROOT,
     projects,
   });
+});
+
+app.get("/api/push/config", (_req, res) => {
+  res.json({ configured: Boolean(HOME_VAPID_PUBLIC_KEY), publicKey: HOME_VAPID_PUBLIC_KEY });
+});
+
+app.post("/api/push/subscribe", async (req, res) => {
+  const deviceId = cleanWebClientId(req.body?.deviceId);
+  if (!deviceId) {
+    res.status(400).json({ error: "A browser device ID is required." });
+    return;
+  }
+
+  try {
+    const result = await registerAgentPushSubscription(req.body?.subscription, deviceId);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    logAgentEvent("push-subscribe-failed", { deviceId: shortClientId(deviceId), message: error.message });
+    res.status(502).json({ error: "Browser notification registration failed." });
+  }
 });
 
 app.post("/api/uploads", handleUpload);
@@ -347,6 +369,10 @@ function isDirectLoopbackRequest(req) {
 }
 
 async function sendHomeTurnNotification(session, event) {
+  if (!session.notificationDeviceId) {
+    return { sent: 0, subscriptionCount: 0, skipped: "no-browser-device" };
+  }
+
   const title = cleanCustomTitle(session.title) || "Codex session";
   const query = new URLSearchParams({
     attach: session.id,
@@ -359,13 +385,14 @@ async function sendHomeTurnNotification(session, event) {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      title: `Agent 完成 · ${title}`,
-      body: "任务已完成，点开查看结果。",
-      url: `/open/agent?${query}`,
-      tag: `agent-${session.sessionId || session.id}`,
-      badge: 0,
-      source: "agent-web",
-      turnId: String(event["turn-id"] || ""),
+      notification: {
+        title: `Agent 完成 · ${title}`,
+        body: "任务已完成，点开查看结果。",
+        url: `/?${query}`,
+        tag: `agent-${session.sessionId || session.id}`,
+        badge: 0,
+      },
+      target: { app: "agent", deviceId: session.notificationDeviceId },
     }),
     signal: AbortSignal.timeout(8_000),
   });
@@ -373,6 +400,20 @@ async function sendHomeTurnNotification(session, event) {
   if (!response.ok) {
     const detail = (await response.text()).slice(0, 300);
     throw new Error(`Home push returned ${response.status}: ${detail}`);
+  }
+  return response.json();
+}
+
+async function registerAgentPushSubscription(subscription, deviceId) {
+  const response = await fetch(HOME_PUSH_SUBSCRIBE_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ app: "agent", deviceId, subscription }),
+    signal: AbortSignal.timeout(8_000),
+  });
+  if (!response.ok) {
+    const detail = (await response.text()).slice(0, 300);
+    throw new Error(`Home push registration returned ${response.status}: ${detail}`);
   }
   return response.json();
 }
@@ -528,6 +569,7 @@ function createSession(cwd, launch, restored = {}) {
     exited: false,
     exitCode: null,
     signal: null,
+    notificationDeviceId: "",
     rawBuffer: "",
     textBuffer: "",
     startedAt: restored.startedAt || startedAt,
@@ -726,6 +768,7 @@ function attachClient(session, ws, { replay = true, clientId = "" } = {}) {
     if (session.exited) return;
 
     if (message.type === "input" && typeof message.data === "string") {
+      rememberNotificationDevice(session, message.notificationDeviceId);
       logControlMessage(session, ws, "input", message.data);
       session.terminal.write(message.data);
       session.lastActivityAt = new Date().toISOString();
@@ -736,6 +779,7 @@ function attachClient(session, ws, { replay = true, clientId = "" } = {}) {
     if (message.type === "submit" && typeof message.data === "string") {
       const normalized = message.data.trim();
       if (normalized) {
+        rememberNotificationDevice(session, message.notificationDeviceId);
         logControlMessage(session, ws, "submit", normalized);
         if (!session.title) session.title = cleanTitle(normalized) || "New Codex session";
         writeAndSubmit(session, normalized, { paste: true });
@@ -748,6 +792,7 @@ function attachClient(session, ws, { replay = true, clientId = "" } = {}) {
     }
 
     if (message.type === "command" && typeof message.data === "string") {
+      rememberNotificationDevice(session, message.notificationDeviceId);
       logControlMessage(session, ws, "command", message.data);
       writeAndSubmit(session, message.data.trim(), { paste: false });
       session.lastActivityAt = new Date().toISOString();
@@ -789,6 +834,11 @@ function attachClient(session, ws, { replay = true, clientId = "" } = {}) {
     });
     if (session.clients.size === 0) scheduleCleanup(session);
   });
+}
+
+function rememberNotificationDevice(session, value) {
+  const deviceId = cleanWebClientId(value);
+  if (deviceId) session.notificationDeviceId = deviceId;
 }
 
 function startWebSocketHeartbeat(ws, session) {

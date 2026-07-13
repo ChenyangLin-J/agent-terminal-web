@@ -908,7 +908,7 @@ async function registerAgentPushSubscription({ requestPermission }) {
   }
 
   const [registration, configResponse] = await Promise.all([
-    navigator.serviceWorker.register("/sw.js"),
+    navigator.serviceWorker.register("/sw.js?v=20260713-fresh-notification-1"),
     fetch("/api/push/config"),
   ]);
   const config = await configResponse.json();

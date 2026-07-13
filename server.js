@@ -1,5 +1,4 @@
 import { createRequire } from "node:module";
-import crypto from "node:crypto";
 import { execFile, execFileSync } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -783,6 +782,7 @@ async function handleUpload(req, res) {
 
   const form = busboy({
     headers: req.headers,
+    defParamCharset: "utf8",
     limits: {
       files: MAX_UPLOAD_FILES,
       fileSize: MAX_UPLOAD_FILE_BYTES,
@@ -805,8 +805,16 @@ async function handleUpload(req, res) {
     }
 
     const originalName = cleanUploadOriginalName(info.filename);
-    const storedName = uploadStoredName(originalName);
-    const filePath = path.join(uploadDir, storedName);
+    let reservedFile;
+    try {
+      reservedFile = reserveUploadFile(uploadDir, originalName);
+    } catch (error) {
+      rejected = `Could not save ${originalName}: ${error.message}`;
+      file.resume();
+      return;
+    }
+
+    const { storedName, filePath, output } = reservedFile;
     let size = 0;
     let hitSizeLimit = false;
 
@@ -819,7 +827,6 @@ async function handleUpload(req, res) {
       rejected = `Each file must be ${formatBytes(MAX_UPLOAD_FILE_BYTES)} or smaller.`;
     });
 
-    const output = fsSync.createWriteStream(filePath, { mode: 0o600 });
     const write = finished(output)
       .then(async () => {
         if (hitSizeLimit || file.truncated) {
@@ -1437,17 +1444,66 @@ async function cleanupUploadedFiles(files) {
 }
 
 function cleanUploadOriginalName(value) {
-  return path.basename(String(value || "upload").replace(/\0/g, "")).slice(0, 180) || "upload";
+  const normalized = String(value || "upload")
+    .replace(/\\/g, "/")
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .normalize("NFC");
+  const basename = path.basename(normalized).trim();
+  const safeName = !basename || basename === "." || basename === ".." ? "upload" : basename;
+  return truncateUploadName(safeName, 180);
 }
 
-function uploadStoredName(originalName) {
-  return `${Date.now()}-${crypto.randomUUID()}${safeUploadExtension(originalName)}`;
+function reserveUploadFile(uploadDir, originalName) {
+  for (let duplicate = 0; duplicate < 1000; duplicate += 1) {
+    const storedName = duplicateUploadName(originalName, duplicate);
+    const filePath = path.join(uploadDir, storedName);
+
+    try {
+      const fd = fsSync.openSync(filePath, "wx", 0o600);
+      const output = fsSync.createWriteStream(filePath, { fd, autoClose: true });
+      return { storedName, filePath, output };
+    } catch (error) {
+      if (error.code === "EEXIST") continue;
+      throw error;
+    }
+  }
+
+  throw new Error("too many files with the same name");
 }
 
-function safeUploadExtension(originalName) {
-  const extension = path.extname(originalName).toLowerCase();
-  if (!extension || extension.length > 20) return "";
-  return /^\.[a-z0-9][a-z0-9._-]*$/.test(extension) ? extension : "";
+function duplicateUploadName(originalName, duplicate) {
+  if (!duplicate) return originalName;
+
+  const maxBytes = 180;
+  const suffix = `-${duplicate + 1}`;
+  const extension = path.extname(originalName);
+  const stem = extension ? originalName.slice(0, -extension.length) : originalName;
+  const safeExtension = Buffer.byteLength(extension) < maxBytes / 2 ? extension : "";
+  const stemBudget = maxBytes - Buffer.byteLength(suffix) - Buffer.byteLength(safeExtension);
+  const truncatedStem = truncateUtf8(stem, stemBudget) || "upload";
+  return `${truncatedStem}${suffix}${safeExtension}`;
+}
+
+function truncateUploadName(value, maxBytes) {
+  if (Buffer.byteLength(value) <= maxBytes) return value;
+
+  const extension = path.extname(value);
+  const stem = extension ? value.slice(0, -extension.length) : value;
+  const extensionBytes = Buffer.byteLength(extension);
+  const safeExtension = extensionBytes < maxBytes / 2 ? extension : "";
+  const stemBudget = maxBytes - Buffer.byteLength(safeExtension);
+  const truncatedStem = truncateUtf8(stem, stemBudget);
+
+  return `${truncatedStem || "upload"}${safeExtension}`;
+}
+
+function truncateUtf8(value, maxBytes) {
+  let result = "";
+  for (const character of value) {
+    if (Buffer.byteLength(result + character) > maxBytes) break;
+    result += character;
+  }
+  return result;
 }
 
 function dateDirectoryName(date) {

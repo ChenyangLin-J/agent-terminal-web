@@ -89,9 +89,13 @@
     }
 
     function insertUploadedFiles(files) {
-      const paths = files.map((file) => file.path).filter(Boolean);
-      if (!paths.length) return;
-      insertPromptText(paths.map((filePath) => `请读取这个文件：${filePath}`).join("\n"));
+      const uploadedFiles = files.filter((file) => file.path);
+      if (!uploadedFiles.length) return;
+      insertPromptText(
+        uploadedFiles
+          .map((file) => `请读取这个文件（原始文件名：${file.originalName || file.storedName || "未知"}）：${file.path}`)
+          .join("\n"),
+      );
     }
 
     function setUploading(uploading) {

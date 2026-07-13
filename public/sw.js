@@ -15,6 +15,8 @@ self.addEventListener("push", (event) => {
       icon: "/icons/icon-192.png",
       badge: "/icons/icon-192.png",
       tag: payload.tag || "agent-turn-complete",
+      renotify: true,
+      silent: false,
       data: { url: payload.url || "/" },
     }),
   );

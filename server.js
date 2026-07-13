@@ -35,6 +35,9 @@ const MAX_RAW_BUFFER = 1024 * 1024;
 const MAX_TEXT_BUFFER = 200_000;
 const WS_HEARTBEAT_MS = Number(process.env.WS_HEARTBEAT_MS || 25_000);
 const USE_TMUX_SESSIONS = process.env.AGENT_USE_TMUX === "1";
+const CODEX_NOTIFY_SCRIPT = path.join(__dirname, "scripts", "codex-notify.js");
+const AGENT_NOTIFY_URL = process.env.AGENT_NOTIFY_URL || `http://${HOST}:${PORT}/internal/codex-notify`;
+const HOME_PUSH_URL = process.env.HOME_PUSH_URL || "http://127.0.0.1:3050/internal/push";
 
 const app = express();
 const server = http.createServer(app);
@@ -50,6 +53,51 @@ app.use(
   "/vendor/xterm-fit",
   express.static(path.join(__dirname, "node_modules", "@xterm", "addon-fit", "lib")),
 );
+
+app.post("/internal/codex-notify", async (req, res) => {
+  if (!isDirectLoopbackRequest(req)) {
+    res.sendStatus(404);
+    return;
+  }
+
+  const webSessionId = String(req.body?.webSessionId || "");
+  const event = req.body?.event;
+  if (!isValidWebSessionId(webSessionId) || event?.type !== "agent-turn-complete") {
+    res.status(400).json({ error: "Invalid Codex notification." });
+    return;
+  }
+
+  const session = sessions.get(webSessionId);
+  if (!session || session.exited) {
+    res.status(202).json({ ok: true, skipped: "session-not-running" });
+    return;
+  }
+
+  const threadId = String(event["thread-id"] || "");
+  if (isValidSessionId(threadId)) session.sessionId = threadId;
+  session.lastActivityAt = new Date().toISOString();
+  persistRestorableWebSession(session);
+  broadcast(session, "status", publicSession(session));
+
+  try {
+    const result = await sendHomeTurnNotification(session, event);
+    logAgentEvent("turn-notification", {
+      webSessionId: session.id,
+      codexSessionId: session.sessionId,
+      turnId: cleanClientLogValue(event["turn-id"], 100),
+      sent: result.sent,
+      subscriptionCount: result.subscriptionCount,
+    });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    logAgentEvent("turn-notification-failed", {
+      webSessionId: session.id,
+      codexSessionId: session.sessionId,
+      message: error.message,
+    });
+    res.status(502).json({ error: "Home push failed." });
+  }
+});
 
 app.get("/api/auth", async (req, res) => {
   res.json({
@@ -292,6 +340,43 @@ server.listen(PORT, HOST, () => {
   console.log(`Detached session TTL: ${Math.round(SESSION_TTL_MS / 60000)} minutes`);
 });
 
+function isDirectLoopbackRequest(req) {
+  const address = req.socket.remoteAddress || "";
+  const isLoopback = address === "127.0.0.1" || address === "::1" || address.startsWith("::ffff:127.");
+  return isLoopback && !req.headers["x-forwarded-for"] && !req.headers["x-forwarded-host"];
+}
+
+async function sendHomeTurnNotification(session, event) {
+  const title = cleanCustomTitle(session.title) || "Codex session";
+  const query = new URLSearchParams({
+    attach: session.id,
+    cwd: session.project || ".",
+    title,
+  });
+  if (session.sessionId) query.set("sessionId", session.sessionId);
+
+  const response = await fetch(HOME_PUSH_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      title: `Agent 完成 · ${title}`,
+      body: "任务已完成，点开查看结果。",
+      url: `/open/agent?${query}`,
+      tag: `agent-${session.sessionId || session.id}`,
+      badge: 0,
+      source: "agent-web",
+      turnId: String(event["turn-id"] || ""),
+    }),
+    signal: AbortSignal.timeout(8_000),
+  });
+
+  if (!response.ok) {
+    const detail = (await response.text()).slice(0, 300);
+    throw new Error(`Home push returned ${response.status}: ${detail}`);
+  }
+  return response.json();
+}
+
 async function requireAuth(req, res, next) {
   if (await isAuthenticated(req)) {
     next();
@@ -365,6 +450,11 @@ function cleanClientEventName(value) {
   return event || "";
 }
 
+function codexArgsForWeb(args) {
+  const notify = JSON.stringify([process.execPath, CODEX_NOTIFY_SCRIPT]);
+  return ["-c", `notify=${notify}`, ...args];
+}
+
 function cleanClientLogValue(value, maxLength) {
   return String(value || "")
     .replace(/[\r\n\t]/g, " ")
@@ -385,10 +475,13 @@ function createSession(cwd, launch, restored = {}) {
   const id = restored.id || cryptoRandomId();
   const startedAt = new Date().toISOString();
   const shell = process.env.CODEX_COMMAND || "codex";
+  const commandArgs = codexArgsForWeb(launch.args);
   const env = {
     ...process.env,
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
+    AGENT_WEB_SESSION_ID: id,
+    AGENT_NOTIFY_URL,
   };
   const tmuxName = restored.tmuxName || tmuxNameForWebSession(id);
 
@@ -397,7 +490,7 @@ function createSession(cwd, launch, restored = {}) {
     if (USE_TMUX_SESSIONS && restored.attachExistingTmux) {
       if (!tmuxHasSession(tmuxName)) return { error: "This web session is no longer running. Returning to Agent home." };
     } else if (USE_TMUX_SESSIONS) {
-      ensureTmuxSession(tmuxName, cwd, [shell, ...launch.args], env);
+      ensureTmuxSession(tmuxName, cwd, [shell, ...commandArgs], env);
     }
     terminal = USE_TMUX_SESSIONS
       ? pty.spawn("tmux", ["attach-session", "-t", tmuxName], {
@@ -407,7 +500,7 @@ function createSession(cwd, launch, restored = {}) {
           cwd,
           env,
         })
-      : pty.spawn(shell, launch.args, {
+      : pty.spawn(shell, commandArgs, {
           name: "xterm-256color",
           cols: 100,
           rows: 30,
@@ -424,7 +517,7 @@ function createSession(cwd, launch, restored = {}) {
     project: path.relative(WORKSPACE_ROOT, cwd) || ".",
     pid: terminal.pid,
     command: shell,
-    args: launch.args,
+    args: commandArgs,
     mode: launch.mode,
     sessionId: launch.sessionId,
     title: launch.title || "",

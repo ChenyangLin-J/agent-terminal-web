@@ -108,6 +108,20 @@ app.post("/internal/codex-notify", async (req, res) => {
   }
 });
 
+app.get("/internal/recent-sessions", async (req, res) => {
+  if (!isDirectLoopbackRequest(req)) {
+    res.sendStatus(404);
+    return;
+  }
+
+  try {
+    res.json({ sessions: await listRecentAgentSessions() });
+  } catch (error) {
+    console.error(`Failed to list recent Agent sessions: ${error.message}`);
+    res.status(500).json({ error: "Recent Agent sessions are unavailable." });
+  }
+});
+
 app.get("/api/auth", async (req, res) => {
   res.json({
     authenticated: await isAuthenticated(req),
@@ -1291,6 +1305,53 @@ async function listCodexSessions({ archived }) {
   return items
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
     .slice(0, 40);
+}
+
+async function listRecentAgentSessions(limit = 6) {
+  const savedSessions = await listCodexSessions({ archived: false });
+  const liveSessions = [
+    ...[...sessions.values()].filter((session) => !session.exited).map(publicSession),
+    ...listDetachedTmuxSessions(),
+  ];
+  const liveByCodexId = new Map();
+
+  for (const session of liveSessions) {
+    if (!session.sessionId) continue;
+    const current = liveByCodexId.get(session.sessionId);
+    if (!current || compareRecentLiveSession(session, current) > 0) {
+      liveByCodexId.set(session.sessionId, session);
+    }
+  }
+
+  return savedSessions
+    .map((session) => {
+      const liveSession = liveByCodexId.get(session.id) || null;
+      const updatedAt = latestTimestamp(session.updatedAt, liveSession?.lastActivityAt);
+      const title = session.title || "Untitled session";
+      const project = liveSession?.project || session.project || ".";
+      return {
+        id: session.id,
+        title,
+        project,
+        updatedAt,
+        live: Boolean(liveSession),
+        webSessionId: liveSession?.id || "",
+      };
+    })
+    .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())
+    .slice(0, limit);
+}
+
+function compareRecentLiveSession(left, right) {
+  const connectedClients = (left.connectedClients || 0) - (right.connectedClients || 0);
+  if (connectedClients !== 0) return connectedClients;
+  return new Date(left.lastActivityAt).getTime() - new Date(right.lastActivityAt).getTime();
+}
+
+function latestTimestamp(left, right) {
+  const leftTime = new Date(left || 0).getTime();
+  const rightTime = new Date(right || 0).getTime();
+  return rightTime > leftTime ? right : left;
 }
 
 async function walkFiles(root) {

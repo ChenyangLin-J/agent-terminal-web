@@ -1,5 +1,5 @@
 (function () {
-  const HOME_CAPTURE_STREAM_ENDPOINT = "https://home.chenyanglin.com/api/capture/transcribe/stream";
+  const TRANSCRIPTION_STREAM_ENDPOINT = "https://home.chenyanglin.com/api/transcribe/stream";
   const VOICE_DRAFT_KEY = "agent_voice_draft";
   const VOICE_MIC_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true">
     <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" />
@@ -47,7 +47,7 @@
 
     function installVoiceCapture() {
       voiceCapture = VoiceCapture.create({
-        streamEndpoint: HOME_CAPTURE_STREAM_ENDPOINT,
+        streamEndpoint: TRANSCRIPTION_STREAM_ENDPOINT,
         onStart() {
           VoiceCapture.saveDraft(VOICE_DRAFT_KEY, promptInput.value || "");
           setVoiceState("recording");

@@ -46,6 +46,13 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/terminal" });
 const sessions = new Map();
 
+wss.on("error", (error) => {
+  logAgentEvent("ws-server-error", {
+    code: cleanClientLogValue(error.code, 80),
+    message: cleanClientLogValue(error.message, 300),
+  });
+});
+
 app.use(express.json());
 app.use("/shared", express.static(path.join(WORKSPACE_ROOT, "shared-web")));
 app.use("/", express.static(path.join(__dirname, "public")));
@@ -263,6 +270,8 @@ app.get("/api/git-status", async (req, res) => {
 });
 
 wss.on("connection", async (ws, req) => {
+  registerWebSocketErrorHandler(ws, req);
+
   if (!(await isAuthenticated(req))) {
     logAgentEvent("ws-reject", { reason: "not-authenticated" });
     send(ws, "error", { message: "Not authenticated." });
@@ -727,6 +736,8 @@ function attachClient(session, ws, { replay = true, clientId = "" } = {}) {
     session.cleanupTimer = null;
   }
 
+  ws.webSessionId = session.id;
+  ws.codexSessionId = session.sessionId;
   const heartbeatTimer = startWebSocketHeartbeat(ws, session);
   ws.clientId = clientId;
   closeDuplicateClient(session, ws);
@@ -833,6 +844,18 @@ function attachClient(session, ws, { replay = true, clientId = "" } = {}) {
       exited: session.exited,
     });
     if (session.clients.size === 0) scheduleCleanup(session);
+  });
+}
+
+function registerWebSocketErrorHandler(ws, req) {
+  ws.on("error", (error) => {
+    logAgentEvent("ws-error", {
+      webSessionId: ws.webSessionId || "",
+      codexSessionId: ws.codexSessionId || "",
+      code: cleanClientLogValue(error.code, 80),
+      message: cleanClientLogValue(error.message, 300),
+      remoteAddress: cleanClientLogValue(req.socket.remoteAddress, 80),
+    });
   });
 }
 

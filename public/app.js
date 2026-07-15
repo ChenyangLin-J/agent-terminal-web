@@ -496,7 +496,7 @@ function openSocket(params, options = {}) {
   closeSocket();
   ensureTerminal();
   const hasSnapshot = !isReconnect && hasSessionSnapshot(snapshotKey);
-  const shouldReplay = options.replay ?? (!isReconnect && !hasSnapshot);
+  const shouldReplay = options.replay ?? (isReconnect ? !hasTerminalContent() : true);
   if (!isReconnect) {
     terminal?.clear();
     if (hasSnapshot) restoreSessionSnapshot(snapshotKey);
@@ -521,6 +521,7 @@ function openSocket(params, options = {}) {
     lastSentCols = 0;
     lastSentRows = 0;
     fitTerminal();
+    refreshTerminalDisplay();
     startClientHeartbeat();
   });
 
@@ -535,7 +536,7 @@ function openSocket(params, options = {}) {
       return;
     }
     if (message.type === "replay") {
-      if (isReconnect) return;
+      if (!shouldReplay) return;
       writeTerminalReplay(message.payload.raw);
       return;
     }
@@ -663,7 +664,7 @@ function hasSessionSnapshot(key) {
 
 function readSessionSnapshots() {
   try {
-    const value = sessionStorage.getItem(SESSION_SNAPSHOT_STORE_KEY);
+    const value = localStorage.getItem(SESSION_SNAPSHOT_STORE_KEY) || sessionStorage.getItem(SESSION_SNAPSHOT_STORE_KEY);
     if (!value) return {};
     const parsed = JSON.parse(value);
     return parsed && typeof parsed === "object" ? parsed : {};
@@ -674,10 +675,10 @@ function readSessionSnapshots() {
 
 function writeSessionSnapshots(snapshots) {
   try {
-    sessionStorage.setItem(SESSION_SNAPSHOT_STORE_KEY, JSON.stringify(snapshots));
+    localStorage.setItem(SESSION_SNAPSHOT_STORE_KEY, JSON.stringify(snapshots));
   } catch {
     try {
-      sessionStorage.removeItem(SESSION_SNAPSHOT_STORE_KEY);
+      sessionStorage.setItem(SESSION_SNAPSHOT_STORE_KEY, JSON.stringify(snapshots));
     } catch {
       // Ignore storage failures; snapshots are only a display optimization.
     }
@@ -696,10 +697,16 @@ function installClientEventLogging() {
 
   document.addEventListener("visibilitychange", () => {
     logClientEvent(`visibility-${document.visibilityState}`);
-    if (document.visibilityState === "visible") ensureVisibleConnection("visibility-visible", { probe: true });
+    if (document.visibilityState === "hidden") {
+      saveActiveSessionSnapshot();
+      return;
+    }
+    refreshTerminalDisplay();
+    ensureVisibleConnection("visibility-visible", { probe: true });
   });
   window.addEventListener("pageshow", (event) => {
     logClientEvent("pageshow", { persisted: event.persisted });
+    refreshTerminalDisplay();
     ensureVisibleConnection("pageshow", { probe: true });
   });
   window.addEventListener("pagehide", (event) => {
@@ -1122,6 +1129,16 @@ function getTerminalBufferText() {
   return lines.join("\n").trimEnd();
 }
 
+function hasTerminalContent() {
+  return Boolean(getTerminalBufferText());
+}
+
+function refreshTerminalDisplay() {
+  if (!terminal || sessionScreen.classList.contains("hidden") || !textView.classList.contains("hidden")) return;
+  fitTerminal();
+  requestAnimationFrame(() => terminal?.refresh(0, Math.max(0, terminal.rows - 1)));
+}
+
 function writeTerminalOutput(raw, { replay = false } = {}) {
   if (!terminal) return;
 
@@ -1187,7 +1204,7 @@ function ensureTerminal() {
     cursorBlink: true,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
     fontSize: 13,
-    scrollback: 5000,
+    scrollback: 12000,
     theme: {
       background: "#080a0f",
       foreground: "#e8ebf0",

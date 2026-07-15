@@ -1307,7 +1307,7 @@ async function listCodexSessions({ archived }) {
     .slice(0, 40);
 }
 
-async function listRecentAgentSessions(limit = 6) {
+async function listRecentAgentSessions(limit = 40) {
   const savedSessions = await listCodexSessions({ archived: false });
   const liveSessions = [
     ...[...sessions.values()].filter((session) => !session.exited).map(publicSession),

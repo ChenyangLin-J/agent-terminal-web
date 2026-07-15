@@ -325,10 +325,6 @@ input {
   touch-action: none;
 }
 
-.terminal-view.replaying #terminal {
-  opacity: 0;
-}
-
 #terminal .xterm,
 #terminal .xterm-screen,
 #terminal .xterm-viewport,

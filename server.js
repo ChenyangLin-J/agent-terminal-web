@@ -32,7 +32,7 @@ const UPLOADS_ROOT = path.resolve(process.env.UPLOADS_ROOT || path.join(WORKSPAC
 const MAX_UPLOAD_FILES = Number(process.env.MAX_UPLOAD_FILES || 5);
 const MAX_UPLOAD_FILE_BYTES = Number(process.env.MAX_UPLOAD_FILE_BYTES || 50 * 1024 * 1024);
 const MAX_RAW_BUFFER = 1024 * 1024;
-const MAX_TEXT_BUFFER = 200_000;
+const MAX_FULL_REPLAY_BYTES = 256 * 1024;
 const WS_HEARTBEAT_MS = Number(process.env.WS_HEARTBEAT_MS || 25_000);
 const USE_TMUX_SESSIONS = process.env.AGENT_USE_TMUX === "1";
 const CODEX_NOTIFY_SCRIPT = path.join(__dirname, "scripts", "codex-notify.js");
@@ -195,6 +195,12 @@ app.post("/api/client-events", (req, res) => {
       wasClean: typeof req.body?.wasClean === "boolean" ? req.body.wasClean : undefined,
       online: typeof req.body?.online === "boolean" ? req.body.online : undefined,
       path: cleanClientLogValue(req.body?.path, 300),
+      replayMode: cleanClientLogValue(req.body?.replayMode, 20),
+      rawChars: optionalNonNegativeInteger(req.body?.rawChars),
+      outputRevision: optionalNonNegativeInteger(req.body?.outputRevision),
+      expectedRevision: optionalNonNegativeInteger(req.body?.expectedRevision),
+      receivedRevision: optionalNonNegativeInteger(req.body?.receivedRevision),
+      durationMs: optionalNonNegativeInteger(req.body?.durationMs),
     });
   }
   res.json({ ok: true });
@@ -296,6 +302,7 @@ wss.on("connection", async (ws, req) => {
   const url = new URL(req.url || "", `http://${req.headers.host}`);
   const attachId = String(url.searchParams.get("attach") || "").trim();
   const shouldReplay = url.searchParams.get("replay") !== "0";
+  const afterRevision = parseOutputRevision(url.searchParams.get("afterRevision"));
   const clientId = cleanWebClientId(url.searchParams.get("clientId"));
 
   let session = attachId ? sessions.get(attachId) : null;
@@ -356,7 +363,7 @@ wss.on("connection", async (ws, req) => {
     }
 
     if (session) {
-      attachClient(session, ws, { replay: shouldReplay, clientId });
+      attachClient(session, ws, { replay: shouldReplay, afterRevision, clientId });
       return;
     }
 
@@ -376,7 +383,7 @@ wss.on("connection", async (ws, req) => {
     });
   }
 
-  attachClient(session, ws, { replay: shouldReplay, clientId });
+  attachClient(session, ws, { replay: shouldReplay, afterRevision, clientId });
 });
 
 server.listen(PORT, HOST, () => {
@@ -593,8 +600,9 @@ function createSession(cwd, launch, restored = {}) {
     exitCode: null,
     signal: null,
     notificationDeviceId: "",
-    rawBuffer: "",
-    textBuffer: "",
+    outputRevision: 0,
+    outputChunks: [],
+    outputChunkBytes: 0,
     startedAt: restored.startedAt || startedAt,
     lastActivityAt: restored.lastActivityAt || restored.startedAt || startedAt,
     cols: 100,
@@ -614,8 +622,8 @@ function createSession(cwd, launch, restored = {}) {
 
   terminal.onData((data) => {
     session.lastActivityAt = new Date().toISOString();
-    appendBuffers(session, data);
-    broadcast(session, "output", { raw: data, text: stripAnsi(data) });
+    const revision = appendBuffers(session, data);
+    broadcast(session, "output", { raw: data, revision });
     broadcast(session, "status", publicSession(session));
   });
 
@@ -744,7 +752,7 @@ function listDetachedTmuxSessions() {
   return items;
 }
 
-function attachClient(session, ws, { replay = true, clientId = "" } = {}) {
+function attachClient(session, ws, { replay = true, afterRevision = null, clientId = "" } = {}) {
   if (session.cleanupTimer) {
     clearTimeout(session.cleanupTimer);
     session.cleanupTimer = null;
@@ -763,13 +771,17 @@ function attachClient(session, ws, { replay = true, clientId = "" } = {}) {
     clientId: clientId ? shortClientId(clientId) : "",
   });
   send(ws, "status", publicSession(session));
-  if (replay && session.rawBuffer) {
+  if (replay) {
+    const replayPayload = outputReplay(session, afterRevision);
     logAgentEvent("ws-replay", {
       webSessionId: session.id,
       codexSessionId: session.sessionId,
-      rawBytes: Buffer.byteLength(session.rawBuffer, "utf8"),
+      replayMode: replayPayload.mode,
+      afterRevision,
+      outputRevision: replayPayload.revision,
+      rawBytes: Buffer.byteLength(replayPayload.raw, "utf8"),
     });
-    send(ws, "replay", { raw: session.rawBuffer, text: session.textBuffer });
+    send(ws, "replay", replayPayload);
   } else if (!replay) {
     logAgentEvent("ws-replay-skip", {
       webSessionId: session.id,
@@ -898,13 +910,14 @@ function closeDuplicateClient(session, ws) {
   if (!ws.clientId) return;
 
   for (const client of session.clients) {
-    if (client !== ws && client.clientId === ws.clientId && client.readyState === client.OPEN) {
+    if (client !== ws && client.clientId === ws.clientId) {
       logAgentEvent("ws-close-duplicate-client", {
         webSessionId: session.id,
         codexSessionId: session.sessionId,
         clientId: shortClientId(ws.clientId),
       });
-      client.close(4000, "duplicate-client");
+      session.clients.delete(client);
+      client.terminate();
     }
   }
 }
@@ -1076,8 +1089,52 @@ function writeAndSubmit(session, text, { paste }) {
 }
 
 function appendBuffers(session, raw) {
-  session.rawBuffer = trimStart(session.rawBuffer + raw, MAX_RAW_BUFFER);
-  session.textBuffer = trimStart(session.textBuffer + stripAnsi(raw), MAX_TEXT_BUFFER);
+  const revision = session.outputRevision + 1;
+  const bytes = Buffer.byteLength(raw, "utf8");
+  session.outputRevision = revision;
+  session.outputChunks.push({ revision, raw, bytes });
+  session.outputChunkBytes += bytes;
+  while (session.outputChunkBytes > MAX_RAW_BUFFER && session.outputChunks.length > 1) {
+    session.outputChunkBytes -= session.outputChunks.shift().bytes;
+  }
+  return revision;
+}
+
+function outputReplay(session, afterRevision) {
+  const revision = session.outputRevision;
+  const chunks = session.outputChunks;
+  const oldestRevision = chunks[0]?.revision ?? revision + 1;
+  const canSendDelta =
+    afterRevision !== null && afterRevision <= revision && afterRevision >= oldestRevision - 1;
+
+  if (canSendDelta) {
+    const deltaChunks = chunks.filter((chunk) => chunk.revision > afterRevision);
+    const deltaBytes = deltaChunks.reduce((total, chunk) => total + chunk.bytes, 0);
+    if (deltaBytes <= MAX_FULL_REPLAY_BYTES) {
+      return {
+        mode: "delta",
+        raw: deltaChunks.map((chunk) => chunk.raw).join(""),
+        fromRevision: afterRevision,
+        revision,
+      };
+    }
+  }
+
+  let bytes = 0;
+  const recentChunks = [];
+  for (let index = chunks.length - 1; index >= 0; index -= 1) {
+    const chunk = chunks[index];
+    if (recentChunks.length && bytes + chunk.bytes > MAX_FULL_REPLAY_BYTES) break;
+    recentChunks.push(chunk.raw);
+    bytes += chunk.bytes;
+  }
+
+  return {
+    mode: "full",
+    raw: recentChunks.reverse().join(""),
+    fromRevision: null,
+    revision,
+  };
 }
 
 function publicSession(session) {
@@ -1101,6 +1158,7 @@ function publicSession(session) {
     exited: session.exited,
     exitCode: session.exitCode,
     signal: session.signal,
+    outputRevision: session.outputRevision,
   };
 }
 
@@ -1636,6 +1694,18 @@ function clampInteger(value, min, max, fallback) {
   return Math.max(min, Math.min(max, parsed));
 }
 
+function parseOutputRevision(value) {
+  if (value === null || value === "") return null;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) return null;
+  return parsed;
+}
+
+function optionalNonNegativeInteger(value) {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
 function execFileText(command, args, cwd) {
   return new Promise((resolve, reject) => {
     execFile(command, args, { cwd, timeout: 5000 }, (error, stdout, stderr) => {
@@ -1646,20 +1716,6 @@ function execFileText(command, args, cwd) {
       resolve(`${stdout}${stderr}`);
     });
   });
-}
-
-function stripAnsi(value) {
-  return value
-    .replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)/g, "")
-    .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/\x1B[()][A-Za-z0-9]/g, "")
-    .replace(/\r/g, "\n")
-    .replace(/\n{4,}/g, "\n\n\n");
-}
-
-function trimStart(value, maxLength) {
-  if (value.length <= maxLength) return value;
-  return value.slice(value.length - maxLength);
 }
 
 function cryptoRandomId() {

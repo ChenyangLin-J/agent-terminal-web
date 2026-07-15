@@ -75,6 +75,10 @@ let activeSessionId = "";
 let activeSessionParams = {};
 let currentSessionExited = false;
 let lastServerSeenAt = 0;
+let historySyncPending = false;
+let historySyncStartedAt = 0;
+let lastOutputRevision = 0;
+let queuedOutputRevision = 0;
 let uploadStatusTimer = null;
 let liveSessionsByCodexId = new Map();
 let archivedSessionsExpanded = false;
@@ -496,11 +500,15 @@ function openSocket(params, options = {}) {
   closeSocket();
   ensureTerminal();
   const hasSnapshot = !isReconnect && hasSessionSnapshot(snapshotKey);
-  const shouldReplay = options.replay ?? (isReconnect ? !hasTerminalContent() : true);
+  const shouldReplay = options.replay !== false;
   if (!isReconnect) {
-    terminal?.clear();
+    terminal?.reset();
+    lastOutputRevision = 0;
+    queuedOutputRevision = 0;
     if (hasSnapshot) restoreSessionSnapshot(snapshotKey);
   }
+  historySyncPending = shouldReplay;
+  historySyncStartedAt = shouldReplay ? Date.now() : 0;
   activeSessionId = params.attach || "";
   activeSessionParams = { ...activeSessionParams, ...params };
   currentSessionExited = false;
@@ -510,14 +518,17 @@ function openSocket(params, options = {}) {
   const query = new URLSearchParams(params);
   query.set("clientId", clientId);
   if (!shouldReplay) query.set("replay", "0");
+  if (shouldReplay && lastOutputRevision > 0) query.set("afterRevision", String(lastOutputRevision));
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  socket = new WebSocket(`${protocol}//${window.location.host}/terminal?${query.toString()}`);
+  const nextSocket = new WebSocket(`${protocol}//${window.location.host}/terminal?${query.toString()}`);
+  socket = nextSocket;
 
-  socket.addEventListener("open", () => {
+  nextSocket.addEventListener("open", () => {
+    if (socket !== nextSocket) return;
     markServerSeen();
     logClientEvent("ws-open");
     reconnectAttempts = 0;
-    setConnectedState("connected");
+    setConnectedState(historySyncPending ? "loading" : "connected");
     lastSentCols = 0;
     lastSentRows = 0;
     fitTerminal();
@@ -525,19 +536,20 @@ function openSocket(params, options = {}) {
     startClientHeartbeat();
   });
 
-  socket.addEventListener("message", (event) => {
+  nextSocket.addEventListener("message", (event) => {
+    if (socket !== nextSocket) return;
     markServerSeen();
     const message = JSON.parse(event.data);
     if (message.type === "client-pong" || message.type === "control-ack") {
       return;
     }
     if (message.type === "output") {
-      writeTerminalOutput(message.payload.raw);
+      handleTerminalOutput(message.payload);
       return;
     }
     if (message.type === "replay") {
       if (!shouldReplay) return;
-      writeTerminalReplay(message.payload.raw);
+      writeTerminalReplay(message.payload);
       return;
     }
     if (message.type === "status") {
@@ -554,7 +566,7 @@ function openSocket(params, options = {}) {
     }
   });
 
-  socket.addEventListener("close", (event) => {
+  nextSocket.addEventListener("close", (event) => {
     stopClientHeartbeat();
     if (socket === event.currentTarget) socket = null;
     if (event.currentTarget.intentionalClose) return;
@@ -636,6 +648,7 @@ function saveActiveSessionSnapshot() {
   const snapshots = readSessionSnapshots();
   snapshots[key] = {
     text: text.slice(-SESSION_SNAPSHOT_MAX_CHARS),
+    revision: lastOutputRevision,
     savedAt: Date.now(),
   };
   trimSessionSnapshots(snapshots);
@@ -648,6 +661,8 @@ function restoreSessionSnapshot(key) {
   const snapshot = readSessionSnapshots()[key];
   if (!snapshot?.text) return false;
 
+  lastOutputRevision = validOutputRevision(snapshot.revision) ?? 0;
+  queuedOutputRevision = lastOutputRevision;
   terminal.write(snapshot.text.replace(/\n/g, "\r\n"), () => {
     terminal.scrollToBottom();
     if (!textView.classList.contains("hidden")) {
@@ -799,7 +814,7 @@ function connectionLooksStale() {
   return socket?.readyState === WebSocket.OPEN && lastServerSeenAt > 0 && Date.now() - lastServerSeenAt > CLIENT_STALE_MS;
 }
 
-function reconnectIfStale(reason, { replay = false } = {}) {
+function reconnectIfStale(reason, { replay = true } = {}) {
   if (!activeSessionId || currentSessionExited || sessionScreen.classList.contains("hidden")) return false;
   if (!connectionLooksStale()) return false;
 
@@ -808,7 +823,7 @@ function reconnectIfStale(reason, { replay = false } = {}) {
   return true;
 }
 
-function ensureVisibleConnection(reason, { probe = false, replay = false } = {}) {
+function ensureVisibleConnection(reason, { probe = false, replay = true } = {}) {
   if (!activeSessionId || currentSessionExited || sessionScreen.classList.contains("hidden")) return false;
   if (document.visibilityState !== "visible") return false;
   if (socket?.readyState === WebSocket.OPEN) {
@@ -995,7 +1010,7 @@ function renderStatus(status) {
   };
   currentSessionExited = Boolean(status.exited);
   statusEls.project.textContent = status.title || displayProject(status.project);
-  statusEls.connection.textContent = status.exited ? "exited" : "connected";
+  setConnectedState(status.exited ? "exited" : historySyncPending ? "loading" : "connected");
   setDocumentTitle(status.title || displayProject(status.project));
   syncSessionUrl(status);
 }
@@ -1129,22 +1144,36 @@ function getTerminalBufferText() {
   return lines.join("\n").trimEnd();
 }
 
-function hasTerminalContent() {
-  return Boolean(getTerminalBufferText());
-}
-
 function refreshTerminalDisplay() {
   if (!terminal || sessionScreen.classList.contains("hidden") || !textView.classList.contains("hidden")) return;
   fitTerminal();
   requestAnimationFrame(() => terminal?.refresh(0, Math.max(0, terminal.rows - 1)));
 }
 
-function writeTerminalOutput(raw, { replay = false } = {}) {
+function handleTerminalOutput(payload = {}) {
+  const revision = validOutputRevision(payload.revision);
+  if (revision !== null) {
+    if (revision <= queuedOutputRevision) return;
+    if (!historySyncPending && queuedOutputRevision > 0 && revision > queuedOutputRevision + 1) {
+      logClientEvent("output-gap", {
+        expectedRevision: queuedOutputRevision + 1,
+        receivedRevision: revision,
+      });
+      openSocket(currentReconnectParams(), { reconnect: true });
+      return;
+    }
+    queuedOutputRevision = revision;
+  }
+  writeTerminalOutput(payload.raw || "", { revision });
+}
+
+function writeTerminalOutput(raw, { replay = false, revision = null, onComplete } = {}) {
   if (!terminal) return;
 
   const shouldFollow = replay || isTerminalAtBottom();
   const previousViewportY = terminal.buffer.active.viewportY;
   terminal?.write(raw, () => {
+    if (revision !== null) lastOutputRevision = Math.max(lastOutputRevision, revision);
     if (shouldFollow) {
       terminal.scrollToBottom();
     } else {
@@ -1153,22 +1182,59 @@ function writeTerminalOutput(raw, { replay = false } = {}) {
     if (!textView.classList.contains("hidden")) {
       terminalText.value = getTerminalBufferText();
     }
+    onComplete?.();
   });
 }
 
-function writeTerminalReplay(raw) {
+function writeTerminalReplay(payload = {}) {
   if (!terminal) return;
 
-  terminalView.classList.add("replaying");
-  terminal.clear();
-  terminal.write(raw, () => {
+  const mode = payload.mode === "delta" ? "delta" : "full";
+  const revision = validOutputRevision(payload.revision);
+  const raw = String(payload.raw || "");
+
+  if (mode === "delta") {
+    if (revision !== null) queuedOutputRevision = Math.max(queuedOutputRevision, revision);
+    if (!raw) {
+      if (revision !== null) lastOutputRevision = Math.max(lastOutputRevision, revision);
+      finishHistorySync(mode, raw.length);
+      return;
+    }
+    writeTerminalOutput(raw, {
+      replay: true,
+      revision,
+      onComplete: () => finishHistorySync(mode, raw.length),
+    });
+    return;
+  }
+
+  queuedOutputRevision = revision ?? 0;
+  terminal.write(`\x1bc${raw}`, () => {
+    lastOutputRevision = revision ?? 0;
     terminal.scrollToBottom();
-    terminalView.classList.remove("replaying");
     if (!textView.classList.contains("hidden")) {
       terminalText.value = getTerminalBufferText();
     }
-    saveActiveSessionSnapshot();
+    finishHistorySync(mode, raw.length);
   });
+}
+
+function finishHistorySync(mode, rawChars) {
+  historySyncPending = false;
+  setConnectedState(socket?.readyState === WebSocket.OPEN ? "connected" : "detached");
+  logClientEvent("history-sync-complete", {
+    replayMode: mode,
+    rawChars,
+    outputRevision: lastOutputRevision,
+    durationMs: historySyncStartedAt ? Date.now() - historySyncStartedAt : 0,
+  });
+  historySyncStartedAt = 0;
+  saveActiveSessionSnapshot();
+}
+
+function validOutputRevision(value) {
+  const revision = Number(value);
+  return Number.isSafeInteger(revision) && revision >= 0 ? revision : null;
 }
 
 function isTerminalAtBottom() {

@@ -403,6 +403,7 @@ async function sendHomeTurnNotification(session, event) {
     return { sent: 0, subscriptionCount: 0, skipped: "no-browser-device" };
   }
 
+  const notificationApp = session.notificationApp === "home" ? "home" : "agent";
   const title = cleanCustomTitle(session.title) || "Codex session";
   const query = new URLSearchParams({
     attach: session.id,
@@ -418,11 +419,11 @@ async function sendHomeTurnNotification(session, event) {
       notification: {
         title: `Agent 完成 · ${title}`,
         body: "任务已完成，点开查看结果。",
-        url: `/?${query}`,
+        url: notificationApp === "home" ? `/open/agent?${query}` : `/?${query}`,
         tag: `agent-${session.sessionId || session.id}`,
         badge: 0,
       },
-      target: { app: "agent", deviceId: session.notificationDeviceId },
+      target: { app: notificationApp, deviceId: session.notificationDeviceId },
     }),
     signal: AbortSignal.timeout(8_000),
   });
@@ -599,7 +600,8 @@ function createSession(cwd, launch, restored = {}) {
     exited: false,
     exitCode: null,
     signal: null,
-    notificationDeviceId: "",
+    notificationApp: restored.notificationApp === "home" ? "home" : "agent",
+    notificationDeviceId: cleanWebClientId(restored.notificationDeviceId),
     outputRevision: 0,
     outputChunks: [],
     outputChunkBytes: 0,
@@ -688,6 +690,8 @@ function restoreTmuxSession(id) {
         id,
         startedAt: record.startedAt,
         lastActivityAt: record.lastActivityAt,
+        notificationApp: record.notificationApp,
+        notificationDeviceId: record.notificationDeviceId,
       },
     );
   }
@@ -711,6 +715,8 @@ function restoreTmuxSession(id) {
     attachExistingTmux: true,
     startedAt: record.startedAt,
     lastActivityAt: record.lastActivityAt,
+    notificationApp: record.notificationApp,
+    notificationDeviceId: record.notificationDeviceId,
   });
 }
 
@@ -805,7 +811,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
     if (session.exited) return;
 
     if (message.type === "input" && typeof message.data === "string") {
-      rememberNotificationDevice(session, message.notificationDeviceId);
+      rememberNotificationTarget(session, message.notificationApp, message.notificationDeviceId);
       logControlMessage(session, ws, "input", message.data);
       session.terminal.write(message.data);
       session.lastActivityAt = new Date().toISOString();
@@ -816,7 +822,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
     if (message.type === "submit" && typeof message.data === "string") {
       const normalized = message.data.trim();
       if (normalized) {
-        rememberNotificationDevice(session, message.notificationDeviceId);
+        rememberNotificationTarget(session, message.notificationApp, message.notificationDeviceId);
         logControlMessage(session, ws, "submit", normalized);
         if (!session.title) session.title = cleanTitle(normalized) || "New Codex session";
         writeAndSubmit(session, normalized, { paste: true });
@@ -829,7 +835,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
     }
 
     if (message.type === "command" && typeof message.data === "string") {
-      rememberNotificationDevice(session, message.notificationDeviceId);
+      rememberNotificationTarget(session, message.notificationApp, message.notificationDeviceId);
       logControlMessage(session, ws, "command", message.data);
       writeAndSubmit(session, message.data.trim(), { paste: false });
       session.lastActivityAt = new Date().toISOString();
@@ -885,9 +891,11 @@ function registerWebSocketErrorHandler(ws, req) {
   });
 }
 
-function rememberNotificationDevice(session, value) {
+function rememberNotificationTarget(session, app, value) {
   const deviceId = cleanWebClientId(value);
-  if (deviceId) session.notificationDeviceId = deviceId;
+  if (!deviceId) return;
+  session.notificationApp = app === "home" ? "home" : "agent";
+  session.notificationDeviceId = deviceId;
 }
 
 function startWebSocketHeartbeat(ws, session) {
@@ -1229,6 +1237,8 @@ function persistWebSession(session) {
     mode: session.mode,
     sessionId: session.sessionId,
     title: session.title,
+    notificationApp: session.notificationApp,
+    notificationDeviceId: session.notificationDeviceId,
     tmuxName: session.tmuxName,
     startedAt: session.startedAt,
     lastActivityAt: session.lastActivityAt,

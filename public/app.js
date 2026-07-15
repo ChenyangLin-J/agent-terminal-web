@@ -83,7 +83,8 @@ let uploadStatusTimer = null;
 let liveSessionsByCodexId = new Map();
 let archivedSessionsExpanded = false;
 const clientId = getClientId();
-const pushDeviceId = getPushDeviceId();
+const notificationTarget = getNotificationTarget();
+const pushDeviceId = notificationTarget.deviceId;
 let pushRegistrationPromise = null;
 
 window.addEventListener("resize", () => fitTerminal({ delay: 120 }));
@@ -490,6 +491,7 @@ function sessionUrl(params) {
   for (const [key, value] of Object.entries(params)) {
     if (value) url.searchParams.set(key, value);
   }
+  appendNotificationTarget(url);
   return url.toString();
 }
 
@@ -587,8 +589,17 @@ function openSocket(params, options = {}) {
 function submitPrompt() {
   const prompt = promptInput.value.trim();
   if (!prompt) return;
-  void ensureAgentPushSubscription({ requestPermission: true }).catch(logPushRegistrationError);
-  if (send({ type: "submit", data: prompt, notificationDeviceId: pushDeviceId })) {
+  if (notificationTarget.app === "agent") {
+    void ensureAgentPushSubscription({ requestPermission: true }).catch(logPushRegistrationError);
+  }
+  if (
+    send({
+      type: "submit",
+      data: prompt,
+      notificationApp: notificationTarget.app,
+      notificationDeviceId: pushDeviceId,
+    })
+  ) {
     promptInput.value = "";
   } else {
     setUploadStatus("连接恢复中，文本已保留。");
@@ -596,11 +607,21 @@ function submitPrompt() {
 }
 
 function command(value) {
-  send({ type: "command", data: value, notificationDeviceId: pushDeviceId });
+  send({
+    type: "command",
+    data: value,
+    notificationApp: notificationTarget.app,
+    notificationDeviceId: pushDeviceId,
+  });
 }
 
 function sendTerminalKey(value) {
-  send({ type: "input", data: value, notificationDeviceId: pushDeviceId });
+  send({
+    type: "input",
+    data: value,
+    notificationApp: notificationTarget.app,
+    notificationDeviceId: pushDeviceId,
+  });
 }
 
 function detach(goHome = true) {
@@ -909,6 +930,27 @@ function getPushDeviceId() {
   return next;
 }
 
+function getNotificationTarget() {
+  const params = new URLSearchParams(window.location.search);
+  const deviceId = cleanNotificationDeviceId(params.get("notificationDeviceId"));
+  if (params.get("notificationApp") === "home" && deviceId) {
+    return { app: "home", deviceId };
+  }
+  return { app: "agent", deviceId: getPushDeviceId() };
+}
+
+function cleanNotificationDeviceId(value) {
+  return String(value || "")
+    .replace(/[^a-zA-Z0-9_.:-]/g, "")
+    .slice(0, 80);
+}
+
+function appendNotificationTarget(url) {
+  if (notificationTarget.app !== "home") return;
+  url.searchParams.set("notificationApp", "home");
+  url.searchParams.set("notificationDeviceId", notificationTarget.deviceId);
+}
+
 function ensureAgentPushSubscription({ requestPermission = false } = {}) {
   if (pushRegistrationPromise) return pushRegistrationPromise;
   pushRegistrationPromise = registerAgentPushSubscription({ requestPermission }).finally(() => {
@@ -1075,6 +1117,7 @@ function syncSessionUrl(status) {
   url.searchParams.set("cwd", cwd);
   if (status.sessionId) url.searchParams.set("sessionId", status.sessionId);
   if (title) url.searchParams.set("title", title);
+  appendNotificationTarget(url);
   window.history.replaceState(null, "", url.toString());
 }
 

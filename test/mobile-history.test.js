@@ -14,5 +14,5 @@ test("mobile session recovery persists and incrementally restores terminal histo
   assert.match(source, /terminal\?\.refresh\(0, Math\.max\(0, terminal\.rows - 1\)\)/);
   assert.doesNotMatch(source, /terminalView\.classList\.add\("replaying"\)/);
   assert.match(source, /scrollback: 12000/);
-  assert.match(page, /app\.js\?v=20260716-session-delta-1/);
+  assert.match(page, /app\.js\?v=20260716-notification-route-1/);
 });

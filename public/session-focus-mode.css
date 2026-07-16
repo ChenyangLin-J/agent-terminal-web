@@ -1,0 +1,68 @@
+.view-tabs.focus-mode-tabs {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 42px;
+}
+
+#session-focus-toggle {
+  display: grid;
+  width: 42px;
+  min-height: 38px;
+  place-items: center;
+  padding: 0;
+  color: #b9c2d2;
+  font-size: 22px;
+  line-height: 1;
+}
+
+#session-focus-toggle[aria-pressed="true"] {
+  border-color: #667ff0;
+  background: #26366b;
+  color: #ffffff;
+}
+
+.session-screen.session-focus-mode {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.session-screen.session-focus-mode .session-header,
+.session-screen.session-focus-mode .composer {
+  display: none;
+}
+
+.session-screen.session-focus-mode .view-tabs {
+  padding-top: max(8px, env(safe-area-inset-top));
+}
+
+.session-screen.session-focus-mode .quick-actions {
+  padding-bottom: max(8px, env(safe-area-inset-bottom));
+}
+
+.session-screen.session-focus-mode .terminal-view,
+.session-screen.session-focus-mode #terminal,
+.session-screen.session-focus-mode #terminal .xterm,
+.session-screen.session-focus-mode #terminal .xterm-screen,
+.session-screen.session-focus-mode #terminal .xterm-viewport,
+.session-screen.session-focus-mode #terminal .xterm-scroll-area,
+.session-screen.session-focus-mode .text-view,
+.session-screen.session-focus-mode #terminal-text {
+  touch-action: pan-y pinch-zoom;
+}
+
+.app-server-session .session-screen.session-focus-mode .quick-actions {
+  display: flex;
+}
+
+.app-server-session .session-screen.session-focus-mode .quick-actions button:not(#page-up):not(#page-down) {
+  display: none;
+}
+
+@media (max-width: 520px) {
+  .view-tabs.focus-mode-tabs {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 46px;
+  }
+
+  #session-focus-toggle {
+    width: 46px;
+    min-height: 42px;
+    font-size: 24px;
+  }
+}

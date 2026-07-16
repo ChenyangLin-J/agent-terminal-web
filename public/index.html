@@ -36,7 +36,7 @@
       }
     </style>
     <link rel="stylesheet" href="/vendor/xterm-css/xterm.css?v=20260625-5" />
-    <link rel="stylesheet" href="/styles.css?v=20260716-mobile-viewport-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260716-app-server-experiment-1" />
   </head>
   <body>
     <main class="app">
@@ -46,7 +46,7 @@
             <img class="start-brand-icon" src="/favicon.svg?v=20260710-1" alt="" />
             <div>
               <h1>Codex Agent</h1>
-              <p>Start, reconnect, or resume a Codex CLI session.</p>
+              <p>Start, reconnect, or resume a Codex session.</p>
             </div>
           </div>
           <button id="logout" type="button">Logout</button>
@@ -63,6 +63,14 @@
             <select id="launch-mode">
               <option value="new">New session</option>
               <option value="resume-last">Resume last</option>
+            </select>
+          </label>
+
+          <label>
+            <span>Engine</span>
+            <select id="transport">
+              <option value="terminal">Terminal（稳定）</option>
+              <option value="app-server">App Server（试用）</option>
             </select>
           </label>
 
@@ -132,6 +140,19 @@
 
         <section id="composer" class="composer" aria-label="Prompt composer">
           <input id="file-input" class="hidden" type="file" multiple />
+          <section id="agent-request" class="agent-request hidden" aria-live="assertive">
+            <header>
+              <strong id="agent-request-title">Codex 需要确认</strong>
+              <span>App Server</span>
+            </header>
+            <pre id="agent-request-detail"></pre>
+            <textarea id="agent-request-answer" class="hidden" rows="2" placeholder="输入回答"></textarea>
+            <div class="agent-request-actions">
+              <button id="agent-request-accept" class="primary" type="button">允许一次</button>
+              <button id="agent-request-session" type="button">本次会话允许</button>
+              <button id="agent-request-decline" type="button">拒绝</button>
+            </div>
+          </section>
           <section id="turn-ledger" class="turn-ledger hidden" aria-label="Current turn requirements">
             <header>
               <strong>本轮要求</strong>
@@ -169,6 +190,6 @@
     <script src="/shared/voice-capture-widget.js?v=20260715-mic-release-1"></script>
     <script src="/agent-upload.js?v=20260713-progress-1"></script>
     <script src="/agent-voice-input.js?v=20260716-transcribe-only-1"></script>
-    <script src="/app.js?v=20260716-followup-ledger-1"></script>
+    <script src="/app.js?v=20260716-app-server-experiment-1"></script>
   </body>
 </html>

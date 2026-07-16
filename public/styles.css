@@ -408,6 +408,10 @@ input {
   white-space: nowrap;
 }
 
+.app-server-session .quick-actions {
+  display: none;
+}
+
 .composer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 86px;
@@ -421,6 +425,58 @@ input {
 .composer.drag-over {
   border-top-color: #5b7cfa;
   background: #151b2a;
+}
+
+.agent-request {
+  grid-column: 1 / -1;
+  padding: 10px;
+  border: 1px solid #7d5e2d;
+  border-radius: 10px;
+  background: #201a12;
+}
+
+.agent-request header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #ffe4b2;
+  font-size: 13px;
+}
+
+.agent-request header span {
+  color: #bda47a;
+  font-size: 11px;
+}
+
+.agent-request pre {
+  max-height: 128px;
+  margin: 8px 0;
+  overflow: auto;
+  color: #e4d6bf;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.agent-request textarea {
+  width: 100%;
+  min-height: 58px;
+  margin: 0 0 8px;
+  resize: vertical;
+  background: #171b24;
+}
+
+.agent-request-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.agent-request-actions button {
+  min-height: 38px;
+  padding: 7px 10px;
+  font-size: 13px;
 }
 
 .turn-ledger {
@@ -467,6 +523,10 @@ input {
 
 .turn-ledger li[data-status="queued"] {
   color: #d3b77e;
+}
+
+.turn-ledger li[data-status="failed"] {
+  color: #e49a9a;
 }
 
 .prompt-field {

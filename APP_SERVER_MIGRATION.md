@@ -1,48 +1,34 @@
-# Codex App Server migration
+# Codex App Server mode
 
-Agent Terminal currently runs the interactive Codex CLI inside a PTY. The browser sends text to that terminal and cannot bind a follow-up to an exact Codex turn.
+Agent Terminal provides two per-session engines:
 
-The App Server migration replaces keystroke injection with JSON-RPC while keeping the existing PTY path available until the structured client covers the same behavior.
+- `Terminal（稳定）` runs the interactive Codex CLI in a PTY and remains the default.
+- `App Server（试用）` uses JSON-RPC so a follow-up can be attached to an exact Codex turn.
 
-## Current experiment
+Select the engine on the session start screen. Home and other callers can also open an App Server session with:
 
-`lib/codex-app-server-client.js` implements the control layer without changing production transport:
+```text
+/?new=1&cwd=.&transport=app-server
+```
 
-- initializes one App Server connection;
-- starts or resumes a thread;
-- starts a turn and retains its exact `turnId`;
-- steers only when `expectedTurnId` matches the active turn;
-- keeps queued prompts in the web client and starts them after `turn/completed`;
-- surfaces notifications and server-initiated requests for the future UI;
-- rejects a late steer instead of silently turning it into another turn.
+## Behavior
 
-The current PTY UI also tracks the original request, current-turn follow-ups, and queued prompts. This improves completeness immediately, but the PTY cannot provide the exact turn guarantee of App Server.
+`lib/codex-app-server-client.js` owns one App Server process per live web session. It initializes the connection, starts or resumes a thread, tracks the active `turnId`, and persists the transport and thread id after the first turn starts so the web session can be restored after a service restart.
 
-## Remaining production work
+- `新任务` calls `turn/start`.
+- `追加当前` calls `turn/steer` with `expectedTurnId`; it cannot silently steer a different turn.
+- `下一轮` stays in an application queue and calls `turn/start` only after the current `turn/completed` event.
+- If a follow-up reaches the server just after completion, its text is retained and starts as a new turn instead of being lost.
 
-1. Session process
-   - Add an `app-server` session type beside the current `pty` type.
-   - Persist the transport type, `threadId`, active `turnId`, and pending prompts.
-   - Resume App Server threads with `thread/resume` after a service restart.
+The browser renders agent text, reasoning summaries, command output, file changes, turn state, and errors as readable terminal output. Command and file approvals, permission requests, and text questions appear as an explicit decision card. Voice input, uploads, push notifications, session titles, archive, Text view, and Home deep links continue to use the shared web UI.
 
-2. Structured output
-   - Render agent message deltas, reasoning summaries, command output, file changes, plans, and errors from App Server notifications.
-   - Keep the current text view, but populate it from structured items rather than terminal escape sequences.
+## Current limits
 
-3. User decisions
-   - Add UI for command approval, file-change approval, permission requests, MCP elicitation, and tool questions.
-   - Send the corresponding JSON-RPC response to the server request id.
+- Raw terminal keystrokes and CLI slash commands are available only in Terminal mode.
+- App Server mode shows the structured events needed by the current workflow, not every experimental event type.
+- Multi-question tool prompts use a compact text answer field rather than a dedicated form for every question.
+- Terminal remains the fallback and default until App Server has been used reliably in normal phone sessions.
 
-4. Follow-up delivery
-   - Make “追加当前” call `turn/steer` with `expectedTurnId`.
-   - If the turn already completed, keep the text and let the user choose whether to start it as the next turn.
-   - Make “下一轮” an application queue that calls `turn/start` only after `turn/completed`.
+## Verification
 
-5. Compatibility
-   - Replace `/status` and `/permissions` terminal shortcuts with structured status and permission controls.
-   - Preserve uploads, voice transcription, push notifications, session naming, archive, and Home deep links.
-
-6. Rollout
-   - Keep PTY as the default while App Server is behind a per-session feature switch.
-   - Test new sessions, resume, concurrent browser reconnects, approvals, rejected late steers, queue ordering, service restarts, and mobile layout.
-   - Switch the default only after the structured path passes those checks; retain PTY as a fallback during the first rollout period.
+Automated tests cover exact-turn steering, rejected late steering, immediate completion races, queue ordering, the engine switch, and approval UI wiring. Browser checks cover mobile layout, approval interaction, reconnect, a same-turn follow-up, and a queued second turn.

@@ -2,6 +2,7 @@ const startScreen = document.querySelector("#start-screen");
 const sessionScreen = document.querySelector("#session-screen");
 const projectSelect = document.querySelector("#project");
 const launchModeSelect = document.querySelector("#launch-mode");
+const transportSelect = document.querySelector("#transport");
 const sessionIdInput = document.querySelector("#session-id");
 const connectButton = document.querySelector("#connect");
 const refreshSessionsButton = document.querySelector("#refresh-sessions");
@@ -33,6 +34,13 @@ const uploadStatus = document.querySelector("#upload-status");
 const turnLedger = document.querySelector("#turn-ledger");
 const turnLedgerStatus = document.querySelector("#turn-ledger-status");
 const turnRequirements = document.querySelector("#turn-requirements");
+const agentRequest = document.querySelector("#agent-request");
+const agentRequestTitle = document.querySelector("#agent-request-title");
+const agentRequestDetail = document.querySelector("#agent-request-detail");
+const agentRequestAnswer = document.querySelector("#agent-request-answer");
+const agentRequestAccept = document.querySelector("#agent-request-accept");
+const agentRequestSession = document.querySelector("#agent-request-session");
+const agentRequestDecline = document.querySelector("#agent-request-decline");
 const terminalView = document.querySelector(".terminal-view");
 const textView = document.querySelector("#text-view");
 const terminalText = document.querySelector("#terminal-text");
@@ -88,6 +96,10 @@ let uploadStatusTimer = null;
 let liveSessionsByCodexId = new Map();
 let archivedSessionsExpanded = false;
 let latestTurnState = { active: false, requirements: [], queuedTurns: [] };
+let activeTransport = "terminal";
+let activeSessionReady = true;
+let pendingAgentRequest = null;
+let lastSubmittedPrompt = "";
 const clientId = getClientId();
 const notificationTarget = getNotificationTarget();
 const pushDeviceId = notificationTarget.deviceId;
@@ -130,6 +142,9 @@ sendPermissionsButton.addEventListener("click", () => command("/permissions"));
 killSessionButton.addEventListener("click", endSession);
 sendPromptButton.addEventListener("click", () => submitPrompt("auto"));
 queuePromptButton.addEventListener("click", () => submitPrompt("queue"));
+agentRequestAccept.addEventListener("click", () => respondToAgentRequest("accept"));
+agentRequestSession.addEventListener("click", () => respondToAgentRequest("acceptForSession"));
+agentRequestDecline.addEventListener("click", () => respondToAgentRequest("decline"));
 promptInput.addEventListener("keydown", (event) => {
   if (event.isComposing) return;
   if (event.key === "Enter" && !event.shiftKey) {
@@ -246,6 +261,7 @@ function renderLiveSessions(sessions) {
             cwd: session.project || ".",
             sessionId: session.sessionId || "",
             title: session.title || "New Codex session",
+            transport: session.transport || "terminal",
           }),
       }),
     );
@@ -294,6 +310,7 @@ function renderSavedCodexSessions(sessions) {
             cwd: projectForSession(session),
             sessionId: session.id,
             title: session.title || "Untitled session",
+            transport: transportSelect.value || "terminal",
           }),
         secondaryAction: "Rename",
         onSecondaryClick: () => renameCodexSession(session),
@@ -449,6 +466,7 @@ function startSession(overrides = {}) {
     cwd: overrides.cwd || projectSelect.value,
     mode: overrides.mode || (overrides.sessionId ? "new" : launchModeSelect.value),
     sessionId: overrides.sessionId || sessionIdInput.value.trim(),
+    transport: overrides.transport || transportSelect.value || "terminal",
   });
 }
 
@@ -462,6 +480,7 @@ function openInitialSessionFromUrl() {
   const sessionId = params.get("sessionId") || "";
   const title = params.get("title") || "";
   const startNew = params.get("new") === "1";
+  const transport = params.get("transport") === "app-server" ? "app-server" : "terminal";
 
   if (title) setDocumentTitle(title);
 
@@ -469,6 +488,7 @@ function openInitialSessionFromUrl() {
     attachSession(attach, {
       cwd: params.get("cwd") || ".",
       sessionId,
+      transport,
     });
     return true;
   }
@@ -477,6 +497,7 @@ function openInitialSessionFromUrl() {
     startSession({
       cwd: params.get("cwd") || ".",
       sessionId,
+      transport,
     });
     return true;
   }
@@ -485,6 +506,7 @@ function openInitialSessionFromUrl() {
     startSession({
       cwd: params.get("cwd") || ".",
       mode: "new",
+      transport,
     });
     return true;
   }
@@ -537,6 +559,10 @@ function openSocket(params, options = {}) {
   }
   historySyncPending = shouldReplay;
   historySyncStartedAt = shouldReplay ? Date.now() : 0;
+  activeTransport = params.transport === "app-server" ? "app-server" : "terminal";
+  activeSessionReady = activeTransport !== "app-server";
+  document.body.classList.toggle("app-server-session", activeTransport === "app-server");
+  clearAgentRequest();
   activeSessionId = params.attach || "";
   activeSessionParams = { ...activeSessionParams, ...params };
   currentSessionExited = false;
@@ -556,7 +582,13 @@ function openSocket(params, options = {}) {
     markServerSeen();
     logClientEvent("ws-open");
     reconnectAttempts = 0;
-    setConnectedState(historySyncPending ? "loading" : "connected");
+    setConnectedState(
+      activeTransport === "app-server" && !activeSessionReady
+        ? "starting"
+        : historySyncPending
+          ? "loading"
+          : "connected",
+    );
     lastSentCols = 0;
     lastSentRows = 0;
     fitTerminal();
@@ -588,8 +620,20 @@ function openSocket(params, options = {}) {
       renderStatus(message.payload);
       return;
     }
+    if (message.type === "agent-request") {
+      renderAgentRequest(message.payload);
+      return;
+    }
+    if (message.type === "agent-request-resolved") {
+      if (!message.payload.requestId || message.payload.requestId === pendingAgentRequest?.requestId) clearAgentRequest();
+      return;
+    }
     if (message.type === "error") {
       terminal?.writeln(`\r\n${message.payload.message}\r\n`);
+      if (message.payload.preservePrompt && lastSubmittedPrompt && !promptInput.value.trim()) {
+        promptInput.value = lastSubmittedPrompt;
+        setUploadStatus("发送失败，文本已保留。");
+      }
       if (message.payload.goHome) {
         currentSessionExited = true;
         setConnectedState("detached");
@@ -631,21 +675,72 @@ function submitPrompt(deliveryMode = "auto") {
       notificationDeviceId: pushDeviceId,
     })
   ) {
+    lastSubmittedPrompt = prompt;
     promptInput.value = "";
+    setUploadStatus("正在发送…");
   } else {
     setUploadStatus("连接恢复中，文本已保留。");
   }
 }
 
 function handleControlAck(payload = {}) {
+  if (payload.kind === "agent-response") {
+    setUploadStatus("已提交给 Codex。", { clear: true });
+    return;
+  }
   if (payload.kind !== "submit") return;
+  lastSubmittedPrompt = "";
   if (payload.turnState) renderTurnState(payload.turnState);
   const message = {
     new: "已开始新任务。",
     steer: "已追加到当前任务；不会替换前面的要求。",
     queue: "已排到下一轮。",
+    "queue-fallback": "当前任务刚刚结束，已自动转到下一轮。",
   }[payload.deliveryMode];
   if (message) setUploadStatus(message, { clear: true });
+}
+
+function renderAgentRequest(payload = {}) {
+  pendingAgentRequest = payload;
+  agentRequestTitle.textContent = payload.title || "Codex 需要确认";
+  agentRequestDetail.textContent = payload.detail || payload.method || "";
+  const isQuestion = payload.kind === "question";
+  const unsupported = payload.kind === "unsupported";
+  agentRequestAnswer.classList.toggle("hidden", !isQuestion);
+  agentRequestAnswer.value = "";
+  if (isQuestion) {
+    const options = (payload.questions || []).flatMap((question) => question.options || []).map((option) => option.label);
+    agentRequestAnswer.placeholder = options.length ? `可选：${options.join(" / ")}；也可以直接输入` : "输入回答";
+  }
+  agentRequestAccept.textContent = isQuestion ? "提交回答" : "允许一次";
+  agentRequestAccept.classList.toggle("hidden", unsupported);
+  agentRequestSession.classList.toggle("hidden", isQuestion || unsupported);
+  agentRequest.classList.remove("hidden");
+}
+
+function respondToAgentRequest(decision) {
+  if (!pendingAgentRequest) return;
+  const answer = agentRequestAnswer.value.trim();
+  if (pendingAgentRequest.kind === "question" && !answer) {
+    agentRequestAnswer.focus();
+    return;
+  }
+  if (
+    send({
+      type: "agent-response",
+      requestId: pendingAgentRequest.requestId,
+      decision,
+      answer,
+    })
+  ) {
+    setUploadStatus("正在提交确认…");
+  }
+}
+
+function clearAgentRequest() {
+  pendingAgentRequest = null;
+  agentRequest.classList.add("hidden");
+  agentRequestAnswer.value = "";
 }
 
 function command(value) {
@@ -935,6 +1030,7 @@ function currentReconnectParams() {
     cwd: activeSessionParams.cwd || params.get("cwd") || ".",
     sessionId: activeSessionParams.sessionId || params.get("sessionId") || "",
     title: activeSessionParams.title || params.get("title") || "",
+    transport: activeSessionParams.transport || params.get("transport") || "terminal",
   };
 }
 
@@ -1091,10 +1187,14 @@ function renderStatus(status) {
     cwd: status.project || ".",
     sessionId: status.sessionId || activeSessionParams.sessionId || "",
     title: status.title || displayProject(status.project),
+    transport: status.transport || "terminal",
   };
+  activeTransport = status.transport === "app-server" ? "app-server" : "terminal";
+  activeSessionReady = status.ready !== false;
+  document.body.classList.toggle("app-server-session", activeTransport === "app-server");
   currentSessionExited = Boolean(status.exited);
   statusEls.project.textContent = status.title || displayProject(status.project);
-  setConnectedState(status.exited ? "exited" : historySyncPending ? "loading" : "connected");
+  setConnectedState(status.exited ? "exited" : !activeSessionReady ? "starting" : historySyncPending ? "loading" : "connected");
   setDocumentTitle(status.title || displayProject(status.project));
   renderTurnState(status.turnState);
   syncSessionUrl(status);
@@ -1107,12 +1207,15 @@ function renderTurnState(value = {}) {
     queuedTurns: Array.isArray(value.queuedTurns) ? value.queuedTurns : [],
   };
   const items = [...latestTurnState.requirements, ...latestTurnState.queuedTurns];
+  const hasFailedItem = items.some((item) => item.status === "failed");
   turnLedger.classList.toggle("hidden", items.length === 0);
   turnLedgerStatus.textContent = latestTurnState.active
     ? latestTurnState.queuedTurns.length
       ? `进行中 · ${latestTurnState.queuedTurns.length} 条待下一轮`
       : "进行中"
-    : "已完成";
+    : hasFailedItem
+      ? "有未完成"
+      : "已完成";
   turnRequirements.replaceChildren(
     ...items.map((item) => {
       const row = document.createElement("li");
@@ -1127,8 +1230,8 @@ function renderTurnState(value = {}) {
 }
 
 function setConnectedState(state) {
-  statusEls.connection.textContent = state;
-  const connected = state === "connected";
+  statusEls.connection.textContent = activeTransport === "app-server" ? `app server · ${state}` : state;
+  const connected = state === "connected" && activeSessionReady;
   sendPromptButton.disabled = !connected;
   queuePromptButton.disabled = !connected;
   textTabButton.disabled = !connected;
@@ -1140,7 +1243,7 @@ function setConnectedState(state) {
   keyEscButton.disabled = !connected;
   sendStatusButton.disabled = !connected;
   sendPermissionsButton.disabled = !connected;
-  killSessionButton.disabled = !connected;
+  killSessionButton.disabled = !["connected", "starting", "loading"].includes(state);
 }
 
 function showStartScreen() {
@@ -1150,6 +1253,7 @@ function showStartScreen() {
   clearSessionUrl();
   startScreen.classList.remove("hidden");
   sessionScreen.classList.add("hidden");
+  document.body.classList.remove("app-server-session");
   window.clearInterval(sessionsTimer);
   refreshLists().then(scrollStartScreenToTop);
   sessionsTimer = window.setInterval(refreshLists, 10_000);
@@ -1181,7 +1285,10 @@ function syncSessionUrl(status) {
     url.searchParams.get("attach") === status.id &&
     (status.sessionId ? url.searchParams.get("sessionId") === status.sessionId : !url.searchParams.has("sessionId")) &&
     url.searchParams.get("cwd") === cwd &&
-    url.searchParams.get("title") === title;
+    url.searchParams.get("title") === title &&
+    (status.transport === "app-server"
+      ? url.searchParams.get("transport") === "app-server"
+      : !url.searchParams.has("transport"));
   if (alreadySynced) return;
 
   url.search = "";
@@ -1189,6 +1296,7 @@ function syncSessionUrl(status) {
   url.searchParams.set("cwd", cwd);
   if (status.sessionId) url.searchParams.set("sessionId", status.sessionId);
   if (title) url.searchParams.set("title", title);
+  if (status.transport === "app-server") url.searchParams.set("transport", "app-server");
   appendNotificationTarget(url);
   window.history.replaceState(null, "", url.toString());
 }
@@ -1468,9 +1576,10 @@ function redirectToLogin(loginUrl = "") {
 }
 
 function formatLaunch(status) {
-  if (status.sessionId) return "resumed";
-  if (status.mode === "resume-last") return "resume last";
-  return "new session";
+  const transport = status.transport === "app-server" ? "app server · " : "";
+  if (status.sessionId) return `${transport}resumed`;
+  if (status.mode === "resume-last") return `${transport}resume last`;
+  return `${transport}new session`;
 }
 
 function formatTime(value) {

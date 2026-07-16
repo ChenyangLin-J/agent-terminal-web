@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import busboy from "busboy";
 import express from "express";
 import { WebSocketServer } from "ws";
+import { CodexAppServerClient } from "./lib/codex-app-server-client.js";
 
 const AGENT_TIME_ZONE = "Asia/Shanghai";
 process.env.TZ = AGENT_TIME_ZONE;
@@ -50,6 +51,7 @@ const AGENT_NOTIFY_URL = process.env.AGENT_NOTIFY_URL || `http://${HOST}:${PORT}
 const HOME_PUSH_URL = process.env.HOME_PUSH_URL || "http://127.0.0.1:3050/internal/push";
 const HOME_PUSH_SUBSCRIBE_URL = process.env.HOME_PUSH_SUBSCRIBE_URL || `${HOME_PUSH_URL}/subscriptions`;
 const HOME_VAPID_PUBLIC_KEY = process.env.HOME_VAPID_PUBLIC_KEY || "";
+const APP_SERVER_TRANSPORT = "app-server";
 
 const app = express();
 const server = http.createServer(app);
@@ -219,7 +221,7 @@ app.post("/api/client-events", (req, res) => {
 
 app.get("/api/sessions", (_req, res) => {
   const liveSessions = [...sessions.values()].filter((session) => !session.exited).map(publicSession);
-  const restoredSessions = listDetachedTmuxSessions().filter(
+  const restoredSessions = listDetachedSessions().filter(
     (session) => !sessions.has(session.id) && !liveSessions.some((liveSession) => liveSession.id === session.id),
   );
 
@@ -348,7 +350,7 @@ wss.on("connection", async (ws, req) => {
 
   if (!session) {
     const cwd = resolveWorkspacePath(url.searchParams.get("cwd") || ".");
-    const launch = getLaunchConfig(url.searchParams);
+    const launch = await getLaunchConfig(url.searchParams);
 
     if (!cwd) {
       logAgentEvent("ws-reject", { reason: "invalid-cwd" });
@@ -422,6 +424,7 @@ async function sendHomeTurnNotification(session, event) {
     title,
   });
   if (session.sessionId) query.set("sessionId", session.sessionId);
+  if (session.transport === APP_SERVER_TRANSPORT) query.set("transport", APP_SERVER_TRANSPORT);
   const homeQuery = new URLSearchParams({ focus: "agent" });
   homeQuery.set("sessionId", session.sessionId || session.id);
 
@@ -557,6 +560,11 @@ function shortClientId(value) {
 }
 
 function createSession(cwd, launch, restored = {}) {
+  if (launch.transport === APP_SERVER_TRANSPORT) return createAppServerSession(cwd, launch, restored);
+  return createTerminalSession(cwd, launch, restored);
+}
+
+function createTerminalSession(cwd, launch, restored = {}) {
   const id = restored.id || cryptoRandomId();
   const startedAt = new Date().toISOString();
   const shell = process.env.CODEX_COMMAND || "codex";
@@ -603,6 +611,8 @@ function createSession(cwd, launch, restored = {}) {
     pid: terminal.pid,
     command: shell,
     args: commandArgs,
+    transport: "terminal",
+    ready: true,
     mode: launch.mode,
     sessionId: launch.sessionId,
     title: launch.title || "",
@@ -638,8 +648,7 @@ function createSession(cwd, launch, restored = {}) {
 
   terminal.onData((data) => {
     session.lastActivityAt = new Date().toISOString();
-    const revision = appendBuffers(session, data);
-    broadcast(session, "output", { raw: data, revision });
+    appendSessionOutput(session, data);
     broadcast(session, "status", publicSession(session));
   });
 
@@ -662,12 +671,106 @@ function createSession(cwd, launch, restored = {}) {
   return session;
 }
 
+function createAppServerSession(cwd, launch, restored = {}) {
+  const id = restored.id || cryptoRandomId();
+  const startedAt = new Date().toISOString();
+  const appServer = new CodexAppServerClient({
+    cwd,
+    command: process.env.CODEX_APP_SERVER_COMMAND || "codex",
+  });
+  const session = {
+    id,
+    cwd,
+    project: path.relative(WORKSPACE_ROOT, cwd) || ".",
+    pid: null,
+    command: "codex app-server",
+    args: ["app-server"],
+    transport: APP_SERVER_TRANSPORT,
+    ready: false,
+    mode: launch.mode,
+    sessionId: launch.sessionId,
+    title: launch.title || "",
+    tmuxName: "",
+    terminal: null,
+    appServer,
+    pendingServerRequests: new Map(),
+    streamedItemIds: new Set(),
+    lastAssistantMessage: "",
+    clients: new Set(),
+    cleanupTimer: null,
+    exited: false,
+    exitCode: null,
+    signal: null,
+    notificationApp: restored.notificationApp === "home" ? "home" : "agent",
+    notificationDeviceId: cleanWebClientId(restored.notificationDeviceId),
+    outputRevision: 0,
+    outputChunks: [],
+    outputChunkBytes: 0,
+    startedAt: restored.startedAt || startedAt,
+    lastActivityAt: restored.lastActivityAt || restored.startedAt || startedAt,
+    cols: 100,
+    rows: 30,
+    turnState: restoreTurnState(restored.turnState),
+  };
+  sessions.set(id, session);
+  persistRestorableWebSession(session);
+  wireAppServerSession(session);
+  void initializeAppServerSession(session, launch);
+  logAgentEvent("session-start", {
+    webSessionId: session.id,
+    codexSessionId: session.sessionId,
+    mode: session.mode,
+    transport: session.transport,
+    project: session.project,
+    restored: Boolean(launch.sessionId),
+  });
+  return session;
+}
+
+function wireAppServerSession(session) {
+  session.appServer.on("notification", (message) => handleAppServerNotification(session, message));
+  session.appServer.on("server-request", (message) => handleAppServerRequest(session, message));
+  session.appServer.on("stderr", (text) => {
+    logAgentEvent("app-server-stderr", {
+      webSessionId: session.id,
+      message: cleanClientLogValue(text, 500),
+    });
+  });
+  session.appServer.on("protocol-error", (error) => appendSessionOutput(session, `\r\nProtocol error: ${error.message}\r\n`));
+  session.appServer.on("exit", (error) => markAppServerExited(session, error));
+}
+
+async function initializeAppServerSession(session, launch) {
+  try {
+    await session.appServer.start();
+    session.pid = session.appServer.child?.pid || null;
+    const params = {
+      cwd: session.cwd,
+      sandbox: "workspace-write",
+      approvalPolicy: "on-request",
+    };
+    const thread = launch.sessionId
+      ? await session.appServer.resumeThread(launch.sessionId, params)
+      : await session.appServer.startThread(params);
+    session.sessionId = thread.id;
+    session.ready = true;
+    session.lastActivityAt = new Date().toISOString();
+    appendSessionOutput(session, "\r\n\x1b[36mApp Server ready. Follow-ups are bound to an exact turn.\x1b[0m\r\n");
+    persistRestorableWebSession(session);
+    broadcast(session, "status", publicSession(session));
+  } catch (error) {
+    appendSessionOutput(session, `\r\n\x1b[31mApp Server failed to start: ${error.message}\x1b[0m\r\n`);
+    markAppServerExited(session, error);
+  }
+}
+
 function findReusableSession(launch) {
   if (!launch.sessionId) return null;
 
   return (
     [...sessions.values()]
       .filter((session) => !session.exited && session.sessionId === launch.sessionId)
+      .filter((session) => session.transport === (launch.transport || "terminal"))
       .sort((a, b) => {
         if (b.clients.size !== a.clients.size) return b.clients.size - a.clients.size;
         return new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime();
@@ -685,6 +788,30 @@ function restoreTmuxSession(id) {
   if (!cwd) {
     removePersistedWebSession(id);
     return { error: "This web session has an invalid directory. Returning to Agent home." };
+  }
+
+  if (record.transport === APP_SERVER_TRANSPORT) {
+    if (!record.sessionId) return null;
+    const reusable = findReusableSession({ sessionId: record.sessionId, transport: APP_SERVER_TRANSPORT });
+    if (reusable) return reusable;
+    return createSession(
+      cwd,
+      {
+        mode: "resume-id",
+        transport: APP_SERVER_TRANSPORT,
+        sessionId: record.sessionId,
+        args: ["app-server"],
+        title: record.title || "",
+      },
+      {
+        id,
+        startedAt: record.startedAt,
+        lastActivityAt: record.lastActivityAt,
+        notificationApp: record.notificationApp,
+        notificationDeviceId: record.notificationDeviceId,
+        turnState: { ...record.turnState, active: false },
+      },
+    );
   }
 
   if (!USE_TMUX_SESSIONS) {
@@ -736,15 +863,16 @@ function restoreTmuxSession(id) {
   });
 }
 
-function listDetachedTmuxSessions() {
-  if (!USE_TMUX_SESSIONS) return [];
+function listDetachedSessions() {
   const records = readPersistedWebSessions();
   const items = [];
 
   for (const [id, record] of Object.entries(records)) {
     if (sessions.has(id) || !isValidWebSessionId(id)) continue;
+    const transport = record.transport === APP_SERVER_TRANSPORT ? APP_SERVER_TRANSPORT : "terminal";
     const tmuxName = cleanTmuxName(record.tmuxName || tmuxNameForWebSession(id));
-    if (!tmuxName || !tmuxHasSession(tmuxName)) continue;
+    if (transport === "terminal" && (!USE_TMUX_SESSIONS || !tmuxName || !tmuxHasSession(tmuxName))) continue;
+    if (transport === APP_SERVER_TRANSPORT && !record.sessionId) continue;
 
     const cwd = persistedWorkspacePath(record.cwd);
     if (!cwd) continue;
@@ -757,6 +885,8 @@ function listDetachedTmuxSessions() {
       pid: null,
       command: record.command || "codex",
       args: Array.isArray(record.args) ? record.args : [],
+      transport,
+      ready: false,
       mode: record.mode || "new",
       sessionId: record.sessionId || "",
       startedAt: record.startedAt || new Date().toISOString(),
@@ -794,6 +924,11 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
     clientId: clientId ? shortClientId(clientId) : "",
   });
   send(ws, "status", publicSession(session));
+  if (session.transport === APP_SERVER_TRANSPORT) {
+    for (const request of session.pendingServerRequests.values()) {
+      send(ws, "agent-request", publicAppServerRequest(request));
+    }
+  }
   if (replay) {
     const replayPayload = outputReplay(session, afterRevision);
     logAgentEvent("ws-replay", {
@@ -828,6 +963,10 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
     if (session.exited) return;
 
     if (message.type === "input" && typeof message.data === "string") {
+      if (session.transport === APP_SERVER_TRANSPORT) {
+        send(ws, "error", { message: "Raw terminal keys are unavailable in App Server mode." });
+        return;
+      }
       rememberNotificationTarget(session, message.notificationApp, message.notificationDeviceId);
       logControlMessage(session, ws, "input", message.data);
       session.terminal.write(message.data);
@@ -842,6 +981,24 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
         rememberNotificationTarget(session, message.notificationApp, message.notificationDeviceId);
         logControlMessage(session, ws, "submit", normalized);
         if (!session.title) session.title = cleanTitle(normalized) || "New Codex session";
+        if (session.transport === APP_SERVER_TRANSPORT) {
+          void submitAppServerPrompt(session, normalized, message.deliveryMode)
+            .then((submission) => {
+              session.lastActivityAt = new Date().toISOString();
+              persistRestorableWebSession(session);
+              broadcast(session, "status", publicSession(session));
+              send(ws, "control-ack", {
+                kind: "submit",
+                receivedAt: Date.now(),
+                deliveryMode: submission.deliveryMode,
+                turnState: publicTurnState(session.turnState),
+              });
+            })
+            .catch((error) => {
+              send(ws, "error", { message: `Prompt was not sent: ${error.message}`, preservePrompt: true });
+            });
+          return;
+        }
         const submission = submitTrackedPrompt(session, normalized, message.deliveryMode);
         session.lastActivityAt = new Date().toISOString();
         persistRestorableWebSession(session);
@@ -857,6 +1014,10 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
     }
 
     if (message.type === "command" && typeof message.data === "string") {
+      if (session.transport === APP_SERVER_TRANSPORT) {
+        send(ws, "error", { message: "Slash commands are not available in App Server experiment mode." });
+        return;
+      }
       rememberNotificationTarget(session, message.notificationApp, message.notificationDeviceId);
       logControlMessage(session, ws, "command", message.data);
       writeAndSubmit(session, message.data.trim(), { paste: false });
@@ -869,10 +1030,20 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
     if (message.type === "resize") {
       const cols = clampInteger(message.cols, 20, 240, 100);
       const rows = clampInteger(message.rows, 8, 80, 30);
-      session.terminal.resize(cols, rows);
+      if (session.transport === "terminal") session.terminal.resize(cols, rows);
       session.cols = cols;
       session.rows = rows;
       broadcast(session, "status", publicSession(session));
+      return;
+    }
+
+    if (message.type === "agent-response" && session.transport === APP_SERVER_TRANSPORT) {
+      try {
+        handleAppServerResponse(session, message);
+        send(ws, "control-ack", { kind: "agent-response", receivedAt: Date.now() });
+      } catch (error) {
+        send(ws, "error", { message: error.message });
+      }
       return;
     }
 
@@ -1118,6 +1289,285 @@ function writeAndSubmit(session, text, { paste, submitKey = "\r" }) {
   }, 20);
 }
 
+async function submitAppServerPrompt(session, text, requestedMode) {
+  if (!session.ready || session.exited) throw new Error("App Server is still starting or has exited.");
+  const state = session.turnState;
+  const appServer = session.appServer;
+  const wantsQueue = requestedMode === "queue";
+  let lateSteer = false;
+
+  if (wantsQueue && appServer.activeTurnId) {
+    const requirement = turnRequirement(state, text, "queued", "queued");
+    state.queuedTurns.push(requirement);
+    trimTrackedRequirements(state);
+    void appServer.queueTurn(queuePromptText(text), { clientUserMessageId: requirement.id }).catch((error) => {
+      requirement.status = "failed";
+      if (!appServer.activeTurnId) state.active = false;
+      appendSessionOutput(session, `\r\n\x1b[31mQueued prompt failed: ${error.message}\x1b[0m\r\n`);
+      persistRestorableWebSession(session);
+      broadcast(session, "status", publicSession(session));
+    });
+    persistRestorableWebSession(session);
+    broadcast(session, "status", publicSession(session));
+    return { deliveryMode: "queue" };
+  }
+
+  if (appServer.activeTurnId) {
+    const requirement = turnRequirement(state, text, "followup", "working");
+    state.requirements.push(requirement);
+    trimTrackedRequirements(state);
+    try {
+      const result = await appServer.steerTurn(steerPromptText(text, state.requirements.length), {
+        clientUserMessageId: requirement.id,
+      });
+      state.active = true;
+      state.turnId = result.turnId;
+      persistRestorableWebSession(session);
+      broadcast(session, "status", publicSession(session));
+      return { deliveryMode: "steer" };
+    } catch (error) {
+      state.requirements = state.requirements.filter((item) => item.id !== requirement.id);
+      if (!/no active turn/i.test(error.message)) throw error;
+      lateSteer = true;
+    }
+  }
+
+  for (const requirement of state.requirements) requirement.status = "completed";
+  state.sequence += 1;
+  state.active = true;
+  state.turnId = "";
+  const requirement = turnRequirement(state, text, wantsQueue || lateSteer ? "queued" : "original", "working");
+  state.requirements = [requirement];
+  const turn = await appServer.startTurn(lateSteer ? lateFollowupPromptText(text) : text, {
+    clientUserMessageId: requirement.id,
+  });
+  state.turnId = appServer.activeTurnId ? turn.id : state.turnId;
+  state.active = Boolean(appServer.activeTurnId);
+  persistRestorableWebSession(session);
+  broadcast(session, "status", publicSession(session));
+  return { deliveryMode: wantsQueue || lateSteer ? "queue-fallback" : "new" };
+}
+
+function handleAppServerNotification(session, message) {
+  if (session.exited) return;
+  const { method, params = {} } = message;
+  session.lastActivityAt = new Date().toISOString();
+
+  if (method === "thread/started" && params.thread?.id) session.sessionId = params.thread.id;
+  if (method === "turn/started") {
+    session.turnState.active = true;
+    session.turnState.turnId = params.turn?.id || "";
+    appendSessionOutput(session, "\r\n\x1b[34m── Turn started ──\x1b[0m\r\n");
+  } else if (method === "item/agentMessage/delta") {
+    if (params.itemId) session.streamedItemIds.add(params.itemId);
+    appendSessionOutput(session, params.delta || "");
+  } else if (method === "item/commandExecution/outputDelta") {
+    appendSessionOutput(session, params.delta || "");
+  } else if (method === "item/fileChange/outputDelta") {
+    appendSessionOutput(session, params.delta || "");
+  } else if (method === "item/reasoning/summaryTextDelta") {
+    appendSessionOutput(session, `\x1b[2m${params.delta || ""}\x1b[0m`);
+  } else if (method === "item/started") {
+    renderAppServerItemStarted(session, params.item);
+  } else if (method === "item/completed") {
+    renderAppServerItemCompleted(session, params.item);
+  } else if (method === "turn/completed") {
+    const turnId = params.turn?.id || "";
+    completeTrackedTurn(session, turnId);
+    appendSessionOutput(session, "\r\n\x1b[32m✓ Turn completed\x1b[0m\r\n");
+    persistRestorableWebSession(session);
+    broadcast(session, "status", publicSession(session));
+    void sendAppServerTurnNotification(session, turnId);
+  } else if (method === "error") {
+    appendSessionOutput(session, `\r\n\x1b[31m${params.error?.message || params.message || "App Server error"}\x1b[0m\r\n`);
+  } else if (method === "serverRequest/resolved") {
+    const requestId = String(params.requestId ?? "");
+    if (requestId) session.pendingServerRequests.delete(requestId);
+    broadcast(session, "agent-request-resolved", { requestId });
+  }
+
+  if (["thread/started", "turn/started", "turn/completed", "error"].includes(method)) {
+    persistRestorableWebSession(session);
+    broadcast(session, "status", publicSession(session));
+  }
+}
+
+function renderAppServerItemStarted(session, item) {
+  if (!item || typeof item !== "object") return;
+  if (item.type === "commandExecution") {
+    const command = appServerCommandText(item);
+    appendSessionOutput(session, `\r\n\x1b[33m$ ${command || "Running command"}\x1b[0m\r\n`);
+  } else if (item.type === "fileChange") {
+    appendSessionOutput(session, "\r\n\x1b[35mApplying file changes…\x1b[0m\r\n");
+  } else if (["mcpToolCall", "dynamicToolCall", "collabAgentToolCall"].includes(item.type)) {
+    appendSessionOutput(session, `\r\n\x1b[36mUsing ${item.server || item.tool || item.type}…\x1b[0m\r\n`);
+  }
+}
+
+function renderAppServerItemCompleted(session, item) {
+  if (!item || typeof item !== "object") return;
+  if (item.type === "agentMessage") {
+    if (!session.streamedItemIds.has(item.id) && item.text) appendSessionOutput(session, item.text);
+    session.streamedItemIds.delete(item.id);
+    if (item.phase === "final_answer") session.lastAssistantMessage = item.text || session.lastAssistantMessage;
+    appendSessionOutput(session, "\r\n");
+  } else if (item.type === "commandExecution") {
+    const code = item.exitCode ?? item.exit_code;
+    if (code !== undefined && code !== null) appendSessionOutput(session, `\r\n\x1b[2mCommand exited ${code}.\x1b[0m\r\n`);
+  } else if (item.type === "fileChange") {
+    appendSessionOutput(session, "\r\n\x1b[35mFiles updated.\x1b[0m\r\n");
+  }
+}
+
+function appServerCommandText(item) {
+  if (typeof item.command === "string") return item.command;
+  if (Array.isArray(item.command)) return item.command.join(" ");
+  if (typeof item.cmd === "string") return item.cmd;
+  return "";
+}
+
+function handleAppServerRequest(session, message) {
+  const requestId = String(message.id ?? "");
+  if (!requestId) return;
+  session.pendingServerRequests.set(requestId, message);
+  broadcast(session, "agent-request", publicAppServerRequest(message));
+}
+
+function publicAppServerRequest(message) {
+  const params = message.params || {};
+  const method = message.method || "";
+  if (method === "item/commandExecution/requestApproval") {
+    return {
+      requestId: String(message.id),
+      method,
+      kind: "approval",
+      title: "运行命令？",
+      detail: [params.command, params.reason].filter(Boolean).join("\n\n"),
+    };
+  }
+  if (method === "item/fileChange/requestApproval") {
+    return {
+      requestId: String(message.id),
+      method,
+      kind: "approval",
+      title: "允许修改文件？",
+      detail: params.reason || params.grantRoot || "Codex 请求写入文件。",
+    };
+  }
+  if (method === "item/permissions/requestApproval") {
+    return {
+      requestId: String(message.id),
+      method,
+      kind: "approval",
+      title: "允许额外权限？",
+      detail: params.reason || JSON.stringify(params.permissions || {}, null, 2),
+    };
+  }
+  if (method === "item/tool/requestUserInput") {
+    return {
+      requestId: String(message.id),
+      method,
+      kind: "question",
+      title: params.questions?.[0]?.header || "Codex 需要你的回答",
+      detail: (params.questions || []).map((question) => question.question).join("\n"),
+      questions: params.questions || [],
+    };
+  }
+  return {
+    requestId: String(message.id),
+    method,
+    kind: "unsupported",
+    title: "Codex 需要确认",
+    detail: cleanClientLogValue(params.message || method, 1_000),
+  };
+}
+
+function handleAppServerResponse(session, message) {
+  const requestId = String(message.requestId || "");
+  const request = session.pendingServerRequests.get(requestId);
+  if (!request) throw new Error("This App Server request is no longer pending.");
+  const decision = ["accept", "acceptForSession", "decline", "cancel"].includes(message.decision)
+    ? message.decision
+    : "decline";
+  let result;
+
+  if (["item/commandExecution/requestApproval", "item/fileChange/requestApproval"].includes(request.method)) {
+    result = { decision };
+  } else if (request.method === "item/permissions/requestApproval") {
+    result = {
+      permissions: decision.startsWith("accept") ? request.params?.permissions || {} : {},
+      scope: decision === "acceptForSession" ? "session" : "turn",
+    };
+  } else if (request.method === "item/tool/requestUserInput") {
+    const answers = {};
+    for (const question of request.params?.questions || []) {
+      const value = message.answers?.[question.id] ?? message.answer ?? "";
+      answers[question.id] = { answers: Array.isArray(value) ? value : [String(value)] };
+    }
+    result = { answers };
+  } else if (request.method === "mcpServer/elicitation/request") {
+    result = { action: decision.startsWith("accept") ? "accept" : decision === "cancel" ? "cancel" : "decline" };
+  } else {
+    session.appServer.respondError(request.id, { code: -32000, message: "Unsupported request in Agent Terminal Web." });
+    session.pendingServerRequests.delete(requestId);
+    broadcast(session, "agent-request-resolved", { requestId });
+    return;
+  }
+
+  session.appServer.respond(request.id, result);
+  session.pendingServerRequests.delete(requestId);
+  broadcast(session, "agent-request-resolved", { requestId });
+}
+
+async function sendAppServerTurnNotification(session, turnId) {
+  try {
+    const result = await sendHomeTurnNotification(session, {
+      type: "agent-turn-complete",
+      "thread-id": session.sessionId,
+      "turn-id": turnId,
+      "last-assistant-message": session.lastAssistantMessage,
+    });
+    logAgentEvent("turn-notification", {
+      webSessionId: session.id,
+      codexSessionId: session.sessionId,
+      turnId,
+      sent: result.sent,
+      subscriptionCount: result.subscriptionCount,
+      transport: APP_SERVER_TRANSPORT,
+    });
+  } catch (error) {
+    logAgentEvent("turn-notification-failed", {
+      webSessionId: session.id,
+      codexSessionId: session.sessionId,
+      message: error.message,
+      transport: APP_SERVER_TRANSPORT,
+    });
+  }
+}
+
+function markAppServerExited(session, error) {
+  if (session.exited) return;
+  session.ready = false;
+  session.exited = true;
+  session.exitCode = 1;
+  session.signal = null;
+  removePersistedWebSession(session.id);
+  logAgentEvent("app-server-exit", {
+    webSessionId: session.id,
+    codexSessionId: session.sessionId,
+    message: error?.message || "",
+  });
+  broadcast(session, "status", publicSession(session));
+  for (const client of session.clients) client.close();
+  scheduleCleanup(session);
+}
+
+function appendSessionOutput(session, raw) {
+  if (!raw) return;
+  const revision = appendBuffers(session, raw);
+  broadcast(session, "output", { raw, revision });
+}
+
 function submitTrackedPrompt(session, text, requestedMode) {
   const state = session.turnState;
   const wantsQueue = requestedMode === "queue";
@@ -1178,6 +1628,14 @@ function queuePromptText(text) {
   return ["【下一轮任务｜当前任务完成后再做】", text].join("\n\n");
 }
 
+function lateFollowupPromptText(text) {
+  return [
+    "【追加要求到达时上一轮刚刚结束｜作为下一轮继续】",
+    text,
+    "请结合上一轮的原始请求和所有追加要求，只补做尚未覆盖的内容。",
+  ].join("\n\n");
+}
+
 function turnRequirement(state, text, kind, status) {
   state.requirementSequence += 1;
   return {
@@ -1216,7 +1674,7 @@ function restoreRequirements(items) {
     id: cleanClientLogValue(item?.id, 100) || `restored-requirement-${index + 1}`,
     text: String(item?.text || "").slice(0, 4_000),
     kind: ["original", "followup", "queued"].includes(item?.kind) ? item.kind : "followup",
-    status: ["working", "queued", "completed"].includes(item?.status) ? item.status : "working",
+    status: ["working", "queued", "completed", "failed"].includes(item?.status) ? item.status : "working",
   }));
 }
 
@@ -1288,6 +1746,8 @@ function publicSession(session) {
     pid: session.pid,
     command: session.command,
     args: session.args,
+    transport: session.transport || "terminal",
+    ready: session.ready !== false,
     mode: session.mode,
     sessionId: session.sessionId,
     startedAt: session.startedAt,
@@ -1329,6 +1789,17 @@ function tmuxHasSession(tmuxName) {
 }
 
 function killSessionTerminal(session) {
+  if (session.transport === APP_SERVER_TRANSPORT) {
+    removePersistedWebSession(session.id);
+    session.ready = false;
+    session.exited = true;
+    session.exitCode = 0;
+    session.appServer?.close();
+    broadcast(session, "status", publicSession(session));
+    for (const client of session.clients) client.close();
+    scheduleCleanup(session);
+    return;
+  }
   try {
     if (USE_TMUX_SESSIONS && session.tmuxName && tmuxHasSession(session.tmuxName)) {
       execFileSync("tmux", ["kill-session", "-t", session.tmuxName], { stdio: "ignore" });
@@ -1359,6 +1830,14 @@ function shellQuote(value) {
 }
 
 function persistRestorableWebSession(session) {
+  if (session.transport === APP_SERVER_TRANSPORT) {
+    const hasTurn =
+      session.turnState?.sequence > 0 ||
+      session.turnState?.requirements?.length > 0 ||
+      session.turnState?.queuedTurns?.length > 0;
+    if (session.sessionId && hasTurn) persistWebSession(session);
+    return;
+  }
   if (USE_TMUX_SESSIONS || session.sessionId) persistWebSession(session);
 }
 
@@ -1369,6 +1848,7 @@ function persistWebSession(session) {
     cwd: session.cwd,
     command: session.command,
     args: session.args,
+    transport: session.transport || "terminal",
     mode: session.mode,
     sessionId: session.sessionId,
     title: session.title,
@@ -1433,25 +1913,40 @@ function resolveWorkspacePath(value) {
   return requested;
 }
 
-function getLaunchConfig(searchParams) {
+async function getLaunchConfig(searchParams) {
+  const transport = searchParams.get("transport") === APP_SERVER_TRANSPORT ? APP_SERVER_TRANSPORT : "terminal";
   const sessionId = String(searchParams.get("sessionId") || "").trim();
   if (sessionId && !/^[a-zA-Z0-9._:-]+$/.test(sessionId)) return null;
 
   if (sessionId) {
     return {
       mode: "resume-id",
+      transport,
       sessionId,
       args: ["--no-alt-screen", "resume", sessionId],
     };
   }
 
   const mode = String(searchParams.get("mode") || "new");
-  if (mode === "new") return { mode, sessionId: "", args: ["--no-alt-screen"] };
+  if (mode === "new") {
+    return {
+      mode,
+      transport,
+      sessionId: "",
+      args: transport === APP_SERVER_TRANSPORT ? ["app-server"] : ["--no-alt-screen"],
+    };
+  }
   if (mode === "resume-picker") {
-    return { mode, sessionId: "", args: ["--no-alt-screen", "resume"] };
+    if (transport === APP_SERVER_TRANSPORT) return null;
+    return { mode, transport, sessionId: "", args: ["--no-alt-screen", "resume"] };
   }
   if (mode === "resume-last") {
-    return { mode, sessionId: "", args: ["--no-alt-screen", "resume", "--last"] };
+    if (transport === APP_SERVER_TRANSPORT) {
+      const [latest] = await listCodexSessions({ archived: false });
+      if (!latest?.id) return null;
+      return { mode, transport, sessionId: latest.id, args: ["app-server"] };
+    }
+    return { mode, transport, sessionId: "", args: ["--no-alt-screen", "resume", "--last"] };
   }
   return null;
 }
@@ -1515,7 +2010,7 @@ async function listRecentAgentSessions(limit = 40) {
   const savedSessions = await listCodexSessions({ archived: false });
   const liveSessions = [
     ...[...sessions.values()].filter((session) => !session.exited).map(publicSession),
-    ...listDetachedTmuxSessions(),
+    ...listDetachedSessions(),
   ];
   const liveByCodexId = new Map();
 
@@ -1540,6 +2035,7 @@ async function listRecentAgentSessions(limit = 40) {
         updatedAt,
         live: Boolean(liveSession),
         webSessionId: liveSession?.id || "",
+        transport: liveSession?.transport || "terminal",
       };
     })
     .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())

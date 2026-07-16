@@ -671,6 +671,7 @@ input {
 
 #prompt {
   width: 100%;
+  height: 100%;
   min-height: 96px;
   max-height: 34vh;
   max-height: 34dvh;
@@ -722,8 +723,19 @@ input {
 
 .composer-actions {
   display: grid;
-  grid-template-rows: 42px minmax(0, 1fr) 38px;
+  grid-template-rows: 42px minmax(46px, 1fr);
   gap: 8px;
+  max-height: 34vh;
+  max-height: 34dvh;
+}
+
+.composer-actions:has(#queue-prompt:not(.hidden)) {
+  grid-template-rows: 42px repeat(2, minmax(38px, 1fr));
+}
+
+.composer-actions:has(#queue-prompt:not(.hidden)) #send-prompt,
+.composer-actions:has(#queue-prompt:not(.hidden)) #queue-prompt {
+  min-height: 38px;
 }
 
 #attach-file,

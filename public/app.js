@@ -1279,7 +1279,7 @@ function renderStatus(status) {
   updateSessionViewLabels();
   currentSessionExited = Boolean(status.exited);
   const sessionLabel = status.title || displayProject(status.project);
-  statusEls.project.textContent = activeTransport === "app-server" ? sessionLabel : displayProject(status.project);
+  statusEls.project.textContent = sessionLabel;
   statusEls.project.title = sessionLabel;
   setConnectedState(status.exited ? "exited" : !activeSessionReady ? "starting" : historySyncPending ? "loading" : "connected");
   setDocumentTitle(status.title || displayProject(status.project));
@@ -1325,7 +1325,7 @@ function renderTurnState(value = {}) {
 }
 
 function setConnectedState(state) {
-  const appServerStates = {
+  const connectionStates = {
     connected: "已连接",
     connecting: "连接中",
     reconnecting: "重新连接中",
@@ -1334,9 +1334,9 @@ function setConnectedState(state) {
     detached: "已离开",
     exited: "已停止",
   };
-  const transport = activeTransport === "app-server" ? "App Server · " : "";
-  const access = activeTransport === "app-server" && activeAccessMode === "full" ? " · 全部允许" : "";
-  const stateLabel = activeTransport === "app-server" ? appServerStates[state] || state : state;
+  const transport = activeTransport === "app-server" ? "App Server · " : "Terminal · ";
+  const access = activeAccessMode === "full" ? " · 全部允许" : " · 按需确认";
+  const stateLabel = connectionStates[state] || state;
   statusEls.connection.textContent = `${transport}${stateLabel}${access}`;
   const connected = state === "connected" && activeSessionReady;
   sendPromptButton.disabled = !connected;

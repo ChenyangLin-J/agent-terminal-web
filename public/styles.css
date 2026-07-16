@@ -426,18 +426,19 @@ input {
   white-space: nowrap;
 }
 
+.session-title strong {
+  line-height: 24px;
+}
+
 .session-title span {
   color: #a7adbc;
   font-size: 12px;
+  line-height: 16px;
 }
 
 .session-controls {
   display: flex;
   gap: 8px;
-}
-
-.app-server-session #disconnect {
-  display: none;
 }
 
 .view-tabs {

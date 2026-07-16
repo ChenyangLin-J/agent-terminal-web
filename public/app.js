@@ -45,6 +45,7 @@ const PAGE_SCROLL_MIN_OVERLAP = 3;
 const PAGE_SCROLL_MAX_OVERLAP = 8;
 const PAGE_DOWN_LONG_PRESS_MS = 450;
 const DEFAULT_DOCUMENT_TITLE = "Agent Terminal Web";
+const AGENT_TIME_ZONE = "Asia/Shanghai";
 const ARCHIVED_SESSIONS_PREVIEW_COUNT = 5;
 const CLIENT_HEARTBEAT_MS = 15_000;
 const CLIENT_STALE_MS = 45_000;
@@ -85,6 +86,16 @@ let archivedSessionsExpanded = false;
 const clientId = getClientId();
 const notificationTarget = getNotificationTarget();
 const pushDeviceId = notificationTarget.deviceId;
+const agentDateTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: AGENT_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
 let pushRegistrationPromise = null;
 
 window.addEventListener("resize", () => fitTerminal({ delay: 120 }));
@@ -1075,6 +1086,7 @@ function setConnectedState(state) {
 
 function showStartScreen() {
   saveActiveSessionSnapshot();
+  setSessionPageMode(false);
   setDocumentTitle(DEFAULT_DOCUMENT_TITLE);
   clearSessionUrl();
   startScreen.classList.remove("hidden");
@@ -1094,6 +1106,7 @@ function scrollStartScreenToTop() {
 function showSessionScreen() {
   startScreen.classList.add("hidden");
   sessionScreen.classList.remove("hidden");
+  setSessionPageMode(true);
   closeTextView();
   window.clearInterval(sessionsTimer);
   fitTerminal();
@@ -1189,8 +1202,24 @@ function getTerminalBufferText() {
 
 function refreshTerminalDisplay() {
   if (!terminal || sessionScreen.classList.contains("hidden") || !textView.classList.contains("hidden")) return;
+  resetSessionDocumentScroll();
   fitTerminal();
   requestAnimationFrame(() => terminal?.refresh(0, Math.max(0, terminal.rows - 1)));
+}
+
+function setSessionPageMode(active) {
+  document.documentElement.classList.toggle("session-active", active);
+  document.body.classList.toggle("session-active", active);
+  if (active) resetSessionDocumentScroll();
+}
+
+function resetSessionDocumentScroll() {
+  if (sessionScreen.classList.contains("hidden")) return;
+  if (document.scrollingElement) {
+    document.scrollingElement.scrollTop = 0;
+    document.scrollingElement.scrollLeft = 0;
+  }
+  window.scrollTo({ top: 0, left: 0, behavior: "auto" });
 }
 
 function handleTerminalOutput(payload = {}) {
@@ -1387,7 +1416,7 @@ function formatLaunch(status) {
 
 function formatTime(value) {
   if (!value) return "-";
-  return new Date(value).toLocaleString();
+  return agentDateTimeFormatter.format(new Date(value));
 }
 
 function projectForSession(session) {

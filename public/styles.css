@@ -22,6 +22,27 @@ body {
   background-color: #0f1115;
 }
 
+html.session-active {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body.session-active {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body.session-active .app,
+body.session-active .session-screen {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
 button,
 select,
 input,

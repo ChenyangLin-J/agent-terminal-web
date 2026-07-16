@@ -10,6 +10,15 @@ import busboy from "busboy";
 import express from "express";
 import { WebSocketServer } from "ws";
 
+const AGENT_TIME_ZONE = "Asia/Shanghai";
+process.env.TZ = AGENT_TIME_ZONE;
+const AGENT_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  timeZone: AGENT_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
 const require = createRequire(import.meta.url);
 const pty = require("node-pty");
 
@@ -1800,7 +1809,10 @@ function truncateUtf8(value, maxBytes) {
 }
 
 function dateDirectoryName(date) {
-  return date.toISOString().slice(0, 10);
+  const parts = Object.fromEntries(
+    AGENT_DATE_FORMATTER.formatToParts(date).map((part) => [part.type, part.value]),
+  );
+  return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
 function formatBytes(bytes) {

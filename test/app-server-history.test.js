@@ -19,9 +19,15 @@ test("App Server resume restores structured history and keeps raw text available
 
   assert.match(page, /id="app-server-view"/);
   assert.match(app, /terminalTabButton\.textContent = isAppServer \? "对话" : "Terminal"/);
-  assert.match(app, /textTabButton\.textContent = isAppServer \? "原始文本" : "Text"/);
+  assert.match(app, /textTabButton\.textContent = isAppServer \? "原始" : "Text"/);
   assert.match(app, /`已恢复 \$\{restoredAppTurnCount\} 轮历史`/);
   assert.match(styles, /\.app-transcript-user/);
   assert.match(styles, /\.app-transcript-assistant/);
   assert.match(styles, /\.app-transcript-command/);
+  assert.match(styles, /\.app-server-view[\s\S]*background: #080a0f/);
+  assert.match(styles, /\.app-server-transcript[\s\S]*font-family: ui-monospace/);
+  assert.match(app, /function createAppProcessGroup\(items\)/);
+  assert.match(app, /\["command", "plan", "file", "tool"\]\.includes\(item\.type\)/);
+  assert.match(styles, /\.app-server-session #disconnect[\s\S]*display: none/);
+  assert.match(styles, /\.app-server-session #prompt[\s\S]*height: 72px/);
 });

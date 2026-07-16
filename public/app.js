@@ -106,7 +106,7 @@ let queuedOutputRevision = 0;
 let uploadStatusTimer = null;
 let liveSessionsByCodexId = new Map();
 let archivedSessionsExpanded = false;
-let latestTurnState = { active: false, requirements: [], queuedTurns: [] };
+let latestTurnState = { active: false, turnId: "", requirements: [], queuedTurns: [] };
 let activeTransport = "terminal";
 let activeAccessMode = "safe";
 let activeSessionReady = true;
@@ -115,6 +115,7 @@ let lastSubmittedPrompt = "";
 let pendingResumeSession = null;
 let appTranscriptItems = [];
 let restoredAppTurnCount = 0;
+const openAppProcessGroups = new Set();
 const clientId = getClientId();
 const notificationTarget = getNotificationTarget();
 const pushDeviceId = notificationTarget.deviceId;
@@ -616,6 +617,7 @@ function openSocket(params, options = {}) {
     terminal?.reset();
     appTranscriptItems = [];
     restoredAppTurnCount = 0;
+    openAppProcessGroups.clear();
     renderAppTranscript();
     lastOutputRevision = 0;
     queuedOutputRevision = 0;
@@ -1275,19 +1277,23 @@ function renderStatus(status) {
   activeSessionReady = status.ready !== false;
   document.body.classList.toggle("app-server-session", activeTransport === "app-server");
   updateSessionViewLabels();
-  syncPrimarySessionView();
   currentSessionExited = Boolean(status.exited);
   statusEls.project.textContent = displayProject(status.project);
   statusEls.project.title = status.title || displayProject(status.project);
   setConnectedState(status.exited ? "exited" : !activeSessionReady ? "starting" : historySyncPending ? "loading" : "connected");
   setDocumentTitle(status.title || displayProject(status.project));
   renderTurnState(status.turnState);
+  syncPrimarySessionView();
+  if (activeTransport === "app-server" && appTranscriptItems.length) {
+    renderAppTranscript({ follow: isAppTranscriptAtBottom() });
+  }
   syncSessionUrl(status);
 }
 
 function renderTurnState(value = {}) {
   latestTurnState = {
     active: Boolean(value.active),
+    turnId: String(value.turnId || ""),
     requirements: Array.isArray(value.requirements) ? value.requirements : [],
     queuedTurns: Array.isArray(value.queuedTurns) ? value.queuedTurns : [],
   };
@@ -1318,9 +1324,19 @@ function renderTurnState(value = {}) {
 }
 
 function setConnectedState(state) {
-  const transport = activeTransport === "app-server" ? "app server · " : "";
-  const access = activeAccessMode === "full" ? " · full access" : "";
-  statusEls.connection.textContent = `${transport}${state}${access}`;
+  const appServerStates = {
+    connected: "已连接",
+    connecting: "连接中",
+    reconnecting: "重新连接中",
+    starting: "启动中",
+    loading: "恢复中",
+    detached: "已离开",
+    exited: "已停止",
+  };
+  const transport = activeTransport === "app-server" ? "App Server · " : "";
+  const access = activeTransport === "app-server" && activeAccessMode === "full" ? " · 全部允许" : "";
+  const stateLabel = activeTransport === "app-server" ? appServerStates[state] || state : state;
+  statusEls.connection.textContent = `${transport}${stateLabel}${access}`;
   const connected = state === "connected" && activeSessionReady;
   sendPromptButton.disabled = !connected;
   queuePromptButton.disabled = !connected;
@@ -1633,7 +1649,7 @@ function closeTextView() {
 function updateSessionViewLabels() {
   const isAppServer = activeTransport === "app-server";
   terminalTabButton.textContent = isAppServer ? "对话" : "Terminal";
-  textTabButton.textContent = isAppServer ? "原始文本" : "Text";
+  textTabButton.textContent = isAppServer ? "原始" : "Text";
   terminalTabButton.setAttribute("aria-label", isAppServer ? "查看整理后的对话" : "查看终端");
   textTabButton.setAttribute("aria-label", isAppServer ? "查看 App Server 原始文本" : "查看纯文本");
 }
@@ -1710,9 +1726,7 @@ function renderAppTranscript({ follow = false } = {}) {
     banner.className = "app-history-banner";
     const title = document.createElement("strong");
     title.textContent = `已恢复 ${restoredAppTurnCount} 轮历史`;
-    const note = document.createElement("span");
-    note.textContent = "可以直接接着之前的内容继续聊";
-    banner.append(title, note);
+    banner.append(title);
     fragment.append(banner);
   }
 
@@ -1727,17 +1741,59 @@ function renderAppTranscript({ follow = false } = {}) {
     fragment.append(emptyState);
   } else {
     let previousTurnId = "";
-    for (const item of appTranscriptItems) {
+    for (let index = 0; index < appTranscriptItems.length; index += 1) {
+      const item = appTranscriptItems[index];
       if (item.turnId && previousTurnId && item.turnId !== previousTurnId) {
         fragment.append(createAppTurnDivider(item));
       }
-      fragment.append(createAppTranscriptCard(item));
+      if (isProcessTranscriptItem(item)) {
+        const processItems = [item];
+        while (
+          index + 1 < appTranscriptItems.length &&
+          isProcessTranscriptItem(appTranscriptItems[index + 1]) &&
+          appTranscriptItems[index + 1].turnId === item.turnId
+        ) {
+          processItems.push(appTranscriptItems[index + 1]);
+          index += 1;
+        }
+        fragment.append(createAppProcessGroup(processItems));
+      } else {
+        fragment.append(createAppTranscriptCard(item));
+      }
       if (item.turnId) previousTurnId = item.turnId;
     }
   }
 
   appServerTranscript.replaceChildren(fragment);
   if (shouldFollow) followAppTranscriptIfNeeded(true);
+}
+
+function isProcessTranscriptItem(item) {
+  if (["command", "plan", "file", "tool"].includes(item.type)) return true;
+  return item.type === "assistant" && Boolean(item.phase) && item.phase !== "final_answer";
+}
+
+function createAppProcessGroup(items) {
+  const group = document.createElement("details");
+  group.className = "app-process-group";
+  const groupId = items[0]?.turnId || items.map((item) => item.id).join(":");
+  group.open = openAppProcessGroups.has(groupId);
+  group.addEventListener("toggle", () => {
+    if (group.open) openAppProcessGroups.add(groupId);
+    else openAppProcessGroups.delete(groupId);
+  });
+  const summary = document.createElement("summary");
+  const label = document.createElement("strong");
+  const isActive = latestTurnState.active && items.some((item) => item.turnId === latestTurnState.turnId);
+  label.textContent = isActive ? "正在处理" : "过程记录";
+  const count = document.createElement("span");
+  count.textContent = `${items.length} 项`;
+  summary.append(label, count);
+  const content = document.createElement("div");
+  content.className = "app-process-content";
+  content.append(...items.map(createAppTranscriptCard));
+  group.append(summary, content);
+  return group;
 }
 
 function createAppTurnDivider(item) {
@@ -1819,8 +1875,6 @@ function clientTranscriptType(type) {
 
 function transcriptMetaText(item) {
   const values = [];
-  if (item.phase === "final_answer") values.push("最终答复");
-  else if (item.phase) values.push("过程更新");
   const statuses = {
     inProgress: "进行中",
     in_progress: "进行中",

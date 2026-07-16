@@ -36,8 +36,8 @@
       }
     </style>
     <link rel="stylesheet" href="/vendor/xterm-css/xterm.css?v=20260625-5" />
-    <link rel="stylesheet" href="/styles.css?v=20260716-composer-actions-1" />
-    <link rel="stylesheet" href="/session-focus-mode.css?v=20260716-3" />
+    <link rel="stylesheet" href="/styles.css?v=20260716-app-history-1" />
+    <link rel="stylesheet" href="/session-focus-mode.css?v=20260716-app-history-1" />
   </head>
   <body>
     <main class="app">
@@ -113,14 +113,14 @@
 
       <section id="session-screen" class="session-screen hidden" aria-label="Codex session">
         <header class="session-header">
-          <button id="back" type="button">Sessions</button>
+          <button id="back" type="button" title="返回会话列表">会话</button>
           <div class="session-title">
             <strong id="session-project">workspace</strong>
             <span id="connection">idle</span>
           </div>
           <div class="session-controls">
-            <button id="disconnect" type="button">Leave</button>
-            <button id="kill-session" class="danger" type="button">Stop Codex</button>
+            <button id="disconnect" type="button" title="离开页面，Codex 保持运行">离开</button>
+            <button id="kill-session" class="danger" type="button" title="结束 Codex 会话">停止</button>
           </div>
         </header>
 
@@ -131,6 +131,10 @@
 
         <section class="terminal-view">
           <div id="terminal" aria-label="Codex terminal"></div>
+        </section>
+
+        <section id="app-server-view" class="app-server-view hidden" aria-label="App Server conversation">
+          <div id="app-server-transcript" class="app-server-transcript" aria-live="polite"></div>
         </section>
 
         <section id="text-view" class="text-view hidden" aria-label="Terminal text">
@@ -233,7 +237,7 @@
     <script src="/shared/voice-capture-widget.js?v=20260715-mic-release-1"></script>
     <script src="/agent-upload.js?v=20260713-progress-1"></script>
     <script src="/agent-voice-input.js?v=20260716-focus-send-1"></script>
-    <script src="/app.js?v=20260716-resume-access-2"></script>
+    <script src="/app.js?v=20260716-app-history-1"></script>
     <script src="/session-focus-mode.js?v=20260716-3"></script>
   </body>
 </html>

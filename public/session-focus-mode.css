@@ -103,6 +103,8 @@
 }
 
 .session-screen.session-focus-mode .terminal-view,
+.session-screen.session-focus-mode .app-server-view,
+.session-screen.session-focus-mode .app-server-transcript,
 .session-screen.session-focus-mode #terminal,
 .session-screen.session-focus-mode #terminal .xterm,
 .session-screen.session-focus-mode #terminal .xterm-screen,

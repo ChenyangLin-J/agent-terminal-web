@@ -8,7 +8,7 @@ test("composer buttons fill the prompt height without reserving a hidden queue r
     readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
   ]);
 
-  assert.match(page, /styles\.css\?v=20260716-composer-actions-1/);
+  assert.match(page, /styles\.css\?v=20260716-app-history-1/);
   assert.match(styles, /#prompt \{[\s\S]*height: 100%/);
   assert.match(styles, /grid-template-rows: 42px minmax\(46px, 1fr\)/);
   assert.match(styles, /:has\(#queue-prompt:not\(\.hidden\)\)[\s\S]*repeat\(2, minmax\(38px, 1fr\)\)/);

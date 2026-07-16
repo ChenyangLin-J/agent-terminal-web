@@ -44,6 +44,10 @@ const MAX_UPLOAD_FILE_BYTES = Number(process.env.MAX_UPLOAD_FILE_BYTES || 50 * 1
 const MAX_RAW_BUFFER = 1024 * 1024;
 const MAX_FULL_REPLAY_BYTES = 256 * 1024;
 const MAX_TURN_REQUIREMENTS = 20;
+const MAX_APP_TRANSCRIPT_ITEMS = 800;
+const MAX_APP_TRANSCRIPT_TEXT = 200_000;
+const MAX_APP_TRANSCRIPT_DETAIL = 40_000;
+const MAX_APP_TRANSCRIPT_OUTPUT = 80_000;
 const WS_HEARTBEAT_MS = Number(process.env.WS_HEARTBEAT_MS || 25_000);
 const USE_TMUX_SESSIONS = process.env.AGENT_USE_TMUX === "1";
 const CODEX_NOTIFY_SCRIPT = path.join(__dirname, "scripts", "codex-notify.js");
@@ -700,6 +704,9 @@ function createAppServerSession(cwd, launch, restored = {}) {
     pendingServerRequests: new Map(),
     streamedItemIds: new Set(),
     lastAssistantMessage: "",
+    appTranscript: [],
+    appTranscriptSequence: 0,
+    restoredTurnCount: 0,
     clients: new Set(),
     cleanupTimer: null,
     exited: false,
@@ -757,10 +764,12 @@ async function initializeAppServerSession(session, launch) {
       ? await session.appServer.resumeThread(launch.sessionId, params)
       : await session.appServer.startThread(params);
     session.sessionId = thread.id;
+    restoreAppServerTranscript(session, thread, { resumed: Boolean(launch.sessionId) });
     session.ready = true;
     session.lastActivityAt = new Date().toISOString();
     appendSessionOutput(session, "\r\n\x1b[36mApp Server ready. Follow-ups are bound to an exact turn.\x1b[0m\r\n");
     persistRestorableWebSession(session);
+    broadcast(session, "app-transcript", publicAppTranscript(session));
     broadcast(session, "status", publicSession(session));
   } catch (error) {
     appendSessionOutput(session, `\r\n\x1b[31mApp Server failed to start: ${error.message}\x1b[0m\r\n`);
@@ -933,6 +942,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
   });
   send(ws, "status", publicSession(session));
   if (session.transport === APP_SERVER_TRANSPORT) {
+    send(ws, "app-transcript", publicAppTranscript(session));
     for (const request of session.pendingServerRequests.values()) {
       send(ws, "agent-request", publicAppServerRequest(request));
     }
@@ -1356,6 +1366,218 @@ async function submitAppServerPrompt(session, text, requestedMode) {
   return { deliveryMode: wantsQueue || lateSteer ? "queue-fallback" : "new" };
 }
 
+function publicAppTranscript(session) {
+  return {
+    restoredTurnCount: session.restoredTurnCount || 0,
+    items: session.appTranscript.map((item) => ({ ...item })),
+  };
+}
+
+function restoreAppServerTranscript(session, thread, { resumed = false } = {}) {
+  const turns = Array.isArray(thread?.turns) ? [...thread.turns] : [];
+  turns.sort((a, b) => (a?.startedAt ?? 0) - (b?.startedAt ?? 0));
+  session.appTranscript = [];
+  session.restoredTurnCount = resumed ? turns.length : 0;
+
+  for (const turn of turns) {
+    const context = {
+      turnId: String(turn?.id || ""),
+      turnStartedAt: Number.isFinite(turn?.startedAt) ? turn.startedAt : null,
+      turnStatus: String(turn?.status || ""),
+    };
+    for (const item of Array.isArray(turn?.items) ? turn.items : []) {
+      const transcriptItem = appTranscriptFromThreadItem(session, item, context);
+      if (transcriptItem) upsertAppTranscriptItem(session, transcriptItem, { notify: false });
+    }
+  }
+}
+
+function upsertAppTranscriptItem(session, item, { notify = true } = {}) {
+  if (!item || typeof item !== "object") return null;
+  const id = String(item.id || `app-item-${++session.appTranscriptSequence}`);
+  const existingIndex = session.appTranscript.findIndex((entry) => entry.id === id);
+  const existing = existingIndex >= 0 ? session.appTranscript[existingIndex] : null;
+  const normalized = normalizeAppTranscriptItem({ ...existing, ...item, id });
+  if (existingIndex >= 0) {
+    session.appTranscript[existingIndex] = normalized;
+  } else {
+    session.appTranscript.push(normalized);
+    if (session.appTranscript.length > MAX_APP_TRANSCRIPT_ITEMS) {
+      session.appTranscript.splice(0, session.appTranscript.length - MAX_APP_TRANSCRIPT_ITEMS);
+    }
+  }
+  if (notify) broadcast(session, "app-transcript-upsert", normalized);
+  return normalized;
+}
+
+function appendAppTranscriptDelta(session, itemId, field, delta, fallback = {}) {
+  if (!delta || !["text", "detail", "output"].includes(field)) return;
+  const id = String(itemId || fallback.id || `app-item-${++session.appTranscriptSequence}`);
+  const existing = session.appTranscript.find((entry) => entry.id === id);
+  if (!existing) upsertAppTranscriptItem(session, { ...fallback, id }, { notify: true });
+  const current = session.appTranscript.find((entry) => entry.id === id);
+  if (!current) return;
+  current[field] = trimAppTranscriptValue(`${current[field] || ""}${delta}`, appTranscriptFieldLimit(field));
+  broadcast(session, "app-transcript-delta", { id, field, delta: String(delta) });
+}
+
+function appendAppTranscriptNotice(session, text, tone = "warning") {
+  if (!text) return;
+  upsertAppTranscriptItem(session, {
+    id: `notice-${++session.appTranscriptSequence}`,
+    type: "notice",
+    label: tone === "error" ? "错误" : tone === "warning" ? "提醒" : "状态",
+    text,
+    tone,
+    turnId: session.turnState.turnId || "",
+  });
+}
+
+function normalizeAppTranscriptItem(item) {
+  return {
+    id: String(item.id || ""),
+    type: String(item.type || "notice"),
+    label: String(item.label || "状态"),
+    text: trimAppTranscriptValue(item.text, MAX_APP_TRANSCRIPT_TEXT),
+    detail: trimAppTranscriptValue(item.detail, MAX_APP_TRANSCRIPT_DETAIL),
+    output: trimAppTranscriptValue(item.output, MAX_APP_TRANSCRIPT_OUTPUT),
+    status: String(item.status || ""),
+    tone: String(item.tone || ""),
+    phase: String(item.phase || ""),
+    durationMs: Number.isFinite(item.durationMs) ? item.durationMs : null,
+    exitCode: Number.isFinite(item.exitCode) ? item.exitCode : null,
+    turnId: String(item.turnId || ""),
+    turnStartedAt: Number.isFinite(item.turnStartedAt) ? item.turnStartedAt : null,
+    turnStatus: String(item.turnStatus || ""),
+  };
+}
+
+function appTranscriptFromThreadItem(session, item, context = {}) {
+  if (!item || typeof item !== "object") return null;
+  const base = { id: item.id, ...context };
+  if (item.type === "userMessage") {
+    return { ...base, type: "user", label: "你", text: appServerUserMessageText(item.content) };
+  }
+  if (item.type === "agentMessage") {
+    return {
+      ...base,
+      type: "assistant",
+      label: "Codex",
+      text: item.text || "",
+      phase: item.phase || "",
+    };
+  }
+  if (item.type === "plan") {
+    return { ...base, type: "plan", label: "计划", text: item.text || "", status: item.status || "" };
+  }
+  if (item.type === "commandExecution") {
+    return {
+      ...base,
+      type: "command",
+      label: "命令",
+      text: appServerCommandText(item) || "运行命令",
+      detail: item.cwd ? `目录：${item.cwd}` : "",
+      output: item.aggregatedOutput || "",
+      status: item.status || "",
+      durationMs: item.durationMs,
+      exitCode: item.exitCode,
+    };
+  }
+  if (item.type === "fileChange") {
+    const changes = Array.isArray(item.changes) ? item.changes : [];
+    return {
+      ...base,
+      type: "file",
+      label: "文件修改",
+      text: changes.length ? changes.map(appServerFileChangeText).join("\n") : "正在修改文件",
+      status: item.status || "",
+    };
+  }
+  if (["mcpToolCall", "dynamicToolCall", "collabAgentToolCall"].includes(item.type)) {
+    const name = [item.server, item.namespace, item.tool].filter(Boolean).join(" · ") || "工具";
+    return {
+      ...base,
+      type: "tool",
+      label: item.type === "collabAgentToolCall" ? "协作" : "工具",
+      text: name,
+      detail: appServerArgumentsText(item.arguments) || item.prompt || "",
+      output: appServerToolResultText(item),
+      status: item.status || (item.success === false ? "failed" : ""),
+      durationMs: item.durationMs,
+    };
+  }
+  if (item.type === "subAgentActivity") {
+    return {
+      ...base,
+      type: "tool",
+      label: "协作",
+      text: `${item.agentPath || "子 Agent"} · ${item.kind || "activity"}`,
+    };
+  }
+  if (item.type === "webSearch") {
+    return { ...base, type: "tool", label: "网页搜索", text: item.query || "搜索网页" };
+  }
+  if (item.type === "imageView") {
+    return { ...base, type: "tool", label: "查看图片", text: item.path || "图片" };
+  }
+  if (item.type === "imageGeneration") {
+    return { ...base, type: "tool", label: "生成图片", text: item.status || "图片生成" };
+  }
+  if (item.type === "enteredReviewMode") {
+    return { ...base, type: "notice", label: "状态", text: "已进入代码审查模式", tone: "info" };
+  }
+  if (item.type === "exitedReviewMode") {
+    return { ...base, type: "notice", label: "状态", text: "已结束代码审查模式", tone: "info" };
+  }
+  return null;
+}
+
+function appServerUserMessageText(content) {
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((entry) => {
+      if (typeof entry === "string") return entry;
+      if (entry?.type === "text") return entry.text || "";
+      if (entry?.type === "image") return `图片：${entry.url || ""}`;
+      if (entry?.type === "localImage") return `图片：${entry.path || ""}`;
+      if (entry?.type === "skill") return `Skill：${entry.name || entry.path || ""}`;
+      if (entry?.type === "mention") return `提及：${entry.name || entry.path || ""}`;
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function appServerFileChangeText(change) {
+  const kind = change?.kind?.type || change?.kind || "update";
+  const labels = { add: "新增", create: "新增", delete: "删除", update: "修改", modify: "修改", move: "移动" };
+  return `${labels[kind] || kind} · ${change?.path || "文件"}`;
+}
+
+function appServerArgumentsText(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function appTranscriptFieldLimit(field) {
+  if (field === "output") return MAX_APP_TRANSCRIPT_OUTPUT;
+  if (field === "detail") return MAX_APP_TRANSCRIPT_DETAIL;
+  return MAX_APP_TRANSCRIPT_TEXT;
+}
+
+function trimAppTranscriptValue(value, limit) {
+  const text = typeof value === "string" ? value : value === null || value === undefined ? "" : String(value);
+  if (text.length <= limit) return text;
+  const headLength = Math.floor(limit * 0.65);
+  const tailLength = limit - headLength;
+  return `${text.slice(0, headLength)}\n\n… 中间内容已折叠 …\n\n${text.slice(-tailLength)}`;
+}
+
 function handleAppServerNotification(session, message) {
   if (session.exited) return;
   const { method, params = {} } = message;
@@ -1368,33 +1590,76 @@ function handleAppServerNotification(session, message) {
     appendSessionOutput(session, "\r\n\x1b[34m── Turn started ──\x1b[0m\r\n");
   } else if (method === "item/agentMessage/delta") {
     if (params.itemId) session.streamedItemIds.add(params.itemId);
+    appendAppTranscriptDelta(session, params.itemId, "text", params.delta || "", {
+      type: "assistant",
+      label: "Codex",
+      turnId: params.turnId || session.turnState.turnId,
+    });
     appendSessionOutput(session, params.delta || "");
   } else if (method === "item/commandExecution/outputDelta") {
     if (params.itemId) session.streamedItemIds.add(params.itemId);
+    appendAppTranscriptDelta(session, params.itemId, "output", params.delta || "", {
+      type: "command",
+      label: "命令",
+      text: "运行命令",
+      status: "inProgress",
+      turnId: params.turnId || session.turnState.turnId,
+    });
     appendSessionOutput(session, params.delta || "");
   } else if (method === "item/fileChange/outputDelta") {
     if (params.itemId) session.streamedItemIds.add(params.itemId);
+    appendAppTranscriptDelta(session, params.itemId, "output", params.delta || "", {
+      type: "file",
+      label: "文件修改",
+      text: "正在修改文件",
+      status: "inProgress",
+      turnId: params.turnId || session.turnState.turnId,
+    });
     appendSessionOutput(session, params.delta || "");
   } else if (method === "item/reasoning/summaryTextDelta") {
     appendSessionOutput(session, `\x1b[2m${params.delta || ""}\x1b[0m`);
   } else if (method === "turn/plan/updated") {
     renderAppServerPlanUpdate(session, params);
   } else if (method === "item/mcpToolCall/progress") {
-    if (params.message) appendSessionOutput(session, `\r\n\x1b[2m${params.message}\x1b[0m\r\n`);
+    if (params.message) {
+      appendAppTranscriptDelta(session, params.itemId, "detail", `${params.message}\n`, {
+        type: "tool",
+        label: "工具",
+        text: "正在使用工具",
+        status: "inProgress",
+        turnId: params.turnId || session.turnState.turnId,
+      });
+      appendSessionOutput(session, `\r\n\x1b[2m${params.message}\x1b[0m\r\n`);
+    }
   } else if (["warning", "guardianWarning", "windows/worldWritableWarning"].includes(method)) {
     const warning = params.message || "App Server warning";
+    appendAppTranscriptNotice(session, warning, "warning");
     appendSessionOutput(session, `\r\n\x1b[33mWarning: ${warning}\x1b[0m\r\n`);
   } else if (method === "configWarning") {
     const warning = [params.summary, params.details, params.path].filter(Boolean).join(" · ");
+    appendAppTranscriptNotice(session, warning || "请检查 Codex 配置。", "warning");
     appendSessionOutput(session, `\r\n\x1b[33mConfig warning: ${warning || "Check Codex configuration."}\x1b[0m\r\n`);
   } else if (method === "model/rerouted") {
+    appendAppTranscriptNotice(
+      session,
+      `模型已切换：${params.fromModel || "请求的模型"} → ${params.toModel || "备用模型"}`,
+      "warning",
+    );
     appendSessionOutput(
       session,
       `\r\n\x1b[33mModel changed: ${params.fromModel || "requested model"} → ${params.toModel || "fallback model"}.\x1b[0m\r\n`,
     );
   } else if (method === "item/started") {
+    const transcriptItem = appTranscriptFromThreadItem(session, params.item, {
+      turnId: params.turnId || session.turnState.turnId,
+    });
+    if (transcriptItem) upsertAppTranscriptItem(session, transcriptItem);
     renderAppServerItemStarted(session, params.item);
   } else if (method === "item/completed") {
+    const transcriptItem = appTranscriptFromThreadItem(session, params.item, {
+      turnId: params.turnId || session.turnState.turnId,
+    });
+    if (transcriptItem) upsertAppTranscriptItem(session, transcriptItem);
     renderAppServerItemCompleted(session, params.item);
   } else if (method === "turn/completed") {
     const turnId = params.turn?.id || "";
@@ -1404,7 +1669,9 @@ function handleAppServerNotification(session, message) {
     broadcast(session, "status", publicSession(session));
     void sendAppServerTurnNotification(session, turnId);
   } else if (method === "error") {
-    appendSessionOutput(session, `\r\n\x1b[31m${params.error?.message || params.message || "App Server error"}\x1b[0m\r\n`);
+    const errorMessage = params.error?.message || params.message || "App Server error";
+    appendAppTranscriptNotice(session, errorMessage, "error");
+    appendSessionOutput(session, `\r\n\x1b[31m${errorMessage}\x1b[0m\r\n`);
   } else if (method === "serverRequest/resolved") {
     const requestId = String(params.requestId ?? "");
     if (requestId) session.pendingServerRequests.delete(requestId);
@@ -1481,6 +1748,14 @@ function renderAppServerPlanUpdate(session, params) {
   const marks = { completed: "✓", inProgress: "→", pending: "○" };
   const lines = plan.map((item) => `${marks[item.status] || "○"} ${item.step || ""}`);
   const explanation = params.explanation ? `${params.explanation}\r\n` : "";
+  upsertAppTranscriptItem(session, {
+    id: `plan-${params.turnId || session.turnState.turnId || "current"}`,
+    type: "plan",
+    label: "计划",
+    text: `${params.explanation ? `${params.explanation}\n` : ""}${lines.join("\n")}`,
+    status: plan.some((item) => item.status === "inProgress") ? "inProgress" : "completed",
+    turnId: params.turnId || session.turnState.turnId,
+  });
   appendSessionOutput(session, `\r\n\x1b[36mPlan updated\x1b[0m\r\n${explanation}${lines.join("\r\n")}\r\n`);
 }
 

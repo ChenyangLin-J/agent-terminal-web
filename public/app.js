@@ -50,6 +50,8 @@ const agentRequestAccept = document.querySelector("#agent-request-accept");
 const agentRequestSession = document.querySelector("#agent-request-session");
 const agentRequestDecline = document.querySelector("#agent-request-decline");
 const terminalView = document.querySelector(".terminal-view");
+const appServerView = document.querySelector("#app-server-view");
+const appServerTranscript = document.querySelector("#app-server-transcript");
 const textView = document.querySelector("#text-view");
 const terminalText = document.querySelector("#terminal-text");
 
@@ -110,6 +112,8 @@ let activeSessionReady = true;
 let pendingAgentRequest = null;
 let lastSubmittedPrompt = "";
 let pendingResumeSession = null;
+let appTranscriptItems = [];
+let restoredAppTurnCount = 0;
 const clientId = getClientId();
 const notificationTarget = getNotificationTarget();
 const pushDeviceId = notificationTarget.deviceId;
@@ -602,6 +606,9 @@ function openSocket(params, options = {}) {
   const shouldReplay = options.replay !== false;
   if (!isReconnect) {
     terminal?.reset();
+    appTranscriptItems = [];
+    restoredAppTurnCount = 0;
+    renderAppTranscript();
     lastOutputRevision = 0;
     queuedOutputRevision = 0;
     if (hasSnapshot) restoreSessionSnapshot(snapshotKey);
@@ -668,6 +675,18 @@ function openSocket(params, options = {}) {
     }
     if (message.type === "status") {
       renderStatus(message.payload);
+      return;
+    }
+    if (message.type === "app-transcript") {
+      replaceAppTranscript(message.payload);
+      return;
+    }
+    if (message.type === "app-transcript-upsert") {
+      upsertAppTranscript(message.payload);
+      return;
+    }
+    if (message.type === "app-transcript-delta") {
+      appendAppTranscriptDelta(message.payload);
       return;
     }
     if (message.type === "agent-request") {
@@ -1245,8 +1264,11 @@ function renderStatus(status) {
   activeAccessMode = status.access === "full" ? "full" : "safe";
   activeSessionReady = status.ready !== false;
   document.body.classList.toggle("app-server-session", activeTransport === "app-server");
+  updateSessionViewLabels();
+  syncPrimarySessionView();
   currentSessionExited = Boolean(status.exited);
-  statusEls.project.textContent = status.title || displayProject(status.project);
+  statusEls.project.textContent = displayProject(status.project);
+  statusEls.project.title = status.title || displayProject(status.project);
   setConnectedState(status.exited ? "exited" : !activeSessionReady ? "starting" : historySyncPending ? "loading" : "connected");
   setDocumentTitle(status.title || displayProject(status.project));
   renderTurnState(status.turnState);
@@ -1380,6 +1402,11 @@ function fitTerminal({ delay = 0 } = {}) {
 }
 
 function scrollTerminalPage(direction) {
+  if (activeTransport === "app-server" && !appServerView.classList.contains("hidden")) {
+    const overlap = Math.min(160, appServerView.clientHeight * PAGE_SCROLL_OVERLAP_RATIO);
+    appServerView.scrollBy({ top: direction * Math.max(1, appServerView.clientHeight - overlap), behavior: "smooth" });
+    return;
+  }
   if (!terminal) return;
   terminal.scrollLines(direction * pageScrollLines());
 }
@@ -1394,6 +1421,10 @@ function pageScrollLines() {
 }
 
 function scrollTerminalToBottom() {
+  if (activeTransport === "app-server" && !appServerView.classList.contains("hidden")) {
+    appServerView.scrollTo({ top: appServerView.scrollHeight, behavior: "smooth" });
+    return;
+  }
   terminal?.scrollToBottom();
 }
 
@@ -1552,6 +1583,7 @@ function openTextView() {
   if (!terminal) return;
 
   terminalView.classList.add("hidden");
+  appServerView.classList.add("hidden");
   textView.classList.remove("hidden");
   terminalTabButton.classList.remove("active");
   textTabButton.classList.add("active");
@@ -1570,13 +1602,252 @@ function refreshTerminalText({ follow = false } = {}) {
 }
 
 function closeTextView() {
-  if (!terminalView || !textView) return;
+  if (!terminalView || !appServerView || !textView) return;
 
   textView.classList.add("hidden");
-  terminalView.classList.remove("hidden");
+  terminalView.classList.toggle("hidden", activeTransport === "app-server");
+  appServerView.classList.toggle("hidden", activeTransport !== "app-server");
   textTabButton.classList.remove("active");
   terminalTabButton.classList.add("active");
-  fitTerminal();
+  if (activeTransport === "app-server") {
+    requestAnimationFrame(() => {
+      appServerView.scrollTop = appServerView.scrollHeight;
+    });
+  } else {
+    fitTerminal();
+  }
+}
+
+function updateSessionViewLabels() {
+  const isAppServer = activeTransport === "app-server";
+  terminalTabButton.textContent = isAppServer ? "对话" : "Terminal";
+  textTabButton.textContent = isAppServer ? "原始文本" : "Text";
+  terminalTabButton.setAttribute("aria-label", isAppServer ? "查看整理后的对话" : "查看终端");
+  textTabButton.setAttribute("aria-label", isAppServer ? "查看 App Server 原始文本" : "查看纯文本");
+}
+
+function syncPrimarySessionView() {
+  if (!textView.classList.contains("hidden")) return;
+  terminalView.classList.toggle("hidden", activeTransport === "app-server");
+  appServerView.classList.toggle("hidden", activeTransport !== "app-server");
+  if (activeTransport === "app-server" && !appTranscriptItems.length) renderAppTranscript();
+}
+
+function replaceAppTranscript(payload = {}) {
+  appTranscriptItems = Array.isArray(payload.items) ? payload.items.map(normalizeClientTranscriptItem) : [];
+  restoredAppTurnCount = Number.isFinite(payload.restoredTurnCount) ? payload.restoredTurnCount : 0;
+  renderAppTranscript({ follow: true });
+}
+
+function upsertAppTranscript(payload = {}) {
+  const item = normalizeClientTranscriptItem(payload);
+  if (!item.id) return;
+  const index = appTranscriptItems.findIndex((entry) => entry.id === item.id);
+  const wasAtBottom = isAppTranscriptAtBottom();
+  if (index >= 0) {
+    appTranscriptItems[index] = { ...appTranscriptItems[index], ...item };
+    replaceAppTranscriptCard(appTranscriptItems[index]);
+    followAppTranscriptIfNeeded(wasAtBottom);
+    return;
+  }
+  appTranscriptItems.push(item);
+  renderAppTranscript({ follow: wasAtBottom });
+}
+
+function appendAppTranscriptDelta(payload = {}) {
+  if (!payload.id || !["text", "detail", "output"].includes(payload.field) || !payload.delta) return;
+  const item = appTranscriptItems.find((entry) => entry.id === payload.id);
+  if (!item) return;
+  const wasAtBottom = isAppTranscriptAtBottom();
+  item[payload.field] = trimClientTranscriptValue(`${item[payload.field] || ""}${payload.delta}`);
+  replaceAppTranscriptCard(item);
+  followAppTranscriptIfNeeded(wasAtBottom);
+}
+
+function normalizeClientTranscriptItem(item = {}) {
+  return {
+    id: String(item.id || ""),
+    type: String(item.type || "notice"),
+    label: String(item.label || "状态"),
+    text: trimClientTranscriptValue(item.text),
+    detail: trimClientTranscriptValue(item.detail),
+    output: trimClientTranscriptValue(item.output),
+    status: String(item.status || ""),
+    tone: String(item.tone || ""),
+    phase: String(item.phase || ""),
+    durationMs: Number.isFinite(item.durationMs) ? item.durationMs : null,
+    exitCode: Number.isFinite(item.exitCode) ? item.exitCode : null,
+    turnId: String(item.turnId || ""),
+    turnStartedAt: Number.isFinite(item.turnStartedAt) ? item.turnStartedAt : null,
+  };
+}
+
+function trimClientTranscriptValue(value) {
+  const text = typeof value === "string" ? value : "";
+  if (text.length <= 200_000) return text;
+  return `${text.slice(0, 130_000)}\n\n… 中间内容已折叠 …\n\n${text.slice(-70_000)}`;
+}
+
+function renderAppTranscript({ follow = false } = {}) {
+  if (!appServerTranscript) return;
+  const shouldFollow = follow || isAppTranscriptAtBottom();
+  const fragment = document.createDocumentFragment();
+
+  if (restoredAppTurnCount > 0) {
+    const banner = document.createElement("div");
+    banner.className = "app-history-banner";
+    const title = document.createElement("strong");
+    title.textContent = `已恢复 ${restoredAppTurnCount} 轮历史`;
+    const note = document.createElement("span");
+    note.textContent = "可以直接接着之前的内容继续聊";
+    banner.append(title, note);
+    fragment.append(banner);
+  }
+
+  if (!appTranscriptItems.length) {
+    const emptyState = document.createElement("div");
+    emptyState.className = "app-transcript-empty";
+    const title = document.createElement("strong");
+    title.textContent = activeSessionReady ? "还没有对话" : "正在恢复会话…";
+    const note = document.createElement("span");
+    note.textContent = activeSessionReady ? "在下面输入内容，第一条消息会显示在这里。" : "历史内容准备好后会自动显示。";
+    emptyState.append(title, note);
+    fragment.append(emptyState);
+  } else {
+    let previousTurnId = "";
+    for (const item of appTranscriptItems) {
+      if (item.turnId && previousTurnId && item.turnId !== previousTurnId) {
+        fragment.append(createAppTurnDivider(item));
+      }
+      fragment.append(createAppTranscriptCard(item));
+      if (item.turnId) previousTurnId = item.turnId;
+    }
+  }
+
+  appServerTranscript.replaceChildren(fragment);
+  if (shouldFollow) followAppTranscriptIfNeeded(true);
+}
+
+function createAppTurnDivider(item) {
+  const divider = document.createElement("div");
+  divider.className = "app-turn-divider";
+  const line = document.createElement("span");
+  const label = document.createElement("time");
+  label.textContent = item.turnStartedAt ? formatTranscriptTime(item.turnStartedAt) : "下一轮";
+  divider.append(line, label, line.cloneNode());
+  return divider;
+}
+
+function createAppTranscriptCard(item) {
+  const card = document.createElement("article");
+  card.className = `app-transcript-item app-transcript-${clientTranscriptType(item.type)}`;
+  card.dataset.transcriptId = item.id;
+
+  const header = document.createElement("header");
+  const identity = document.createElement("strong");
+  identity.textContent = item.label;
+  const metaText = transcriptMetaText(item);
+  header.append(identity);
+  if (metaText) {
+    const meta = document.createElement("span");
+    meta.textContent = metaText;
+    header.append(meta);
+  }
+  card.append(header);
+
+  if (item.text) {
+    const copy = document.createElement(item.type === "command" ? "code" : "div");
+    copy.className = item.type === "command" ? "app-transcript-command-text" : "app-transcript-copy";
+    copy.textContent = item.text;
+    card.append(copy);
+  }
+
+  if (item.detail) {
+    card.append(createTranscriptDetails("查看详情", item.detail, item.type === "notice"));
+  }
+  if (item.output) {
+    const lines = item.output.split("\n").length;
+    const shouldOpen = (item.exitCode !== null && item.exitCode !== 0) || (item.output.length < 700 && lines <= 12);
+    card.append(createTranscriptDetails(`查看输出 · ${lines} 行`, item.output, shouldOpen));
+  }
+  return card;
+}
+
+function createTranscriptDetails(summaryText, content, open = false) {
+  const details = document.createElement("details");
+  details.className = "app-transcript-details";
+  details.open = open;
+  const summary = document.createElement("summary");
+  summary.textContent = summaryText;
+  const pre = document.createElement("pre");
+  pre.textContent = content;
+  details.append(summary, pre);
+  return details;
+}
+
+function replaceAppTranscriptCard(item) {
+  const existing = [...appServerTranscript.querySelectorAll("[data-transcript-id]")].find(
+    (element) => element.dataset.transcriptId === item.id,
+  );
+  if (!existing) {
+    renderAppTranscript({ follow: isAppTranscriptAtBottom() });
+    return;
+  }
+  const openDetails = [...existing.querySelectorAll("details")].map((details) => details.open);
+  const replacement = createAppTranscriptCard(item);
+  [...replacement.querySelectorAll("details")].forEach((details, index) => {
+    if (openDetails[index] !== undefined) details.open = openDetails[index];
+  });
+  existing.replaceWith(replacement);
+}
+
+function clientTranscriptType(type) {
+  return ["user", "assistant", "command", "plan", "file", "tool", "notice"].includes(type) ? type : "notice";
+}
+
+function transcriptMetaText(item) {
+  const values = [];
+  if (item.phase === "final_answer") values.push("最终答复");
+  else if (item.phase) values.push("过程更新");
+  const statuses = {
+    inProgress: "进行中",
+    in_progress: "进行中",
+    running: "进行中",
+    completed: "已完成",
+    complete: "已完成",
+    failed: "失败",
+    declined: "已拒绝",
+  };
+  if (statuses[item.status]) values.push(statuses[item.status]);
+  if (item.exitCode !== null) values.push(`退出码 ${item.exitCode}`);
+  if (item.durationMs !== null) values.push(formatTranscriptDuration(item.durationMs));
+  return values.join(" · ");
+}
+
+function formatTranscriptDuration(durationMs) {
+  if (durationMs < 1_000) return `${durationMs}ms`;
+  return `${(durationMs / 1_000).toFixed(durationMs < 10_000 ? 1 : 0)}s`;
+}
+
+function formatTranscriptTime(unixSeconds) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(unixSeconds * 1_000));
+}
+
+function isAppTranscriptAtBottom() {
+  if (!appServerView || appServerView.classList.contains("hidden")) return true;
+  return appServerView.scrollTop + appServerView.clientHeight >= appServerView.scrollHeight - 72;
+}
+
+function followAppTranscriptIfNeeded(shouldFollow) {
+  if (!shouldFollow || !appServerView) return;
+  requestAnimationFrame(() => {
+    appServerView.scrollTop = appServerView.scrollHeight;
+  });
 }
 
 function ensureTerminal() {

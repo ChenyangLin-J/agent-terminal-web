@@ -9,7 +9,7 @@ test("session focus mode keeps views and page controls while hiding surrounding 
     readFile(new URL("../public/session-focus-mode.css", import.meta.url), "utf8"),
   ]);
 
-  assert.match(html, /session-focus-mode\.css\?v=20260716-3/);
+  assert.match(html, /session-focus-mode\.css\?v=20260716-app-history-1/);
   assert.match(html, /session-focus-mode\.js\?v=20260716-3/);
   assert.match(script, /viewTabs\.append\(toggle\)/);
   assert.match(script, /toggle\.textContent = "专注"/);

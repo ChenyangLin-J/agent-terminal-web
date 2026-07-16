@@ -441,7 +441,7 @@ function empty(text) {
 function startSession(overrides = {}) {
   openSocket({
     cwd: overrides.cwd || projectSelect.value,
-    mode: overrides.sessionId ? "new" : launchModeSelect.value,
+    mode: overrides.mode || (overrides.sessionId ? "new" : launchModeSelect.value),
     sessionId: overrides.sessionId || sessionIdInput.value.trim(),
   });
 }
@@ -455,6 +455,7 @@ function openInitialSessionFromUrl() {
   const attach = params.get("attach") || "";
   const sessionId = params.get("sessionId") || "";
   const title = params.get("title") || "";
+  const startNew = params.get("new") === "1";
 
   if (title) setDocumentTitle(title);
 
@@ -470,6 +471,14 @@ function openInitialSessionFromUrl() {
     startSession({
       cwd: params.get("cwd") || ".",
       sessionId,
+    });
+    return true;
+  }
+
+  if (startNew) {
+    startSession({
+      cwd: params.get("cwd") || ".",
+      mode: "new",
     });
     return true;
   }

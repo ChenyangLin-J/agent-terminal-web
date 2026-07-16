@@ -52,6 +52,7 @@ Detached live sessions are kept in memory by the Node process for 1 hour. Restar
 启动前在 `Launch` 里选择：
 
 - `New session`: 运行 `codex`
+- `/?new=1&cwd=.`: 从 workspace 直接创建新会话，供 Home 等快捷入口使用
 - `Resume last`: 运行 `codex resume --last`
 
 如果知道 session ID，把 ID 填到 `Session ID`，会运行：

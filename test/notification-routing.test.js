@@ -9,6 +9,7 @@ test("Home-launched Agent turns route completion notifications back to Home", as
   assert.match(client, /params\.get\("notificationApp"\) === "home"/);
   assert.match(client, /notificationApp: notificationTarget\.app/);
   assert.match(client, /appendNotificationTarget\(url\)/);
-  assert.match(server, /notificationApp === "home" \? `\/open\/agent\?\$\{query\}` : `\/\?\$\{query\}`/);
+  assert.match(server, /const homeQuery = new URLSearchParams\(\{ focus: "agent" \}\)/);
+  assert.match(server, /notificationApp === "home" \? `\/\?\$\{homeQuery\}` : `\/\?\$\{query\}`/);
   assert.match(server, /target: \{ app: notificationApp, deviceId: session\.notificationDeviceId \}/);
 });

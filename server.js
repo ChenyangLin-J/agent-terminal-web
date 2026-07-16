@@ -420,6 +420,8 @@ async function sendHomeTurnNotification(session, event) {
     title,
   });
   if (session.sessionId) query.set("sessionId", session.sessionId);
+  const homeQuery = new URLSearchParams({ focus: "agent" });
+  homeQuery.set("sessionId", session.sessionId || session.id);
 
   const response = await fetch(HOME_PUSH_URL, {
     method: "POST",
@@ -428,7 +430,7 @@ async function sendHomeTurnNotification(session, event) {
       notification: {
         title: `Agent 完成 · ${title}`,
         body: "任务已完成，点开查看结果。",
-        url: notificationApp === "home" ? `/open/agent?${query}` : `/?${query}`,
+        url: notificationApp === "home" ? `/?${homeQuery}` : `/?${query}`,
         tag: `agent-${session.sessionId || session.id}`,
         badge: 0,
       },

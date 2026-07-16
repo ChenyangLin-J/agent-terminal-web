@@ -52,6 +52,7 @@ const HOME_PUSH_URL = process.env.HOME_PUSH_URL || "http://127.0.0.1:3050/intern
 const HOME_PUSH_SUBSCRIBE_URL = process.env.HOME_PUSH_SUBSCRIBE_URL || `${HOME_PUSH_URL}/subscriptions`;
 const HOME_VAPID_PUBLIC_KEY = process.env.HOME_VAPID_PUBLIC_KEY || "";
 const APP_SERVER_TRANSPORT = "app-server";
+const FULL_ACCESS_MODE = "full";
 
 const app = express();
 const server = http.createServer(app);
@@ -425,6 +426,7 @@ async function sendHomeTurnNotification(session, event) {
   });
   if (session.sessionId) query.set("sessionId", session.sessionId);
   if (session.transport === APP_SERVER_TRANSPORT) query.set("transport", APP_SERVER_TRANSPORT);
+  if (session.access === FULL_ACCESS_MODE) query.set("access", FULL_ACCESS_MODE);
   const homeQuery = new URLSearchParams({ focus: "agent" });
   homeQuery.set("sessionId", session.sessionId || session.id);
 
@@ -612,6 +614,7 @@ function createTerminalSession(cwd, launch, restored = {}) {
     command: shell,
     args: commandArgs,
     transport: "terminal",
+    access: normalizeAccessMode(launch.access),
     ready: true,
     mode: launch.mode,
     sessionId: launch.sessionId,
@@ -686,6 +689,7 @@ function createAppServerSession(cwd, launch, restored = {}) {
     command: "codex app-server",
     args: ["app-server"],
     transport: APP_SERVER_TRANSPORT,
+    access: normalizeAccessMode(launch.access),
     ready: false,
     mode: launch.mode,
     sessionId: launch.sessionId,
@@ -746,8 +750,8 @@ async function initializeAppServerSession(session, launch) {
     session.pid = session.appServer.child?.pid || null;
     const params = {
       cwd: session.cwd,
-      sandbox: "workspace-write",
-      approvalPolicy: "on-request",
+      sandbox: session.access === FULL_ACCESS_MODE ? "danger-full-access" : "workspace-write",
+      approvalPolicy: session.access === FULL_ACCESS_MODE ? "never" : "on-request",
     };
     const thread = launch.sessionId
       ? await session.appServer.resumeThread(launch.sessionId, params)
@@ -799,6 +803,7 @@ function restoreTmuxSession(id) {
       {
         mode: "resume-id",
         transport: APP_SERVER_TRANSPORT,
+        access: normalizeAccessMode(record.access),
         sessionId: record.sessionId,
         args: ["app-server"],
         title: record.title || "",
@@ -823,8 +828,9 @@ function restoreTmuxSession(id) {
       cwd,
       {
         mode: "resume-id",
+        access: normalizeAccessMode(record.access),
         sessionId: record.sessionId,
-        args: ["--no-alt-screen", "resume", record.sessionId],
+        args: terminalLaunchArgs(record.access, ["resume", record.sessionId]),
         title: record.title || "",
       },
       {
@@ -846,6 +852,7 @@ function restoreTmuxSession(id) {
 
   const launch = {
     mode: record.mode || "new",
+    access: normalizeAccessMode(record.access),
     sessionId: record.sessionId || "",
     args: Array.isArray(record.args) && record.args.length ? record.args : ["--no-alt-screen"],
     title: record.title || "",
@@ -886,6 +893,7 @@ function listDetachedSessions() {
       command: record.command || "codex",
       args: Array.isArray(record.args) ? record.args : [],
       transport,
+      access: normalizeAccessMode(record.access),
       ready: false,
       mode: record.mode || "new",
       sessionId: record.sessionId || "",
@@ -1362,11 +1370,28 @@ function handleAppServerNotification(session, message) {
     if (params.itemId) session.streamedItemIds.add(params.itemId);
     appendSessionOutput(session, params.delta || "");
   } else if (method === "item/commandExecution/outputDelta") {
+    if (params.itemId) session.streamedItemIds.add(params.itemId);
     appendSessionOutput(session, params.delta || "");
   } else if (method === "item/fileChange/outputDelta") {
+    if (params.itemId) session.streamedItemIds.add(params.itemId);
     appendSessionOutput(session, params.delta || "");
   } else if (method === "item/reasoning/summaryTextDelta") {
     appendSessionOutput(session, `\x1b[2m${params.delta || ""}\x1b[0m`);
+  } else if (method === "turn/plan/updated") {
+    renderAppServerPlanUpdate(session, params);
+  } else if (method === "item/mcpToolCall/progress") {
+    if (params.message) appendSessionOutput(session, `\r\n\x1b[2m${params.message}\x1b[0m\r\n`);
+  } else if (["warning", "guardianWarning", "windows/worldWritableWarning"].includes(method)) {
+    const warning = params.message || "App Server warning";
+    appendSessionOutput(session, `\r\n\x1b[33mWarning: ${warning}\x1b[0m\r\n`);
+  } else if (method === "configWarning") {
+    const warning = [params.summary, params.details, params.path].filter(Boolean).join(" · ");
+    appendSessionOutput(session, `\r\n\x1b[33mConfig warning: ${warning || "Check Codex configuration."}\x1b[0m\r\n`);
+  } else if (method === "model/rerouted") {
+    appendSessionOutput(
+      session,
+      `\r\n\x1b[33mModel changed: ${params.fromModel || "requested model"} → ${params.toModel || "fallback model"}.\x1b[0m\r\n`,
+    );
   } else if (method === "item/started") {
     renderAppServerItemStarted(session, params.item);
   } else if (method === "item/completed") {
@@ -1411,12 +1436,70 @@ function renderAppServerItemCompleted(session, item) {
     session.streamedItemIds.delete(item.id);
     if (item.phase === "final_answer") session.lastAssistantMessage = item.text || session.lastAssistantMessage;
     appendSessionOutput(session, "\r\n");
+  } else if (item.type === "plan") {
+    if (item.text) appendSessionOutput(session, `\r\n\x1b[36mPlan\x1b[0m\r\n${item.text}\r\n`);
   } else if (item.type === "commandExecution") {
+    const streamed = session.streamedItemIds.has(item.id);
+    const output = typeof item.aggregatedOutput === "string" ? item.aggregatedOutput : "";
+    if (!streamed && output) {
+      appendSessionOutput(session, output);
+      if (!output.endsWith("\n")) appendSessionOutput(session, "\r\n");
+    }
+    session.streamedItemIds.delete(item.id);
     const code = item.exitCode ?? item.exit_code;
-    if (code !== undefined && code !== null) appendSessionOutput(session, `\r\n\x1b[2mCommand exited ${code}.\x1b[0m\r\n`);
+    const duration = Number.isFinite(item.durationMs) ? ` · ${formatDuration(item.durationMs)}` : "";
+    if (code !== undefined && code !== null) {
+      appendSessionOutput(session, `\r\n\x1b[2mCommand exited ${code}${duration}.\x1b[0m\r\n`);
+    }
   } else if (item.type === "fileChange") {
-    appendSessionOutput(session, "\r\n\x1b[35mFiles updated.\x1b[0m\r\n");
+    session.streamedItemIds.delete(item.id);
+    const changes = Array.isArray(item.changes) ? item.changes : [];
+    const detail = changes
+      .map((change) => {
+        const kind = change?.kind?.type || change?.kind || "update";
+        return `  ${kind} ${change?.path || "file"}`;
+      })
+      .join("\r\n");
+    appendSessionOutput(
+      session,
+      `\r\n\x1b[35mFiles updated${changes.length ? ` (${changes.length})` : ""}.\x1b[0m${detail ? `\r\n${detail}` : ""}\r\n`,
+    );
+  } else if (["mcpToolCall", "dynamicToolCall"].includes(item.type)) {
+    const result = appServerToolResultText(item);
+    if (result) appendSessionOutput(session, `${result}${result.endsWith("\n") ? "" : "\r\n"}`);
+    if (item.error?.message) appendSessionOutput(session, `\x1b[31m${item.error.message}\x1b[0m\r\n`);
+    const label = item.tool || item.type;
+    appendSessionOutput(session, `\x1b[2m${label} ${item.status || "completed"}.\x1b[0m\r\n`);
   }
+}
+
+function renderAppServerPlanUpdate(session, params) {
+  const plan = Array.isArray(params.plan) ? params.plan : [];
+  const signature = JSON.stringify({ explanation: params.explanation || "", plan });
+  if (!plan.length || signature === session.lastPlanSignature) return;
+  session.lastPlanSignature = signature;
+  const marks = { completed: "✓", inProgress: "→", pending: "○" };
+  const lines = plan.map((item) => `${marks[item.status] || "○"} ${item.step || ""}`);
+  const explanation = params.explanation ? `${params.explanation}\r\n` : "";
+  appendSessionOutput(session, `\r\n\x1b[36mPlan updated\x1b[0m\r\n${explanation}${lines.join("\r\n")}\r\n`);
+}
+
+function appServerToolResultText(item) {
+  const content = item.result?.content || item.contentItems;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((entry) => {
+      if (typeof entry === "string") return entry;
+      if (typeof entry?.text === "string") return entry.text;
+      return "";
+    })
+    .filter(Boolean)
+    .join("\r\n");
+}
+
+function formatDuration(durationMs) {
+  if (durationMs < 1_000) return `${durationMs}ms`;
+  return `${(durationMs / 1_000).toFixed(durationMs < 10_000 ? 1 : 0)}s`;
 }
 
 function appServerCommandText(item) {
@@ -1747,6 +1830,7 @@ function publicSession(session) {
     command: session.command,
     args: session.args,
     transport: session.transport || "terminal",
+    access: normalizeAccessMode(session.access),
     ready: session.ready !== false,
     mode: session.mode,
     sessionId: session.sessionId,
@@ -1849,6 +1933,7 @@ function persistWebSession(session) {
     command: session.command,
     args: session.args,
     transport: session.transport || "terminal",
+    access: normalizeAccessMode(session.access),
     mode: session.mode,
     sessionId: session.sessionId,
     title: session.title,
@@ -1913,8 +1998,21 @@ function resolveWorkspacePath(value) {
   return requested;
 }
 
+function normalizeAccessMode(value) {
+  return value === FULL_ACCESS_MODE ? FULL_ACCESS_MODE : "safe";
+}
+
+function terminalLaunchArgs(access, tail = []) {
+  const args = ["--no-alt-screen"];
+  if (normalizeAccessMode(access) === FULL_ACCESS_MODE) {
+    args.push("--dangerously-bypass-approvals-and-sandbox");
+  }
+  return [...args, ...tail];
+}
+
 async function getLaunchConfig(searchParams) {
   const transport = searchParams.get("transport") === APP_SERVER_TRANSPORT ? APP_SERVER_TRANSPORT : "terminal";
+  const access = normalizeAccessMode(searchParams.get("access"));
   const sessionId = String(searchParams.get("sessionId") || "").trim();
   if (sessionId && !/^[a-zA-Z0-9._:-]+$/.test(sessionId)) return null;
 
@@ -1922,8 +2020,9 @@ async function getLaunchConfig(searchParams) {
     return {
       mode: "resume-id",
       transport,
+      access,
       sessionId,
-      args: ["--no-alt-screen", "resume", sessionId],
+      args: transport === APP_SERVER_TRANSPORT ? ["app-server"] : terminalLaunchArgs(access, ["resume", sessionId]),
     };
   }
 
@@ -1932,21 +2031,22 @@ async function getLaunchConfig(searchParams) {
     return {
       mode,
       transport,
+      access,
       sessionId: "",
-      args: transport === APP_SERVER_TRANSPORT ? ["app-server"] : ["--no-alt-screen"],
+      args: transport === APP_SERVER_TRANSPORT ? ["app-server"] : terminalLaunchArgs(access),
     };
   }
   if (mode === "resume-picker") {
     if (transport === APP_SERVER_TRANSPORT) return null;
-    return { mode, transport, sessionId: "", args: ["--no-alt-screen", "resume"] };
+    return { mode, transport, access, sessionId: "", args: terminalLaunchArgs(access, ["resume"]) };
   }
   if (mode === "resume-last") {
     if (transport === APP_SERVER_TRANSPORT) {
       const [latest] = await listCodexSessions({ archived: false });
       if (!latest?.id) return null;
-      return { mode, transport, sessionId: latest.id, args: ["app-server"] };
+      return { mode, transport, access, sessionId: latest.id, args: ["app-server"] };
     }
-    return { mode, transport, sessionId: "", args: ["--no-alt-screen", "resume", "--last"] };
+    return { mode, transport, access, sessionId: "", args: terminalLaunchArgs(access, ["resume", "--last"]) };
   }
   return null;
 }
@@ -2036,6 +2136,7 @@ async function listRecentAgentSessions(limit = 40) {
         live: Boolean(liveSession),
         webSessionId: liveSession?.id || "",
         transport: liveSession?.transport || "terminal",
+        access: normalizeAccessMode(liveSession?.access),
       };
     })
     .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())

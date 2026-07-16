@@ -9,5 +9,5 @@ test("URL shortcut starts a new workspace session explicitly", () => {
   assert.match(appSource, /const startNew = params\.get\("new"\) === "1"/);
   assert.match(appSource, /if \(startNew\) \{\s+startSession\(\{\s+cwd: params\.get\("cwd"\) \|\| "\."/);
   assert.match(appSource, /mode: overrides\.mode \|\| \(overrides\.sessionId \? "new" : launchModeSelect\.value\)/);
-  assert.match(pageSource, /app\.js\?v=20260716-app-server-experiment-1/);
+  assert.match(pageSource, /app\.js\?v=20260716-resume-access-2/);
 });

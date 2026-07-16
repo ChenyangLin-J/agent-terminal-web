@@ -27,4 +27,14 @@ test("App Server is optional and binds steer and queue to structured turns", () 
   assert.match(app, /activeTransport === "app-server"/);
   assert.match(app, /"queue-fallback": "当前任务刚刚结束，已自动转到下一轮。"/);
   assert.match(page, /id="agent-request"/);
+  assert.match(page, /id="resume-engine-dialog"/);
+  assert.match(app, /function openResumeEngineDialog\(session\)/);
+  assert.match(app, /function resumePendingSession\(transport\)/);
+  assert.match(server, /approvalPolicy: session\.access === FULL_ACCESS_MODE \? "never" : "on-request"/);
+  assert.match(server, /--dangerously-bypass-approvals-and-sandbox/);
+  assert.match(server, /item\.aggregatedOutput/);
+  assert.match(server, /method === "turn\/plan\/updated"/);
+  assert.match(server, /function appServerToolResultText\(item\)/);
+  assert.match(app, /const shouldShowLedger = items\.length > 0 && \(latestTurnState\.active \|\| hasFailedItem\)/);
+  assert.match(app, /function refreshTerminalText\(\{ follow = false \} = \{\}\)/);
 });

@@ -3,6 +3,7 @@ const sessionScreen = document.querySelector("#session-screen");
 const projectSelect = document.querySelector("#project");
 const launchModeSelect = document.querySelector("#launch-mode");
 const transportSelect = document.querySelector("#transport");
+const accessModeSelect = document.querySelector("#access-mode");
 const sessionIdInput = document.querySelector("#session-id");
 const connectButton = document.querySelector("#connect");
 const refreshSessionsButton = document.querySelector("#refresh-sessions");
@@ -10,6 +11,13 @@ const logoutButton = document.querySelector("#logout");
 const sessionsList = document.querySelector("#sessions-list");
 const codexSessionsList = document.querySelector("#codex-sessions-list");
 const archivedCodexSessionsList = document.querySelector("#archived-codex-sessions-list");
+const resumeEngineDialog = document.querySelector("#resume-engine-dialog");
+const resumeSessionTitle = document.querySelector("#resume-session-title");
+const resumeAccessMode = document.querySelector("#resume-access-mode");
+const resumeAccessWarning = document.querySelector("#resume-access-warning");
+const resumeWithTerminal = document.querySelector("#resume-with-terminal");
+const resumeWithAppServer = document.querySelector("#resume-with-app-server");
+const resumeEngineCancel = document.querySelector("#resume-engine-cancel");
 const backButton = document.querySelector("#back");
 const disconnectButton = document.querySelector("#disconnect");
 const terminalTabButton = document.querySelector("#terminal-tab");
@@ -97,9 +105,11 @@ let liveSessionsByCodexId = new Map();
 let archivedSessionsExpanded = false;
 let latestTurnState = { active: false, requirements: [], queuedTurns: [] };
 let activeTransport = "terminal";
+let activeAccessMode = "safe";
 let activeSessionReady = true;
 let pendingAgentRequest = null;
 let lastSubmittedPrompt = "";
+let pendingResumeSession = null;
 const clientId = getClientId();
 const notificationTarget = getNotificationTarget();
 const pushDeviceId = notificationTarget.deviceId;
@@ -120,6 +130,13 @@ window.addEventListener("resize", () => fitTerminal({ delay: 120 }));
 logoutButton.addEventListener("click", logout);
 connectButton.addEventListener("click", () => startSession());
 refreshSessionsButton.addEventListener("click", refreshLists);
+resumeAccessMode.addEventListener("change", renderResumeAccessWarning);
+resumeWithTerminal.addEventListener("click", () => resumePendingSession("terminal"));
+resumeWithAppServer.addEventListener("click", () => resumePendingSession("app-server"));
+resumeEngineCancel.addEventListener("click", closeResumeEngineDialog);
+resumeEngineDialog.addEventListener("click", (event) => {
+  if (event.target === resumeEngineDialog) closeResumeEngineDialog();
+});
 backButton.addEventListener("click", showStartScreen);
 disconnectButton.addEventListener("click", detach);
 terminalTabButton.addEventListener("click", closeTextView);
@@ -262,6 +279,7 @@ function renderLiveSessions(sessions) {
             sessionId: session.sessionId || "",
             title: session.title || "New Codex session",
             transport: session.transport || "terminal",
+            access: session.access || "safe",
           }),
       }),
     );
@@ -305,13 +323,7 @@ function renderSavedCodexSessions(sessions) {
         title: session.title || "Untitled session",
         subtitle: `${displayProject(session.project)} · ${formatTime(session.updatedAt)}`,
         action: "Resume",
-        onClick: () =>
-          openSessionFromList({
-            cwd: projectForSession(session),
-            sessionId: session.id,
-            title: session.title || "Untitled session",
-            transport: transportSelect.value || "terminal",
-          }),
+        onClick: () => openResumeEngineDialog(session),
         secondaryAction: "Rename",
         onSecondaryClick: () => renameCodexSession(session),
         tertiaryAction: "Archive",
@@ -360,6 +372,38 @@ function renderArchivedCodexSessions(sessions) {
     });
     archivedCodexSessionsList.append(toggleButton);
   }
+}
+
+function openResumeEngineDialog(session) {
+  pendingResumeSession = session;
+  resumeSessionTitle.textContent = session.title || "Untitled session";
+  resumeAccessMode.value = "safe";
+  renderResumeAccessWarning();
+  resumeEngineDialog.showModal();
+}
+
+function closeResumeEngineDialog() {
+  pendingResumeSession = null;
+  if (resumeEngineDialog.open) resumeEngineDialog.close();
+}
+
+function renderResumeAccessWarning() {
+  resumeAccessWarning.classList.toggle("hidden", resumeAccessMode.value !== "full");
+}
+
+function resumePendingSession(transport) {
+  const session = pendingResumeSession;
+  if (!session) return;
+  const access = resumeAccessMode.value === "full" ? "full" : "safe";
+  pendingResumeSession = null;
+  resumeEngineDialog.close();
+  openSessionFromList({
+    cwd: projectForSession(session),
+    sessionId: session.id,
+    title: session.title || "Untitled session",
+    transport,
+    access,
+  });
 }
 
 function sessionCard({
@@ -467,6 +511,7 @@ function startSession(overrides = {}) {
     mode: overrides.mode || (overrides.sessionId ? "new" : launchModeSelect.value),
     sessionId: overrides.sessionId || sessionIdInput.value.trim(),
     transport: overrides.transport || transportSelect.value || "terminal",
+    access: overrides.access || accessModeSelect.value || "safe",
   });
 }
 
@@ -481,6 +526,7 @@ function openInitialSessionFromUrl() {
   const title = params.get("title") || "";
   const startNew = params.get("new") === "1";
   const transport = params.get("transport") === "app-server" ? "app-server" : "terminal";
+  const access = params.get("access") === "full" ? "full" : "safe";
 
   if (title) setDocumentTitle(title);
 
@@ -489,6 +535,7 @@ function openInitialSessionFromUrl() {
       cwd: params.get("cwd") || ".",
       sessionId,
       transport,
+      access,
     });
     return true;
   }
@@ -498,6 +545,7 @@ function openInitialSessionFromUrl() {
       cwd: params.get("cwd") || ".",
       sessionId,
       transport,
+      access,
     });
     return true;
   }
@@ -507,6 +555,7 @@ function openInitialSessionFromUrl() {
       cwd: params.get("cwd") || ".",
       mode: "new",
       transport,
+      access,
     });
     return true;
   }
@@ -560,6 +609,7 @@ function openSocket(params, options = {}) {
   historySyncPending = shouldReplay;
   historySyncStartedAt = shouldReplay ? Date.now() : 0;
   activeTransport = params.transport === "app-server" ? "app-server" : "terminal";
+  activeAccessMode = params.access === "full" ? "full" : "safe";
   activeSessionReady = activeTransport !== "app-server";
   document.body.classList.toggle("app-server-session", activeTransport === "app-server");
   clearAgentRequest();
@@ -824,7 +874,7 @@ function restoreSessionSnapshot(key) {
   terminal.write(snapshot.text.replace(/\n/g, "\r\n"), () => {
     terminal.scrollToBottom();
     if (!textView.classList.contains("hidden")) {
-      terminalText.value = getTerminalBufferText();
+      refreshTerminalText({ follow: true });
     }
   });
   return true;
@@ -1031,6 +1081,7 @@ function currentReconnectParams() {
     sessionId: activeSessionParams.sessionId || params.get("sessionId") || "",
     title: activeSessionParams.title || params.get("title") || "",
     transport: activeSessionParams.transport || params.get("transport") || "terminal",
+    access: activeSessionParams.access || params.get("access") || "safe",
   };
 }
 
@@ -1188,8 +1239,10 @@ function renderStatus(status) {
     sessionId: status.sessionId || activeSessionParams.sessionId || "",
     title: status.title || displayProject(status.project),
     transport: status.transport || "terminal",
+    access: status.access || "safe",
   };
   activeTransport = status.transport === "app-server" ? "app-server" : "terminal";
+  activeAccessMode = status.access === "full" ? "full" : "safe";
   activeSessionReady = status.ready !== false;
   document.body.classList.toggle("app-server-session", activeTransport === "app-server");
   currentSessionExited = Boolean(status.exited);
@@ -1208,14 +1261,17 @@ function renderTurnState(value = {}) {
   };
   const items = [...latestTurnState.requirements, ...latestTurnState.queuedTurns];
   const hasFailedItem = items.some((item) => item.status === "failed");
-  turnLedger.classList.toggle("hidden", items.length === 0);
+  const shouldShowLedger = items.length > 0 && (latestTurnState.active || hasFailedItem);
+  turnLedger.classList.toggle("hidden", !shouldShowLedger);
+  if (!shouldShowLedger) turnLedger.open = false;
+  const itemCount = items.length ? ` · ${items.length} 项` : "";
   turnLedgerStatus.textContent = latestTurnState.active
     ? latestTurnState.queuedTurns.length
-      ? `进行中 · ${latestTurnState.queuedTurns.length} 条待下一轮`
-      : "进行中"
+      ? `进行中 · ${latestTurnState.queuedTurns.length} 条待下一轮${itemCount}`
+      : `进行中${itemCount}`
     : hasFailedItem
-      ? "有未完成"
-      : "已完成";
+      ? `有未完成${itemCount}`
+      : `已完成${itemCount}`;
   turnRequirements.replaceChildren(
     ...items.map((item) => {
       const row = document.createElement("li");
@@ -1230,7 +1286,9 @@ function renderTurnState(value = {}) {
 }
 
 function setConnectedState(state) {
-  statusEls.connection.textContent = activeTransport === "app-server" ? `app server · ${state}` : state;
+  const transport = activeTransport === "app-server" ? "app server · " : "";
+  const access = activeAccessMode === "full" ? " · full access" : "";
+  statusEls.connection.textContent = `${transport}${state}${access}`;
   const connected = state === "connected" && activeSessionReady;
   sendPromptButton.disabled = !connected;
   queuePromptButton.disabled = !connected;
@@ -1288,7 +1346,8 @@ function syncSessionUrl(status) {
     url.searchParams.get("title") === title &&
     (status.transport === "app-server"
       ? url.searchParams.get("transport") === "app-server"
-      : !url.searchParams.has("transport"));
+      : !url.searchParams.has("transport")) &&
+    (status.access === "full" ? url.searchParams.get("access") === "full" : !url.searchParams.has("access"));
   if (alreadySynced) return;
 
   url.search = "";
@@ -1297,6 +1356,7 @@ function syncSessionUrl(status) {
   if (status.sessionId) url.searchParams.set("sessionId", status.sessionId);
   if (title) url.searchParams.set("title", title);
   if (status.transport === "app-server") url.searchParams.set("transport", "app-server");
+  if (status.access === "full") url.searchParams.set("access", "full");
   appendNotificationTarget(url);
   window.history.replaceState(null, "", url.toString());
 }
@@ -1362,7 +1422,13 @@ function getTerminalBufferText() {
   const buffer = terminal.buffer.active;
   const lines = [];
   for (let i = 0; i < buffer.length; i += 1) {
-    lines.push(buffer.getLine(i)?.translateToString(true) || "");
+    const line = buffer.getLine(i);
+    const text = line?.translateToString(true) || "";
+    if (line?.isWrapped && lines.length) {
+      lines[lines.length - 1] += text;
+    } else {
+      lines.push(text);
+    }
   }
   return lines.join("\n").trimEnd();
 }
@@ -1419,7 +1485,7 @@ function writeTerminalOutput(raw, { replay = false, revision = null, onComplete 
       terminal.scrollToLine(previousViewportY);
     }
     if (!textView.classList.contains("hidden")) {
-      terminalText.value = getTerminalBufferText();
+      refreshTerminalText({ follow: shouldFollow });
     }
     onComplete?.();
   });
@@ -1452,7 +1518,7 @@ function writeTerminalReplay(payload = {}) {
     lastOutputRevision = revision ?? 0;
     terminal.scrollToBottom();
     if (!textView.classList.contains("hidden")) {
-      terminalText.value = getTerminalBufferText();
+      refreshTerminalText({ follow: true });
     }
     finishHistorySync(mode, raw.length);
   });
@@ -1485,11 +1551,22 @@ function isTerminalAtBottom() {
 function openTextView() {
   if (!terminal) return;
 
-  terminalText.value = getTerminalBufferText();
   terminalView.classList.add("hidden");
   textView.classList.remove("hidden");
   terminalTabButton.classList.remove("active");
   textTabButton.classList.add("active");
+  refreshTerminalText({ follow: true });
+}
+
+function refreshTerminalText({ follow = false } = {}) {
+  const wasAtBottom =
+    terminalText.scrollHeight <= terminalText.clientHeight ||
+    terminalText.scrollTop + terminalText.clientHeight >= terminalText.scrollHeight - 24;
+  terminalText.value = getTerminalBufferText();
+  if (!follow && !wasAtBottom) return;
+  requestAnimationFrame(() => {
+    terminalText.scrollTop = terminalText.scrollHeight;
+  });
 }
 
 function closeTextView() {

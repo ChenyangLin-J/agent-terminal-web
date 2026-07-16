@@ -25,10 +25,14 @@ const killSessionButton = document.querySelector("#kill-session");
 const attachFileButton = document.querySelector("#attach-file");
 const voiceInputButton = document.querySelector("#voice-input");
 const sendPromptButton = document.querySelector("#send-prompt");
+const queuePromptButton = document.querySelector("#queue-prompt");
 const fileInput = document.querySelector("#file-input");
 const promptInput = document.querySelector("#prompt");
 const composer = document.querySelector("#composer");
 const uploadStatus = document.querySelector("#upload-status");
+const turnLedger = document.querySelector("#turn-ledger");
+const turnLedgerStatus = document.querySelector("#turn-ledger-status");
+const turnRequirements = document.querySelector("#turn-requirements");
 const terminalView = document.querySelector(".terminal-view");
 const textView = document.querySelector("#text-view");
 const terminalText = document.querySelector("#terminal-text");
@@ -83,6 +87,7 @@ let queuedOutputRevision = 0;
 let uploadStatusTimer = null;
 let liveSessionsByCodexId = new Map();
 let archivedSessionsExpanded = false;
+let latestTurnState = { active: false, requirements: [], queuedTurns: [] };
 const clientId = getClientId();
 const notificationTarget = getNotificationTarget();
 const pushDeviceId = notificationTarget.deviceId;
@@ -123,12 +128,13 @@ keyEscButton.addEventListener("click", () => sendTerminalKey("\x1b"));
 sendStatusButton.addEventListener("click", () => command("/status"));
 sendPermissionsButton.addEventListener("click", () => command("/permissions"));
 killSessionButton.addEventListener("click", endSession);
-sendPromptButton.addEventListener("click", submitPrompt);
+sendPromptButton.addEventListener("click", () => submitPrompt("auto"));
+queuePromptButton.addEventListener("click", () => submitPrompt("queue"));
 promptInput.addEventListener("keydown", (event) => {
   if (event.isComposing) return;
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
-    submitPrompt();
+    submitPrompt("auto");
   }
 });
 window.AgentUpload.create({
@@ -562,7 +568,11 @@ function openSocket(params, options = {}) {
     if (socket !== nextSocket) return;
     markServerSeen();
     const message = JSON.parse(event.data);
-    if (message.type === "client-pong" || message.type === "control-ack") {
+    if (message.type === "client-pong") {
+      return;
+    }
+    if (message.type === "control-ack") {
+      handleControlAck(message.payload);
       return;
     }
     if (message.type === "output") {
@@ -606,7 +616,7 @@ function openSocket(params, options = {}) {
   });
 }
 
-function submitPrompt() {
+function submitPrompt(deliveryMode = "auto") {
   const prompt = promptInput.value.trim();
   if (!prompt) return;
   if (notificationTarget.app === "agent") {
@@ -616,6 +626,7 @@ function submitPrompt() {
     send({
       type: "submit",
       data: prompt,
+      deliveryMode,
       notificationApp: notificationTarget.app,
       notificationDeviceId: pushDeviceId,
     })
@@ -624,6 +635,17 @@ function submitPrompt() {
   } else {
     setUploadStatus("连接恢复中，文本已保留。");
   }
+}
+
+function handleControlAck(payload = {}) {
+  if (payload.kind !== "submit") return;
+  if (payload.turnState) renderTurnState(payload.turnState);
+  const message = {
+    new: "已开始新任务。",
+    steer: "已追加到当前任务；不会替换前面的要求。",
+    queue: "已排到下一轮。",
+  }[payload.deliveryMode];
+  if (message) setUploadStatus(message, { clear: true });
 }
 
 function command(value) {
@@ -1074,13 +1096,41 @@ function renderStatus(status) {
   statusEls.project.textContent = status.title || displayProject(status.project);
   setConnectedState(status.exited ? "exited" : historySyncPending ? "loading" : "connected");
   setDocumentTitle(status.title || displayProject(status.project));
+  renderTurnState(status.turnState);
   syncSessionUrl(status);
+}
+
+function renderTurnState(value = {}) {
+  latestTurnState = {
+    active: Boolean(value.active),
+    requirements: Array.isArray(value.requirements) ? value.requirements : [],
+    queuedTurns: Array.isArray(value.queuedTurns) ? value.queuedTurns : [],
+  };
+  const items = [...latestTurnState.requirements, ...latestTurnState.queuedTurns];
+  turnLedger.classList.toggle("hidden", items.length === 0);
+  turnLedgerStatus.textContent = latestTurnState.active
+    ? latestTurnState.queuedTurns.length
+      ? `进行中 · ${latestTurnState.queuedTurns.length} 条待下一轮`
+      : "进行中"
+    : "已完成";
+  turnRequirements.replaceChildren(
+    ...items.map((item) => {
+      const row = document.createElement("li");
+      row.dataset.status = item.status || "working";
+      const prefix = item.status === "queued" ? "下一轮：" : item.kind === "followup" ? "追加：" : "";
+      row.textContent = `${prefix}${item.text || ""}`;
+      return row;
+    }),
+  );
+  sendPromptButton.textContent = latestTurnState.active ? "追加当前" : "新任务";
+  queuePromptButton.classList.toggle("hidden", !latestTurnState.active);
 }
 
 function setConnectedState(state) {
   statusEls.connection.textContent = state;
   const connected = state === "connected";
   sendPromptButton.disabled = !connected;
+  queuePromptButton.disabled = !connected;
   textTabButton.disabled = !connected;
   pageUpButton.disabled = !connected;
   pageDownButton.disabled = !connected;

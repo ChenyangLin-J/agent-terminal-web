@@ -132,6 +132,13 @@
 
         <section id="composer" class="composer" aria-label="Prompt composer">
           <input id="file-input" class="hidden" type="file" multiple />
+          <section id="turn-ledger" class="turn-ledger hidden" aria-label="Current turn requirements">
+            <header>
+              <strong>本轮要求</strong>
+              <span id="turn-ledger-status">进行中</span>
+            </header>
+            <ol id="turn-requirements"></ol>
+          </section>
           <div class="prompt-field">
             <textarea
               id="prompt"
@@ -150,6 +157,7 @@
           <div class="composer-actions">
             <button id="attach-file" type="button">Attach</button>
             <button id="send-prompt" class="primary" type="button">Send</button>
+            <button id="queue-prompt" class="hidden" type="button">下一轮</button>
           </div>
           <div id="upload-status" class="upload-status" aria-live="polite"></div>
         </section>
@@ -161,6 +169,6 @@
     <script src="/shared/voice-capture-widget.js?v=20260715-mic-release-1"></script>
     <script src="/agent-upload.js?v=20260713-progress-1"></script>
     <script src="/agent-voice-input.js?v=20260716-transcribe-only-1"></script>
-    <script src="/app.js?v=20260716-new-session-link-1"></script>
+    <script src="/app.js?v=20260716-followup-ledger-1"></script>
   </body>
 </html>

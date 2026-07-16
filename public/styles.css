@@ -423,6 +423,52 @@ input {
   background: #151b2a;
 }
 
+.turn-ledger {
+  grid-column: 1 / -1;
+  padding: 9px 10px;
+  border: 1px solid #2c3443;
+  border-radius: 10px;
+  background: #131923;
+}
+
+.turn-ledger header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #dce2ee;
+  font-size: 12px;
+}
+
+.turn-ledger header span {
+  color: #91a5c6;
+}
+
+.turn-ledger ol {
+  display: grid;
+  gap: 5px;
+  max-height: 112px;
+  margin: 7px 0 0;
+  padding-left: 22px;
+  overflow-y: auto;
+  color: #c8cfdb;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.turn-ledger li {
+  padding-left: 2px;
+  overflow-wrap: anywhere;
+}
+
+.turn-ledger li[data-status="completed"] {
+  color: #798394;
+}
+
+.turn-ledger li[data-status="queued"] {
+  color: #d3b77e;
+}
+
 .prompt-field {
   position: relative;
   min-width: 0;
@@ -474,13 +520,21 @@ input {
 
 .composer-actions {
   display: grid;
-  grid-template-rows: 42px minmax(0, 1fr);
+  grid-template-rows: 42px minmax(0, 1fr) 38px;
   gap: 8px;
 }
 
 #attach-file,
-#send-prompt {
+#send-prompt,
+#queue-prompt {
   width: 100%;
+  padding-inline: 4px;
+  white-space: nowrap;
+}
+
+#send-prompt,
+#queue-prompt {
+  font-size: 14px;
 }
 
 #send-prompt {

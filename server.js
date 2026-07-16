@@ -42,6 +42,7 @@ const MAX_UPLOAD_FILES = Number(process.env.MAX_UPLOAD_FILES || 5);
 const MAX_UPLOAD_FILE_BYTES = Number(process.env.MAX_UPLOAD_FILE_BYTES || 50 * 1024 * 1024);
 const MAX_RAW_BUFFER = 1024 * 1024;
 const MAX_FULL_REPLAY_BYTES = 256 * 1024;
+const MAX_TURN_REQUIREMENTS = 20;
 const WS_HEARTBEAT_MS = Number(process.env.WS_HEARTBEAT_MS || 25_000);
 const USE_TMUX_SESSIONS = process.env.AGENT_USE_TMUX === "1";
 const CODEX_NOTIFY_SCRIPT = path.join(__dirname, "scripts", "codex-notify.js");
@@ -93,6 +94,7 @@ app.post("/internal/codex-notify", async (req, res) => {
 
   const threadId = String(event["thread-id"] || "");
   if (isValidSessionId(threadId)) session.sessionId = threadId;
+  completeTrackedTurn(session, String(event["turn-id"] || ""));
   session.lastActivityAt = new Date().toISOString();
   persistRestorableWebSession(session);
   broadcast(session, "status", publicSession(session));
@@ -620,6 +622,7 @@ function createSession(cwd, launch, restored = {}) {
     lastActivityAt: restored.lastActivityAt || restored.startedAt || startedAt,
     cols: 100,
     rows: 30,
+    turnState: restoreTurnState(restored.turnState),
   };
   sessions.set(id, session);
   persistRestorableWebSession(session);
@@ -703,6 +706,7 @@ function restoreTmuxSession(id) {
         lastActivityAt: record.lastActivityAt,
         notificationApp: record.notificationApp,
         notificationDeviceId: record.notificationDeviceId,
+        turnState: { ...record.turnState, active: false },
       },
     );
   }
@@ -728,6 +732,7 @@ function restoreTmuxSession(id) {
     lastActivityAt: record.lastActivityAt,
     notificationApp: record.notificationApp,
     notificationDeviceId: record.notificationDeviceId,
+    turnState: record.turnState,
   });
 }
 
@@ -763,6 +768,7 @@ function listDetachedTmuxSessions() {
       exited: false,
       exitCode: null,
       signal: null,
+      turnState: publicTurnState(restoreTurnState(record.turnState)),
     });
   }
 
@@ -836,11 +842,16 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
         rememberNotificationTarget(session, message.notificationApp, message.notificationDeviceId);
         logControlMessage(session, ws, "submit", normalized);
         if (!session.title) session.title = cleanTitle(normalized) || "New Codex session";
-        writeAndSubmit(session, normalized, { paste: true });
+        const submission = submitTrackedPrompt(session, normalized, message.deliveryMode);
         session.lastActivityAt = new Date().toISOString();
         persistRestorableWebSession(session);
         broadcast(session, "status", publicSession(session));
-        send(ws, "control-ack", { kind: "submit", receivedAt: Date.now() });
+        send(ws, "control-ack", {
+          kind: "submit",
+          receivedAt: Date.now(),
+          deliveryMode: submission.deliveryMode,
+          turnState: publicTurnState(session.turnState),
+        });
       }
       return;
     }
@@ -1094,7 +1105,7 @@ async function handleUpload(req, res) {
   req.pipe(form);
 }
 
-function writeAndSubmit(session, text, { paste }) {
+function writeAndSubmit(session, text, { paste, submitKey = "\r" }) {
   if (!text) return;
   session.terminal.write("\x15");
   setTimeout(() => {
@@ -1103,8 +1114,120 @@ function writeAndSubmit(session, text, { paste }) {
     } else {
       session.terminal.write(text);
     }
-    setTimeout(() => session.terminal.write("\r"), 30);
+    setTimeout(() => session.terminal.write(submitKey), 30);
   }, 20);
+}
+
+function submitTrackedPrompt(session, text, requestedMode) {
+  const state = session.turnState;
+  const wantsQueue = requestedMode === "queue";
+
+  if (!state.active) {
+    state.sequence += 1;
+    state.active = true;
+    state.turnId = "";
+    state.requirements = [turnRequirement(state, text, "original", "working")];
+    writeAndSubmit(session, text, { paste: true });
+    return { deliveryMode: "new" };
+  }
+
+  if (wantsQueue) {
+    const requirement = turnRequirement(state, text, "queued", "queued");
+    state.queuedTurns.push(requirement);
+    trimTrackedRequirements(state);
+    writeAndSubmit(session, queuePromptText(text), { paste: true, submitKey: "\t" });
+    return { deliveryMode: "queue" };
+  }
+
+  const requirement = turnRequirement(state, text, "followup", "working");
+  state.requirements.push(requirement);
+  trimTrackedRequirements(state);
+  writeAndSubmit(session, steerPromptText(text, state.requirements.length), { paste: true });
+  return { deliveryMode: "steer" };
+}
+
+function completeTrackedTurn(session, turnId) {
+  const state = session.turnState;
+  if (!state) return;
+  if (turnId && turnId === state.lastCompletedTurnId) return;
+  state.lastCompletedTurnId = turnId || state.lastCompletedTurnId;
+  state.turnId = turnId || state.turnId;
+  for (const requirement of state.requirements) requirement.status = "completed";
+
+  const next = state.queuedTurns.shift();
+  if (next) {
+    state.sequence += 1;
+    next.status = "working";
+    state.requirements = [next];
+    state.active = true;
+    state.turnId = "";
+  } else {
+    state.active = false;
+  }
+}
+
+function steerPromptText(text, number) {
+  return [
+    `【追加要求 #${number - 1}｜不替换前面的要求】`,
+    text,
+    "请把它加入当前任务；原始请求和此前追加仍需一起完成。最终答复前逐项核对。",
+  ].join("\n\n");
+}
+
+function queuePromptText(text) {
+  return ["【下一轮任务｜当前任务完成后再做】", text].join("\n\n");
+}
+
+function turnRequirement(state, text, kind, status) {
+  state.requirementSequence += 1;
+  return {
+    id: `requirement-${state.requirementSequence}`,
+    text: String(text).slice(0, 4_000),
+    kind,
+    status,
+  };
+}
+
+function trimTrackedRequirements(state) {
+  if (state.requirements.length > MAX_TURN_REQUIREMENTS) {
+    state.requirements.splice(1, state.requirements.length - MAX_TURN_REQUIREMENTS);
+  }
+  if (state.queuedTurns.length > MAX_TURN_REQUIREMENTS) {
+    state.queuedTurns.splice(0, state.queuedTurns.length - MAX_TURN_REQUIREMENTS);
+  }
+}
+
+function restoreTurnState(value) {
+  const input = value && typeof value === "object" ? value : {};
+  return {
+    active: Boolean(input.active),
+    turnId: cleanClientLogValue(input.turnId, 100),
+    lastCompletedTurnId: cleanClientLogValue(input.lastCompletedTurnId, 100),
+    sequence: clampInteger(input.sequence, 0, 1_000_000, 0),
+    requirementSequence: clampInteger(input.requirementSequence, 0, 1_000_000, 0),
+    requirements: restoreRequirements(input.requirements),
+    queuedTurns: restoreRequirements(input.queuedTurns),
+  };
+}
+
+function restoreRequirements(items) {
+  if (!Array.isArray(items)) return [];
+  return items.slice(-MAX_TURN_REQUIREMENTS).map((item, index) => ({
+    id: cleanClientLogValue(item?.id, 100) || `restored-requirement-${index + 1}`,
+    text: String(item?.text || "").slice(0, 4_000),
+    kind: ["original", "followup", "queued"].includes(item?.kind) ? item.kind : "followup",
+    status: ["working", "queued", "completed"].includes(item?.status) ? item.status : "working",
+  }));
+}
+
+function publicTurnState(state) {
+  return {
+    active: Boolean(state?.active),
+    turnId: state?.turnId || "",
+    lastCompletedTurnId: state?.lastCompletedTurnId || "",
+    requirements: state?.requirements || [],
+    queuedTurns: state?.queuedTurns || [],
+  };
 }
 
 function appendBuffers(session, raw) {
@@ -1178,6 +1301,7 @@ function publicSession(session) {
     exitCode: session.exitCode,
     signal: session.signal,
     outputRevision: session.outputRevision,
+    turnState: publicTurnState(session.turnState),
   };
 }
 
@@ -1253,6 +1377,7 @@ function persistWebSession(session) {
     tmuxName: session.tmuxName,
     startedAt: session.startedAt,
     lastActivityAt: session.lastActivityAt,
+    turnState: publicTurnState(session.turnState),
   };
   writePersistedWebSessions(records);
 }

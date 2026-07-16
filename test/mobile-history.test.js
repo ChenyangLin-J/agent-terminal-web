@@ -19,7 +19,7 @@ test("mobile session recovery persists and incrementally restores terminal histo
   assert.match(source, /document\.scrollingElement\.scrollTop = 0/);
   assert.match(styles, /html\.session-active[\s\S]*overflow: hidden/);
   assert.match(styles, /body\.session-active[\s\S]*height: 100dvh/);
-  assert.match(page, /app\.js\?v=20260716-new-session-link-1/);
+  assert.match(page, /app\.js\?v=20260716-followup-ledger-1/);
   assert.match(page, /styles\.css\?v=20260716-mobile-viewport-1/);
 });
 

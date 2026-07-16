@@ -8,5 +8,8 @@ test("Agent voice input transcribes without using the Home capture endpoint", as
 
   assert.match(source, /https:\/\/home\.chenyanglin\.com\/api\/transcribe\/stream/);
   assert.doesNotMatch(source, /\/api\/capture\/transcribe\/stream/);
-  assert.match(page, /agent-voice-input\.js\?v=20260716-transcribe-only-1/);
+  assert.match(source, /button\.agentVoiceInputController = controller/);
+  assert.match(source, /async function cancel\(\)/);
+  assert.match(source, /new CustomEvent\("agentvoicestatechange"/);
+  assert.match(page, /agent-voice-input\.js\?v=20260716-focus-send-1/);
 });

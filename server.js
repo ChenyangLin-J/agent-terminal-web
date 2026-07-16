@@ -57,6 +57,8 @@ const HOME_PUSH_SUBSCRIBE_URL = process.env.HOME_PUSH_SUBSCRIBE_URL || `${HOME_P
 const HOME_VAPID_PUBLIC_KEY = process.env.HOME_VAPID_PUBLIC_KEY || "";
 const APP_SERVER_TRANSPORT = "app-server";
 const FULL_ACCESS_MODE = "full";
+const THINK_SESSION_PURPOSE = "think";
+const THINKING_SKILL_INVOCATION = "$thinking-partner";
 
 const app = express();
 const server = http.createServer(app);
@@ -619,6 +621,8 @@ function createTerminalSession(cwd, launch, restored = {}) {
     args: commandArgs,
     transport: "terminal",
     access: normalizeAccessMode(launch.access),
+    purpose: normalizeSessionPurpose(launch.purpose || restored.purpose),
+    thinkSkillActivated: Boolean(restored.thinkSkillActivated),
     ready: true,
     mode: launch.mode,
     sessionId: launch.sessionId,
@@ -694,6 +698,8 @@ function createAppServerSession(cwd, launch, restored = {}) {
     args: ["app-server"],
     transport: APP_SERVER_TRANSPORT,
     access: normalizeAccessMode(launch.access),
+    purpose: normalizeSessionPurpose(launch.purpose || restored.purpose),
+    thinkSkillActivated: Boolean(restored.thinkSkillActivated),
     ready: false,
     mode: launch.mode,
     sessionId: launch.sessionId,
@@ -816,6 +822,7 @@ function restoreTmuxSession(id) {
         sessionId: record.sessionId,
         args: ["app-server"],
         title: record.title || "",
+        purpose: normalizeSessionPurpose(record.purpose),
       },
       {
         id,
@@ -823,6 +830,8 @@ function restoreTmuxSession(id) {
         lastActivityAt: record.lastActivityAt,
         notificationApp: record.notificationApp,
         notificationDeviceId: record.notificationDeviceId,
+        purpose: normalizeSessionPurpose(record.purpose),
+        thinkSkillActivated: Boolean(record.thinkSkillActivated),
         turnState: { ...record.turnState, active: false },
       },
     );
@@ -841,6 +850,7 @@ function restoreTmuxSession(id) {
         sessionId: record.sessionId,
         args: terminalLaunchArgs(record.access, ["resume", record.sessionId]),
         title: record.title || "",
+        purpose: normalizeSessionPurpose(record.purpose),
       },
       {
         id,
@@ -848,6 +858,8 @@ function restoreTmuxSession(id) {
         lastActivityAt: record.lastActivityAt,
         notificationApp: record.notificationApp,
         notificationDeviceId: record.notificationDeviceId,
+        purpose: normalizeSessionPurpose(record.purpose),
+        thinkSkillActivated: Boolean(record.thinkSkillActivated),
         turnState: { ...record.turnState, active: false },
       },
     );
@@ -865,6 +877,7 @@ function restoreTmuxSession(id) {
     sessionId: record.sessionId || "",
     args: Array.isArray(record.args) && record.args.length ? record.args : ["--no-alt-screen"],
     title: record.title || "",
+    purpose: normalizeSessionPurpose(record.purpose),
   };
 
   return createSession(cwd, launch, {
@@ -875,6 +888,8 @@ function restoreTmuxSession(id) {
     lastActivityAt: record.lastActivityAt,
     notificationApp: record.notificationApp,
     notificationDeviceId: record.notificationDeviceId,
+    purpose: normalizeSessionPurpose(record.purpose),
+    thinkSkillActivated: Boolean(record.thinkSkillActivated),
     turnState: record.turnState,
   });
 }
@@ -903,6 +918,7 @@ function listDetachedSessions() {
       args: Array.isArray(record.args) ? record.args : [],
       transport,
       access: normalizeAccessMode(record.access),
+      purpose: normalizeSessionPurpose(record.purpose),
       ready: false,
       mode: record.mode || "new",
       sessionId: record.sessionId || "",
@@ -999,9 +1015,15 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
         rememberNotificationTarget(session, message.notificationApp, message.notificationDeviceId);
         logControlMessage(session, ws, "submit", normalized);
         if (!session.title) session.title = cleanTitle(normalized) || "New Codex session";
+        const prompt = prepareSessionPrompt(session, normalized);
+        if (prompt.activatesThink) session.thinkSkillActivationPending = true;
         if (session.transport === APP_SERVER_TRANSPORT) {
-          void submitAppServerPrompt(session, normalized, message.deliveryMode)
+          void submitAppServerPrompt(session, prompt.text, message.deliveryMode)
             .then((submission) => {
+              if (prompt.activatesThink) {
+                session.thinkSkillActivated = true;
+                session.thinkSkillActivationPending = false;
+              }
               session.lastActivityAt = new Date().toISOString();
               persistRestorableWebSession(session);
               broadcast(session, "status", publicSession(session));
@@ -1013,11 +1035,16 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
               });
             })
             .catch((error) => {
+              if (prompt.activatesThink) session.thinkSkillActivationPending = false;
               send(ws, "error", { message: `Prompt was not sent: ${error.message}`, preservePrompt: true });
             });
           return;
         }
-        const submission = submitTrackedPrompt(session, normalized, message.deliveryMode);
+        const submission = submitTrackedPrompt(session, prompt.text, message.deliveryMode);
+        if (prompt.activatesThink) {
+          session.thinkSkillActivated = true;
+          session.thinkSkillActivationPending = false;
+        }
         session.lastActivityAt = new Date().toISOString();
         persistRestorableWebSession(session);
         broadcast(session, "status", publicSession(session));
@@ -1954,6 +1981,18 @@ function submitTrackedPrompt(session, text, requestedMode) {
   return { deliveryMode: "steer" };
 }
 
+function prepareSessionPrompt(session, text) {
+  if (session.purpose !== THINK_SESSION_PURPOSE || session.thinkSkillActivated || session.thinkSkillActivationPending) {
+    return { text, activatesThink: false };
+  }
+
+  const hasExplicitInvocation = text === THINKING_SKILL_INVOCATION || text.startsWith(`${THINKING_SKILL_INVOCATION}\n`);
+  return {
+    text: hasExplicitInvocation ? text : `${THINKING_SKILL_INVOCATION}\n\n${text}`,
+    activatesThink: true,
+  };
+}
+
 function completeTrackedTurn(session, turnId) {
   const state = session.turnState;
   if (!state) return;
@@ -2106,6 +2145,7 @@ function publicSession(session) {
     args: session.args,
     transport: session.transport || "terminal",
     access: normalizeAccessMode(session.access),
+    purpose: normalizeSessionPurpose(session.purpose),
     ready: session.ready !== false,
     mode: session.mode,
     sessionId: session.sessionId,
@@ -2209,6 +2249,8 @@ function persistWebSession(session) {
     args: session.args,
     transport: session.transport || "terminal",
     access: normalizeAccessMode(session.access),
+    purpose: normalizeSessionPurpose(session.purpose),
+    thinkSkillActivated: Boolean(session.thinkSkillActivated),
     mode: session.mode,
     sessionId: session.sessionId,
     title: session.title,
@@ -2277,6 +2319,10 @@ function normalizeAccessMode(value) {
   return value === FULL_ACCESS_MODE ? FULL_ACCESS_MODE : "safe";
 }
 
+function normalizeSessionPurpose(value) {
+  return value === THINK_SESSION_PURPOSE ? THINK_SESSION_PURPOSE : "";
+}
+
 function terminalLaunchArgs(access, tail = []) {
   const args = ["--no-alt-screen"];
   if (normalizeAccessMode(access) === FULL_ACCESS_MODE) {
@@ -2288,6 +2334,7 @@ function terminalLaunchArgs(access, tail = []) {
 async function getLaunchConfig(searchParams) {
   const transport = searchParams.get("transport") === APP_SERVER_TRANSPORT ? APP_SERVER_TRANSPORT : "terminal";
   const access = normalizeAccessMode(searchParams.get("access"));
+  const purpose = normalizeSessionPurpose(searchParams.get("purpose"));
   const sessionId = String(searchParams.get("sessionId") || "").trim();
   if (sessionId && !/^[a-zA-Z0-9._:-]+$/.test(sessionId)) return null;
 
@@ -2296,6 +2343,7 @@ async function getLaunchConfig(searchParams) {
       mode: "resume-id",
       transport,
       access,
+      purpose,
       sessionId,
       args: transport === APP_SERVER_TRANSPORT ? ["app-server"] : terminalLaunchArgs(access, ["resume", sessionId]),
     };
@@ -2307,21 +2355,22 @@ async function getLaunchConfig(searchParams) {
       mode,
       transport,
       access,
+      purpose,
       sessionId: "",
       args: transport === APP_SERVER_TRANSPORT ? ["app-server"] : terminalLaunchArgs(access),
     };
   }
   if (mode === "resume-picker") {
     if (transport === APP_SERVER_TRANSPORT) return null;
-    return { mode, transport, access, sessionId: "", args: terminalLaunchArgs(access, ["resume"]) };
+    return { mode, transport, access, purpose, sessionId: "", args: terminalLaunchArgs(access, ["resume"]) };
   }
   if (mode === "resume-last") {
     if (transport === APP_SERVER_TRANSPORT) {
       const [latest] = await listCodexSessions({ archived: false });
       if (!latest?.id) return null;
-      return { mode, transport, access, sessionId: latest.id, args: ["app-server"] };
+      return { mode, transport, access, purpose, sessionId: latest.id, args: ["app-server"] };
     }
-    return { mode, transport, access, sessionId: "", args: terminalLaunchArgs(access, ["resume", "--last"]) };
+    return { mode, transport, access, purpose, sessionId: "", args: terminalLaunchArgs(access, ["resume", "--last"]) };
   }
   return null;
 }

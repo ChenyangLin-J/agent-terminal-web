@@ -6,6 +6,7 @@ const transportSelect = document.querySelector("#transport");
 const accessModeSelect = document.querySelector("#access-mode");
 const sessionIdInput = document.querySelector("#session-id");
 const connectButton = document.querySelector("#connect");
+const startThinkButton = document.querySelector("#start-think");
 const refreshSessionsButton = document.querySelector("#refresh-sessions");
 const logoutButton = document.querySelector("#logout");
 const sessionsList = document.querySelector("#sessions-list");
@@ -133,6 +134,7 @@ window.addEventListener("resize", () => fitTerminal({ delay: 120 }));
 
 logoutButton.addEventListener("click", logout);
 connectButton.addEventListener("click", () => startSession());
+startThinkButton.addEventListener("click", () => startSession({ cwd: ".", mode: "new", purpose: "think" }));
 refreshSessionsButton.addEventListener("click", refreshLists);
 resumeAccessMode.addEventListener("change", renderResumeAccessWarning);
 resumeWithTerminal.addEventListener("click", () => resumePendingSession("terminal"));
@@ -284,6 +286,7 @@ function renderLiveSessions(sessions) {
             title: session.title || "New Codex session",
             transport: session.transport || "terminal",
             access: session.access || "safe",
+            purpose: session.purpose || "",
           }),
       }),
     );
@@ -516,6 +519,7 @@ function startSession(overrides = {}) {
     sessionId: overrides.sessionId || sessionIdInput.value.trim(),
     transport: overrides.transport || transportSelect.value || "terminal",
     access: overrides.access || accessModeSelect.value || "safe",
+    purpose: overrides.purpose === "think" ? "think" : "",
   });
 }
 
@@ -531,6 +535,7 @@ function openInitialSessionFromUrl() {
   const startNew = params.get("new") === "1";
   const transport = params.get("transport") === "app-server" ? "app-server" : "terminal";
   const access = params.get("access") === "full" ? "full" : "safe";
+  const purpose = params.get("purpose") === "think" ? "think" : "";
 
   if (title) setDocumentTitle(title);
 
@@ -540,6 +545,7 @@ function openInitialSessionFromUrl() {
       sessionId,
       transport,
       access,
+      purpose,
     });
     return true;
   }
@@ -550,6 +556,7 @@ function openInitialSessionFromUrl() {
       sessionId,
       transport,
       access,
+      purpose,
     });
     return true;
   }
@@ -560,6 +567,7 @@ function openInitialSessionFromUrl() {
       mode: "new",
       transport,
       access,
+      purpose,
     });
     return true;
   }
@@ -1101,6 +1109,7 @@ function currentReconnectParams() {
     title: activeSessionParams.title || params.get("title") || "",
     transport: activeSessionParams.transport || params.get("transport") || "terminal",
     access: activeSessionParams.access || params.get("access") || "safe",
+    purpose: activeSessionParams.purpose || (params.get("purpose") === "think" ? "think" : ""),
   };
 }
 
@@ -1259,6 +1268,7 @@ function renderStatus(status) {
     title: status.title || displayProject(status.project),
     transport: status.transport || "terminal",
     access: status.access || "safe",
+    purpose: status.purpose === "think" ? "think" : "",
   };
   activeTransport = status.transport === "app-server" ? "app-server" : "terminal";
   activeAccessMode = status.access === "full" ? "full" : "safe";
@@ -1369,7 +1379,8 @@ function syncSessionUrl(status) {
     (status.transport === "app-server"
       ? url.searchParams.get("transport") === "app-server"
       : !url.searchParams.has("transport")) &&
-    (status.access === "full" ? url.searchParams.get("access") === "full" : !url.searchParams.has("access"));
+    (status.access === "full" ? url.searchParams.get("access") === "full" : !url.searchParams.has("access")) &&
+    (status.purpose === "think" ? url.searchParams.get("purpose") === "think" : !url.searchParams.has("purpose"));
   if (alreadySynced) return;
 
   url.search = "";
@@ -1379,6 +1390,7 @@ function syncSessionUrl(status) {
   if (title) url.searchParams.set("title", title);
   if (status.transport === "app-server") url.searchParams.set("transport", "app-server");
   if (status.access === "full") url.searchParams.set("access", "full");
+  if (status.purpose === "think") url.searchParams.set("purpose", "think");
   appendNotificationTarget(url);
   window.history.replaceState(null, "", url.toString());
 }
@@ -1956,7 +1968,7 @@ function clearSessionUrl() {
   if (!window.location.search) return;
 
   const url = new URL(window.location.href);
-  for (const key of ["attach", "cwd", "sessionId", "title"]) {
+  for (const key of ["attach", "cwd", "sessionId", "title", "purpose"]) {
     url.searchParams.delete(key);
   }
   if (url.toString() !== window.location.href) {

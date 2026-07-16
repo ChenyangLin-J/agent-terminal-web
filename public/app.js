@@ -1674,8 +1674,13 @@ function upsertAppTranscript(payload = {}) {
   const index = appTranscriptItems.findIndex((entry) => entry.id === item.id);
   const wasAtBottom = isAppTranscriptAtBottom();
   if (index >= 0) {
-    appTranscriptItems[index] = { ...appTranscriptItems[index], ...item };
-    replaceAppTranscriptCard(appTranscriptItems[index]);
+    const previousItem = appTranscriptItems[index];
+    appTranscriptItems[index] = { ...previousItem, ...item };
+    if (isProcessTranscriptItem(previousItem) || isProcessTranscriptItem(appTranscriptItems[index])) {
+      renderAppTranscript({ follow: wasAtBottom });
+    } else {
+      replaceAppTranscriptCard(appTranscriptItems[index]);
+    }
     followAppTranscriptIfNeeded(wasAtBottom);
     return;
   }
@@ -1689,7 +1694,8 @@ function appendAppTranscriptDelta(payload = {}) {
   if (!item) return;
   const wasAtBottom = isAppTranscriptAtBottom();
   item[payload.field] = trimClientTranscriptValue(`${item[payload.field] || ""}${payload.delta}`);
-  replaceAppTranscriptCard(item);
+  if (isProcessTranscriptItem(item) && payload.field === "text") renderAppTranscript({ follow: wasAtBottom });
+  else replaceAppTranscriptCard(item);
   followAppTranscriptIfNeeded(wasAtBottom);
 }
 
@@ -1770,31 +1776,74 @@ function renderAppTranscript({ follow = false } = {}) {
 }
 
 function isProcessTranscriptItem(item) {
-  if (["command", "plan", "file", "tool"].includes(item.type)) return true;
-  return item.type === "assistant" && Boolean(item.phase) && item.phase !== "final_answer";
+  return ["command", "plan", "file", "tool"].includes(item.type);
 }
 
 function createAppProcessGroup(items) {
   const group = document.createElement("details");
   group.className = "app-process-group";
-  const groupId = items[0]?.turnId || items.map((item) => item.id).join(":");
+  const groupId = `${items[0]?.turnId || "turn"}:${items[0]?.id || "process"}`;
   group.open = openAppProcessGroups.has(groupId);
   group.addEventListener("toggle", () => {
     if (group.open) openAppProcessGroups.add(groupId);
     else openAppProcessGroups.delete(groupId);
   });
   const summary = document.createElement("summary");
+  const activeItem = [...items].reverse().find(isRunningTranscriptItem);
+  const currentItem = activeItem || items.at(-1);
+  const isActive = Boolean(activeItem);
+  group.classList.toggle("is-active", isActive);
+
+  const indicator = document.createElement("span");
+  indicator.className = "app-activity-indicator";
+  indicator.setAttribute("aria-hidden", "true");
+  if (isActive) {
+    indicator.append(document.createElement("i"), document.createElement("i"), document.createElement("i"));
+  } else {
+    indicator.textContent = "✓";
+  }
+
   const label = document.createElement("strong");
-  const isActive = latestTurnState.active && items.some((item) => item.turnId === latestTurnState.turnId);
-  label.textContent = isActive ? "正在处理" : "过程记录";
+  label.textContent = isActive ? "正在" : "完成";
+  const message = document.createElement("span");
+  message.className = "app-activity-message";
+  message.textContent = appActivityText(currentItem);
+  message.title = message.textContent;
   const count = document.createElement("span");
-  count.textContent = `${items.length} 项`;
-  summary.append(label, count);
+  count.className = "app-activity-count";
+  count.textContent = items.length > 1 ? `${items.length} 项` : "详情";
+  summary.append(indicator, label, message, count);
   const content = document.createElement("div");
   content.className = "app-process-content";
   content.append(...items.map(createAppTranscriptCard));
   group.append(summary, content);
   return group;
+}
+
+function isRunningTranscriptItem(item) {
+  return ["inProgress", "in_progress", "running"].includes(item?.status);
+}
+
+function appActivityText(item = {}) {
+  const textLines = String(item.text || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const planLine = textLines.find((line) => line.startsWith("→"));
+  const content = planLine || textLines[0] || "处理中";
+  if (item.type === "file") {
+    const fileMatch = content.match(/^(新增|删除|修改|移动)\s*·\s*(.+)$/);
+    if (fileMatch) return `${fileMatch[1]}文件 · ${fileMatch[2]}`;
+  }
+  const prefixes = {
+    command: "运行命令",
+    plan: "更新计划",
+    file: "处理文件",
+    tool: item.label === "协作" ? "协作处理" : item.label === "网页搜索" ? "搜索网页" : "使用工具",
+  };
+  const prefix = prefixes[item.type] || "处理";
+  const normalized = content.replace(/^[✓→○]\s*/, "").replace(/\s+/g, " ");
+  return normalized === prefix ? prefix : `${prefix} · ${normalized}`;
 }
 
 function createAppTurnDivider(item) {
@@ -1810,6 +1859,9 @@ function createAppTurnDivider(item) {
 function createAppTranscriptCard(item) {
   const card = document.createElement("article");
   card.className = `app-transcript-item app-transcript-${clientTranscriptType(item.type)}`;
+  if (item.type === "assistant" && item.phase && item.phase !== "final_answer") {
+    card.classList.add("app-transcript-commentary");
+  }
   card.dataset.transcriptId = item.id;
 
   const header = document.createElement("header");
@@ -1885,6 +1937,7 @@ function transcriptMetaText(item) {
     failed: "失败",
     declined: "已拒绝",
   };
+  if (item.type === "assistant" && item.phase && item.phase !== "final_answer") values.push("过程说明");
   if (statuses[item.status]) values.push(statuses[item.status]);
   if (item.exitCode !== null) values.push(`退出码 ${item.exitCode}`);
   if (item.durationMs !== null) values.push(formatTranscriptDuration(item.durationMs));

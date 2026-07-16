@@ -549,11 +549,12 @@ input {
 }
 
 .app-process-group > summary {
-  display: flex;
+  display: grid;
+  grid-template-columns: 18px auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
-  min-height: 34px;
-  padding: 7px 10px;
+  min-height: 36px;
+  padding: 7px 9px;
   color: #7f899a;
   font-size: 12px;
   cursor: pointer;
@@ -565,26 +566,68 @@ input {
   display: none;
 }
 
-.app-process-group > summary::before {
-  content: "›";
-  color: #667387;
-  font-size: 16px;
-  line-height: 1;
-  transition: transform 120ms ease;
-}
-
-.app-process-group[open] > summary::before {
-  transform: rotate(90deg);
+.app-process-group.is-active > summary {
+  border-left: 2px solid #4f72df;
+  padding-left: 7px;
+  background: #0b111b;
 }
 
 .app-process-group > summary strong {
   color: #a4adbb;
   font-weight: 500;
+  white-space: nowrap;
 }
 
-.app-process-group > summary span {
-  margin-left: auto;
+.app-process-group.is-active > summary strong {
+  color: #b9c9ff;
+}
+
+.app-activity-indicator {
+  display: inline-flex;
+  width: 18px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  color: #67c99d;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.app-activity-indicator i {
+  display: block;
+  width: 2px;
+  height: 5px;
+  border-radius: 999px;
+  background: #7894ff;
+  transform-origin: center;
+  animation: app-activity-wave 900ms ease-in-out infinite;
+}
+
+.app-activity-indicator i:nth-child(2) {
+  animation-delay: 140ms;
+}
+
+.app-activity-indicator i:nth-child(3) {
+  animation-delay: 280ms;
+}
+
+.app-activity-message {
+  min-width: 0;
+  overflow: hidden;
+  color: #8f9bad;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-process-group.is-active .app-activity-message {
+  color: #c2cad8;
+  animation: app-activity-pulse 1.8s ease-in-out infinite;
+}
+
+.app-activity-count {
   color: #667184;
+  white-space: nowrap;
 }
 
 .app-process-content {
@@ -593,6 +636,35 @@ input {
 
 .app-process-content .app-transcript-item:last-child {
   border-bottom: 0;
+}
+
+@keyframes app-activity-wave {
+  0%,
+  100% {
+    height: 4px;
+    opacity: 0.55;
+  }
+  50% {
+    height: 13px;
+    opacity: 1;
+  }
+}
+
+@keyframes app-activity-pulse {
+  0%,
+  100% {
+    opacity: 0.72;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-activity-indicator i,
+  .app-process-group.is-active .app-activity-message {
+    animation: none;
+  }
 }
 
 .app-history-banner strong {
@@ -687,6 +759,19 @@ input {
 
 .app-transcript-assistant > header strong {
   color: #e8ebf0;
+}
+
+.app-transcript-commentary {
+  border-left-color: #3b7f78;
+  background: #091113;
+}
+
+.app-transcript-commentary > header strong {
+  color: #86c9bf;
+}
+
+.app-transcript-commentary .app-transcript-copy {
+  color: #d4dfdf;
 }
 
 .app-transcript-command,
@@ -892,6 +977,10 @@ input {
   border: 1px solid #2c3443;
   border-radius: 10px;
   background: #131923;
+}
+
+.app-server-session .turn-ledger {
+  display: none !important;
 }
 
 .turn-ledger summary {

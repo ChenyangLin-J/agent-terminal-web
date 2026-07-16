@@ -28,9 +28,15 @@ test("App Server resume restores structured history and keeps raw text available
   assert.match(styles, /\.app-server-transcript[\s\S]*font-family: ui-monospace/);
   assert.match(app, /function createAppProcessGroup\(items\)/);
   assert.match(app, /\["command", "plan", "file", "tool"\]\.includes\(item\.type\)/);
+  assert.match(app, /card\.classList\.add\("app-transcript-commentary"\)/);
+  assert.match(app, /message\.textContent = appActivityText\(currentItem\)/);
+  assert.match(app, /indicator\.append\(document\.createElement\("i"\)/);
   assert.match(styles, /\.app-server-session #disconnect[\s\S]*display: none/);
   assert.doesNotMatch(styles, /\.app-server-session #prompt/);
   assert.doesNotMatch(styles, /\.app-server-session \.composer(?:\s|\{|:)/);
   assert.match(app, /activeTransport === "app-server" \? sessionLabel : displayProject\(status\.project\)/);
   assert.match(styles, /\.app-server-session \.view-tabs \{[\s\S]*display: none/);
+  assert.match(styles, /\.app-server-session \.turn-ledger \{[\s\S]*display: none !important/);
+  assert.match(styles, /@keyframes app-activity-wave/);
+  assert.match(styles, /\.app-transcript-commentary/);
 });

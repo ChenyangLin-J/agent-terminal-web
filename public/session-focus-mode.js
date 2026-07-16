@@ -40,8 +40,15 @@
     if (sessionScreen.classList.contains("hidden")) setFocusMode(false);
   }).observe(sessionScreen, { attributes: true, attributeFilter: ["class"] });
 
+  new MutationObserver(syncAvailability).observe(document.body, {
+    attributes: true,
+    attributeFilter: ["class"],
+  });
+  syncAvailability();
+
   function setFocusMode(active) {
     if (active && sessionScreen.classList.contains("hidden")) return;
+    if (active && document.body.classList.contains("app-server-session")) return;
     const terminalPosition = captureTerminalPosition();
     const textScrollTop = document.querySelector("#terminal-text")?.scrollTop || 0;
     sessionScreen.classList.toggle("session-focus-mode", active);
@@ -50,6 +57,12 @@
     toggle.title = active ? "退出专注查看" : "专注查看";
     toggle.textContent = active ? "退出" : "专注";
     refitLocally(terminalPosition, textScrollTop);
+  }
+
+  function syncAvailability() {
+    const available = !document.body.classList.contains("app-server-session");
+    toggle.classList.toggle("hidden", !available);
+    if (!available && sessionScreen.classList.contains("session-focus-mode")) setFocusMode(false);
   }
 
   function createVoiceDock() {

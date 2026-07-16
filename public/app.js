@@ -1278,8 +1278,9 @@ function renderStatus(status) {
   document.body.classList.toggle("app-server-session", activeTransport === "app-server");
   updateSessionViewLabels();
   currentSessionExited = Boolean(status.exited);
-  statusEls.project.textContent = displayProject(status.project);
-  statusEls.project.title = status.title || displayProject(status.project);
+  const sessionLabel = status.title || displayProject(status.project);
+  statusEls.project.textContent = activeTransport === "app-server" ? sessionLabel : displayProject(status.project);
+  statusEls.project.title = sessionLabel;
   setConnectedState(status.exited ? "exited" : !activeSessionReady ? "starting" : historySyncPending ? "loading" : "connected");
   setDocumentTitle(status.title || displayProject(status.project));
   renderTurnState(status.turnState);

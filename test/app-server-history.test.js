@@ -29,5 +29,8 @@ test("App Server resume restores structured history and keeps raw text available
   assert.match(app, /function createAppProcessGroup\(items\)/);
   assert.match(app, /\["command", "plan", "file", "tool"\]\.includes\(item\.type\)/);
   assert.match(styles, /\.app-server-session #disconnect[\s\S]*display: none/);
-  assert.match(styles, /\.app-server-session #prompt[\s\S]*height: 72px/);
+  assert.doesNotMatch(styles, /\.app-server-session #prompt/);
+  assert.doesNotMatch(styles, /\.app-server-session \.composer(?:\s|\{|:)/);
+  assert.match(app, /activeTransport === "app-server" \? sessionLabel : displayProject\(status\.project\)/);
+  assert.match(styles, /\.app-server-session \.view-tabs \{[\s\S]*display: none/);
 });

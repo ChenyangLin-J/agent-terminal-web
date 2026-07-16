@@ -385,6 +385,12 @@ input {
 
 .session-screen {
   display: grid;
+  grid-template-areas:
+    "header"
+    "tabs"
+    "content"
+    "quick-actions"
+    "composer";
   grid-template-rows: auto auto minmax(0, 1fr) auto auto;
   height: 100vh;
   height: 100dvh;
@@ -394,12 +400,18 @@ input {
 }
 
 .session-header {
+  grid-area: header;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 8px;
   align-items: center;
-  padding: 10px;
+  padding: 6px 8px;
   border-bottom: 1px solid #252a35;
+}
+
+.session-header button {
+  min-height: 36px;
+  padding-inline: 11px;
 }
 
 .session-title {
@@ -428,16 +440,8 @@ input {
   display: none;
 }
 
-.app-server-session .session-header {
-  padding: 6px 8px;
-}
-
-.app-server-session .session-header button {
-  min-height: 36px;
-  padding-inline: 11px;
-}
-
 .view-tabs {
+  grid-area: tabs;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
@@ -458,6 +462,7 @@ input {
 }
 
 .app-server-session .view-tabs {
+  display: none;
   gap: 5px;
   padding: 5px 8px;
 }
@@ -467,6 +472,7 @@ input {
 }
 
 .terminal-view {
+  grid-area: content;
   min-height: 0;
   overflow: hidden;
   padding: 8px;
@@ -507,6 +513,7 @@ input {
 }
 
 .app-server-view {
+  grid-area: content;
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
@@ -768,6 +775,7 @@ input {
 }
 
 .text-view {
+  grid-area: content;
   display: grid;
   min-height: 0;
   padding: 8px;
@@ -792,6 +800,7 @@ input {
 }
 
 .quick-actions {
+  grid-area: quick-actions;
   display: flex;
   gap: 8px;
   overflow-x: auto;
@@ -810,35 +819,8 @@ input {
   display: none;
 }
 
-.app-server-session .composer {
-  grid-template-columns: minmax(0, 1fr) 72px;
-  gap: 6px;
-  padding: 7px 8px;
-  padding-bottom: max(7px, env(safe-area-inset-bottom));
-}
-
-.app-server-session #prompt {
-  height: 72px;
-  min-height: 72px;
-  max-height: 72px;
-  resize: none;
-  padding: 9px 10px 42px;
-  font-size: 14px;
-}
-
-.app-server-session .voice-button {
-  right: 7px;
-  bottom: 7px;
-  width: 36px;
-  min-height: 36px;
-}
-
-.app-server-session .voice-button svg {
-  width: 19px;
-  height: 19px;
-}
-
 .composer {
+  grid-area: composer;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 86px;
   gap: 8px;
@@ -978,6 +960,7 @@ input {
 .prompt-field {
   position: relative;
   min-width: 0;
+  height: 96px;
 }
 
 #prompt {
@@ -986,7 +969,7 @@ input {
   min-height: 96px;
   max-height: 34vh;
   max-height: 34dvh;
-  resize: vertical;
+  resize: none;
   padding: 10px 12px 54px;
   line-height: 1.4;
   background: #151a23;
@@ -1016,7 +999,6 @@ input {
   }
 
   #prompt {
-    min-height: 78px;
     padding-bottom: 50px;
   }
 }
@@ -1057,12 +1039,18 @@ input {
   display: grid;
   grid-template-rows: 42px minmax(46px, 1fr);
   gap: 8px;
+  height: 96px;
   max-height: 34vh;
   max-height: 34dvh;
 }
 
 .composer-actions:has(#queue-prompt:not(.hidden)) {
   grid-template-rows: 42px repeat(2, minmax(38px, 1fr));
+  height: 134px;
+}
+
+.composer:has(#queue-prompt:not(.hidden)) .prompt-field {
+  height: 134px;
 }
 
 .composer-actions:has(#queue-prompt:not(.hidden)) #send-prompt,
@@ -1085,23 +1073,6 @@ input {
 
 #send-prompt {
   min-height: 46px;
-}
-
-.app-server-session .composer-actions {
-  grid-template-rows: 30px 42px;
-  gap: 5px;
-  max-height: none;
-}
-
-.app-server-session .composer-actions:has(#queue-prompt:not(.hidden)) {
-  grid-template-rows: 30px repeat(2, 36px);
-}
-
-.app-server-session #attach-file,
-.app-server-session #send-prompt,
-.app-server-session #queue-prompt {
-  min-height: 0;
-  font-size: 13px;
 }
 
 .upload-status {

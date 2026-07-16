@@ -21,6 +21,10 @@
 
 .session-screen.session-focus-mode {
   position: relative;
+  grid-template-areas:
+    "tabs"
+    "content"
+    "quick-actions";
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 

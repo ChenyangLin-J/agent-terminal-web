@@ -40,7 +40,11 @@ test("App Server resume restores structured history and keeps raw text available
   assert.match(styles, /\.app-server-view[\s\S]*background: #080a0f/);
   assert.match(styles, /\.app-server-transcript[\s\S]*font-family: ui-monospace/);
   assert.match(app, /function createAppProcessGroup\(items\)/);
-  assert.match(app, /\["command", "plan", "file", "tool"\]\.includes\(item\.type\)/);
+  assert.match(app, /item\.type === "assistant" && item\.phase !== "final_answer"/);
+  assert.match(app, /function appTurnHasFinalAnswer\(turnId\)/);
+  assert.match(app, /const autoExpanded = isActive && !openAppProcessGroups\.has\(groupId\)/);
+  assert.match(app, /if \(autoExpanded && group\.open\) return/);
+  assert.match(app, /latestTurnState\.active && latestTurnState\.turnId === turnId/);
   assert.match(app, /card\.classList\.add\("app-transcript-commentary"\)/);
   assert.match(app, /message\.textContent = appActivityText\(currentItem\)/);
   assert.match(app, /indicator\.append\(document\.createElement\("i"\)/);
@@ -50,7 +54,6 @@ test("App Server resume restores structured history and keeps raw text available
   assert.doesNotMatch(styles, /\.app-server-session \.composer(?:\s|\{|:)/);
   assert.match(app, /statusEls\.project\.textContent = sessionLabel/);
   assert.match(app, /activeTransport === "app-server" \? "App Server · " : "Terminal · "/);
-  assert.doesNotMatch(app, /item\.type === "assistant" && Boolean\(item\.phase\)/);
   assert.match(styles, /\.app-server-session \.view-tabs \{[\s\S]*display: none/);
   assert.match(styles, /\.app-server-session \.turn-ledger \{[\s\S]*display: none !important/);
   assert.match(styles, /@keyframes app-activity-wave/);

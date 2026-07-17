@@ -2058,22 +2058,39 @@ async function loadSessionPreview(sessionId, requestSequence) {
 }
 
 function isProcessTranscriptItem(item) {
-  return ["command", "plan", "file", "tool"].includes(item.type);
+  return (
+    ["command", "plan", "file", "tool"].includes(item.type) ||
+    (item.type === "assistant" && item.phase !== "final_answer")
+  );
+}
+
+function appTurnHasFinalAnswer(turnId) {
+  return Boolean(
+    turnId &&
+      appTranscriptItems.some(
+        (item) => item.turnId === turnId && item.type === "assistant" && item.phase === "final_answer" && item.text,
+      ),
+  );
 }
 
 function createAppProcessGroup(items) {
   const group = document.createElement("details");
   group.className = "app-process-group";
-  const groupId = `${items[0]?.turnId || "turn"}:${items[0]?.id || "process"}`;
-  group.open = openAppProcessGroups.has(groupId);
+  const turnId = items[0]?.turnId || "";
+  const groupId = `${turnId || "turn"}:${items[0]?.id || "process"}`;
+  const activeItem = [...items].reverse().find(isRunningTranscriptItem);
+  const hasFinalAnswer = appTurnHasFinalAnswer(turnId);
+  const isActiveTurn = latestTurnState.active && latestTurnState.turnId === turnId;
+  const isActive = !hasFinalAnswer && (Boolean(activeItem) || isActiveTurn);
+  const autoExpanded = isActive && !openAppProcessGroups.has(groupId);
+  group.open = autoExpanded || openAppProcessGroups.has(groupId);
   group.addEventListener("toggle", () => {
+    if (autoExpanded && group.open) return;
     if (group.open) openAppProcessGroups.add(groupId);
     else openAppProcessGroups.delete(groupId);
   });
   const summary = document.createElement("summary");
-  const activeItem = [...items].reverse().find(isRunningTranscriptItem);
   const currentItem = activeItem || items.at(-1);
-  const isActive = Boolean(activeItem);
   group.classList.toggle("is-active", isActive);
 
   const indicator = document.createElement("span");

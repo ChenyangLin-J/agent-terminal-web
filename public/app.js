@@ -82,6 +82,7 @@ const TERMINAL_RECENT_HISTORY_MAX_CHARS = 24_000;
 const TERMINAL_HISTORY_QUIET_MS = 1_200;
 const TERMINAL_HISTORY_EMPTY_READY_MS = 120;
 const TERMINAL_DELAYED_HISTORY_GUARD_MS = 60_000;
+const APP_RECENT_TURN_LIMIT = 3;
 
 let terminal = null;
 let fitAddon = null;
@@ -1825,10 +1826,27 @@ function syncPrimarySessionView() {
 }
 
 function replaceAppTranscript(payload = {}) {
-  appTranscriptItems = Array.isArray(payload.items) ? payload.items.map(normalizeClientTranscriptItem) : [];
-  restoredAppTurnCount = Number.isFinite(payload.restoredTurnCount) ? payload.restoredTurnCount : 0;
-  restoredAppHistoryHasMore = Boolean(payload.hasEarlierTurns);
+  const allItems = Array.isArray(payload.items) ? payload.items : [];
+  appTranscriptItems = recentAppTranscriptItems(allItems).map(normalizeClientTranscriptItem);
+  const availableTurnCount = Number.isFinite(payload.restoredTurnCount) ? payload.restoredTurnCount : 0;
+  restoredAppTurnCount = Math.min(availableTurnCount, APP_RECENT_TURN_LIMIT);
+  restoredAppHistoryHasMore = Boolean(payload.hasEarlierTurns) || availableTurnCount > APP_RECENT_TURN_LIMIT;
   renderAppTranscript({ follow: true });
+}
+
+function recentAppTranscriptItems(items) {
+  const turnIds = new Set();
+  let startIndex = 0;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const turnId = String(items[index]?.turnId || "");
+    if (!turnId || turnIds.has(turnId)) continue;
+    if (turnIds.size >= APP_RECENT_TURN_LIMIT) {
+      startIndex = index + 1;
+      break;
+    }
+    turnIds.add(turnId);
+  }
+  return items.slice(startIndex);
 }
 
 function upsertAppTranscript(payload = {}) {

@@ -24,6 +24,8 @@ test("App Server resume restores structured history and keeps raw text available
   assert.match(app, /textTabButton\.textContent = isAppServer \? "原始" : "Text"/);
   assert.match(app, /`最近 \$\{restoredAppTurnCount\} 轮`/);
   assert.match(app, /note\.textContent = "更早记录未加载"/);
+  assert.match(app, /function recentAppTranscriptItems\(items\)/);
+  assert.match(app, /availableTurnCount > APP_RECENT_TURN_LIMIT/);
   assert.match(styles, /\.app-transcript-user/);
   assert.match(styles, /\.app-transcript-assistant/);
   assert.match(styles, /\.app-transcript-command/);

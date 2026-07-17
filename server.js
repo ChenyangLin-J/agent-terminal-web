@@ -10,6 +10,11 @@ import busboy from "busboy";
 import express from "express";
 import { WebSocketServer } from "ws";
 import { CodexAppServerClient } from "./lib/codex-app-server-client.js";
+import {
+  extractSessionPreviewFromJsonl,
+  readSessionPreviews,
+  saveSessionPreview,
+} from "./lib/session-preview.js";
 
 const AGENT_TIME_ZONE = "Asia/Shanghai";
 process.env.TZ = AGENT_TIME_ZONE;
@@ -38,6 +43,7 @@ const CODEX_ARCHIVED_SESSIONS_ROOT = path.join(CODEX_HOME, "archived_sessions");
 const CODEX_SESSION_TITLES_FILE = path.join(CODEX_HOME, "session-titles.json");
 const CODEX_SESSION_ARCHIVE_FILE = path.join(CODEX_HOME, "session-archive.json");
 const AGENT_WEB_SESSIONS_FILE = path.join(CODEX_HOME, "agent-web-sessions.json");
+const CODEX_SESSION_PREVIEWS_FILE = path.join(CODEX_HOME, "agent-session-previews.json");
 const UPLOADS_ROOT = path.resolve(process.env.UPLOADS_ROOT || path.join(WORKSPACE_ROOT, "uploads"));
 const MAX_UPLOAD_FILES = Number(process.env.MAX_UPLOAD_FILES || 5);
 const MAX_UPLOAD_FILE_BYTES = Number(process.env.MAX_UPLOAD_FILE_BYTES || 50 * 1024 * 1024);
@@ -104,6 +110,7 @@ app.post("/internal/codex-notify", async (req, res) => {
 
   const threadId = String(event["thread-id"] || "");
   if (isValidSessionId(threadId)) session.sessionId = threadId;
+  persistCompletedSessionPreview(session, event["last-assistant-message"]);
   completeTrackedTurn(session, String(event["turn-id"] || ""));
   session.lastActivityAt = new Date().toISOString();
   persistRestorableWebSession(session);
@@ -247,6 +254,34 @@ app.get("/api/codex-sessions", async (_req, res) => {
 app.get("/api/codex-sessions/archived", async (_req, res) => {
   const codexSessions = await listCodexSessions({ archived: true });
   res.json({ sessions: codexSessions });
+});
+
+app.get("/api/session-preview/:id", async (req, res) => {
+  const id = String(req.params.id || "").trim();
+  if (!isValidSessionId(id)) {
+    res.status(400).json({ error: "Invalid session id." });
+    return;
+  }
+
+  try {
+    const cached = readSessionPreviews(CODEX_SESSION_PREVIEWS_FILE)[id];
+    if (cached) {
+      res.json({ preview: cached });
+      return;
+    }
+
+    const file = await findCodexSessionFile(id);
+    const extracted = file ? await extractSessionPreviewFromJsonl(file) : null;
+    if (!extracted) {
+      res.status(404).json({ error: "No completed result is available yet." });
+      return;
+    }
+    const preview = saveSessionPreview(CODEX_SESSION_PREVIEWS_FILE, { ...extracted, sessionId: id });
+    res.json({ preview });
+  } catch (error) {
+    console.error(`Failed to read session preview ${id}: ${error.message}`);
+    res.status(500).json({ error: "Session preview is unavailable." });
+  }
 });
 
 app.put("/api/codex-sessions/:id/title", async (req, res) => {
@@ -709,6 +744,7 @@ function createAppServerSession(cwd, launch, restored = {}) {
     terminal: null,
     appServer,
     pendingServerRequests: new Map(),
+    pendingStartupPrompts: [],
     streamedItemIds: new Set(),
     lastAssistantMessage: "",
     appTranscript: [],
@@ -793,8 +829,15 @@ async function initializeAppServerSession(session, launch) {
     persistRestorableWebSession(session);
     broadcast(session, "app-transcript", publicAppTranscript(session));
     broadcast(session, "status", publicSession(session));
+    void drainAppServerStartupPrompts(session);
   } catch (error) {
     appendSessionOutput(session, `\r\n\x1b[31mApp Server failed to start: ${error.message}\x1b[0m\r\n`);
+    if (session.pendingStartupPrompts.length) {
+      broadcast(session, "error", {
+        message: `App Server failed to start: ${error.message}`,
+        preservePrompt: true,
+      });
+    }
     markAppServerExited(session, error);
   }
 }
@@ -1034,6 +1077,20 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
         const prompt = prepareSessionPrompt(session, normalized);
         if (prompt.activatesThink) session.thinkSkillActivationPending = true;
         if (session.transport === APP_SERVER_TRANSPORT) {
+          if (!session.ready) {
+            session.pendingStartupPrompts.push({
+              text: prompt.text,
+              deliveryMode: message.deliveryMode,
+              activatesThink: prompt.activatesThink,
+            });
+            send(ws, "control-ack", {
+              kind: "submit",
+              receivedAt: Date.now(),
+              deliveryMode: "startup-queue",
+              turnState: publicTurnState(session.turnState),
+            });
+            return;
+          }
           void submitAppServerPrompt(session, prompt.text, message.deliveryMode)
             .then((submission) => {
               if (prompt.activatesThink) {
@@ -1399,6 +1456,7 @@ async function submitAppServerPrompt(session, text, requestedMode) {
   state.turnId = "";
   const requirement = turnRequirement(state, text, wantsQueue || lateSteer ? "queued" : "original", "working");
   state.requirements = [requirement];
+  session.lastAssistantMessage = "";
   const turn = await appServer.startTurn(lateSteer ? lateFollowupPromptText(text) : text, {
     clientUserMessageId: requirement.id,
   });
@@ -1407,6 +1465,30 @@ async function submitAppServerPrompt(session, text, requestedMode) {
   persistRestorableWebSession(session);
   broadcast(session, "status", publicSession(session));
   return { deliveryMode: wantsQueue || lateSteer ? "queue-fallback" : "new" };
+}
+
+async function drainAppServerStartupPrompts(session) {
+  while (session.ready && !session.exited && session.pendingStartupPrompts.length) {
+    const prompt = session.pendingStartupPrompts.shift();
+    try {
+      await submitAppServerPrompt(session, prompt.text, prompt.deliveryMode);
+      if (prompt.activatesThink) {
+        session.thinkSkillActivated = true;
+        session.thinkSkillActivationPending = false;
+      }
+      session.lastActivityAt = new Date().toISOString();
+      persistRestorableWebSession(session);
+      broadcast(session, "status", publicSession(session));
+      broadcast(session, "control-ack", {
+        kind: "startup-submit",
+        receivedAt: Date.now(),
+        turnState: publicTurnState(session.turnState),
+      });
+    } catch (error) {
+      if (prompt.activatesThink) session.thinkSkillActivationPending = false;
+      broadcast(session, "error", { message: `Queued prompt was not sent: ${error.message}`, preservePrompt: true });
+    }
+  }
 }
 
 function publicAppTranscript(session) {
@@ -1707,6 +1789,7 @@ function handleAppServerNotification(session, message) {
     renderAppServerItemCompleted(session, params.item);
   } else if (method === "turn/completed") {
     const turnId = params.turn?.id || "";
+    persistCompletedSessionPreview(session, session.lastAssistantMessage);
     completeTrackedTurn(session, turnId);
     appendSessionOutput(session, "\r\n\x1b[32m✓ Turn completed\x1b[0m\r\n");
     persistRestorableWebSession(session);
@@ -2182,8 +2265,31 @@ function publicSession(session) {
     exitCode: session.exitCode,
     signal: session.signal,
     outputRevision: session.outputRevision,
+    capabilities: {
+      startupQueue: session.transport === APP_SERVER_TRANSPORT,
+    },
     turnState: publicTurnState(session.turnState),
   };
+}
+
+function persistCompletedSessionPreview(session, result) {
+  if (!session.sessionId || !String(result || "").trim()) return null;
+  const prompt = (session.turnState?.requirements || [])
+    .map((requirement) => String(requirement?.text || "").trim())
+    .filter(Boolean)
+    .join("\n\n");
+  try {
+    return saveSessionPreview(CODEX_SESSION_PREVIEWS_FILE, {
+      sessionId: session.sessionId,
+      prompt,
+      result,
+      completedAt: new Date().toISOString(),
+      updatedAt: session.lastActivityAt,
+    });
+  } catch (error) {
+    console.error(`Failed to save session preview ${session.sessionId}: ${error.message}`);
+    return null;
+  }
 }
 
 function ensureTmuxSession(tmuxName, cwd, commandWithArgs, env) {
@@ -2429,6 +2535,16 @@ async function readCodexSessionById(id) {
   return null;
 }
 
+async function findCodexSessionFile(id) {
+  const roots = [CODEX_SESSIONS_ROOT, CODEX_ARCHIVED_SESSIONS_ROOT];
+  for (const root of roots) {
+    const files = await walkFiles(root);
+    const match = files.find((file) => file.endsWith(".jsonl") && sessionIdFromFilename(file) === id);
+    if (match) return match;
+  }
+  return "";
+}
+
 async function listCodexSessions({ archived }) {
   const activeFiles = (await walkFiles(CODEX_SESSIONS_ROOT)).map((file) => ({ file, fileArchived: false }));
   const archivedFiles = (await walkFiles(CODEX_ARCHIVED_SESSIONS_ROOT)).map((file) => ({
@@ -2454,6 +2570,15 @@ async function listCodexSessions({ archived }) {
 
 async function listRecentAgentSessions(limit = 40) {
   const savedSessions = await listCodexSessions({ archived: false });
+  const previews = readSessionPreviews(CODEX_SESSION_PREVIEWS_FILE);
+  const persistedByCodexId = new Map();
+  for (const record of Object.values(readPersistedWebSessions())) {
+    if (!record?.sessionId) continue;
+    const current = persistedByCodexId.get(record.sessionId);
+    if (!current || new Date(record.lastActivityAt || 0) > new Date(current.lastActivityAt || 0)) {
+      persistedByCodexId.set(record.sessionId, record);
+    }
+  }
   const liveSessions = [
     ...[...sessions.values()].filter((session) => !session.exited).map(publicSession),
     ...listDetachedSessions(),
@@ -2474,6 +2599,8 @@ async function listRecentAgentSessions(limit = 40) {
       const updatedAt = latestTimestamp(session.updatedAt, liveSession?.lastActivityAt);
       const title = session.title || "Untitled session";
       const project = liveSession?.project || session.project || ".";
+      const persisted = persistedByCodexId.get(session.id) || null;
+      const preview = previews[session.id] || null;
       return {
         id: session.id,
         title,
@@ -2482,7 +2609,9 @@ async function listRecentAgentSessions(limit = 40) {
         live: Boolean(liveSession),
         webSessionId: liveSession?.id || "",
         transport: liveSession?.transport || "terminal",
-        access: normalizeAccessMode(liveSession?.access),
+        access: normalizeAccessMode(liveSession?.access || persisted?.access),
+        lastResult: preview?.result || "",
+        lastCompletedAt: preview?.completedAt || "",
       };
     })
     .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())

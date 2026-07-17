@@ -22,6 +22,17 @@ test("recent sessions expose resumable links to local Home callers", async (t) =
     `${JSON.stringify({ payload: { id: sessionId, cwd: projectRoot, timestamp: "2026-07-15T08:00:00.000Z" } })}\n`,
   );
   await fs.writeFile(path.join(codexHome, "session-titles.json"), `${JSON.stringify({ [sessionId]: "个人网站调整" })}\n`);
+  await fs.writeFile(
+    path.join(codexHome, "agent-session-previews.json"),
+    `${JSON.stringify({
+      [sessionId]: {
+        sessionId,
+        prompt: "调整个人网站",
+        result: "个人网站已经调整完成。",
+        completedAt: "2026-07-15T09:00:00.000Z",
+      },
+    })}\n`,
+  );
 
   const port = await reservePort();
   const child = spawn(process.execPath, ["server.js"], {
@@ -55,6 +66,8 @@ test("recent sessions expose resumable links to local Home callers", async (t) =
   assert.equal(data.sessions[0].live, false);
   assert.equal(data.sessions[0].id, sessionId);
   assert.equal(data.sessions[0].webSessionId, "");
+  assert.equal(data.sessions[0].lastResult, "个人网站已经调整完成。");
+  assert.equal(data.sessions[0].lastCompletedAt, "2026-07-15T09:00:00.000Z");
 
   const proxiedResponse = await fetch(`http://127.0.0.1:${port}/internal/recent-sessions`, {
     headers: { "x-forwarded-for": "127.0.0.1" },

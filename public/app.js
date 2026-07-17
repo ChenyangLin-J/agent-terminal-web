@@ -123,12 +123,15 @@ let latestTurnState = { active: false, turnId: "", requirements: [], queuedTurns
 let activeTransport = "terminal";
 let activeAccessMode = "safe";
 let activeSessionReady = true;
+let activeStartupQueueSupported = false;
 let pendingAgentRequest = null;
 let lastSubmittedPrompt = "";
 let pendingResumeSession = null;
 let appTranscriptItems = [];
 let restoredAppTurnCount = 0;
 let restoredAppHistoryHasMore = false;
+let cachedSessionPreview = null;
+let sessionPreviewRequestSequence = 0;
 const openAppProcessGroups = new Set();
 const clientId = getClientId();
 const notificationTarget = getNotificationTarget();
@@ -640,16 +643,22 @@ function openSocket(params, options = {}) {
     appTranscriptItems = [];
     restoredAppTurnCount = 0;
     restoredAppHistoryHasMore = false;
+    cachedSessionPreview = null;
+    sessionPreviewRequestSequence += 1;
     openAppProcessGroups.clear();
     renderAppTranscript();
     lastOutputRevision = 0;
     queuedOutputRevision = 0;
     if (hasSnapshot) restoreSessionSnapshot(snapshotKey);
+    if (activeTransport === "app-server" && params.sessionId) {
+      void loadSessionPreview(params.sessionId, sessionPreviewRequestSequence);
+    }
   }
   historySyncPending = shouldReplay;
   historySyncStartedAt = shouldReplay ? Date.now() : 0;
   activeAccessMode = params.access === "full" ? "full" : "safe";
   activeSessionReady = activeTransport !== "app-server";
+  activeStartupQueueSupported = false;
   document.body.classList.toggle("app-server-session", activeTransport === "app-server");
   clearAgentRequest();
   activeSessionId = params.attach || "";
@@ -789,14 +798,21 @@ function handleControlAck(payload = {}) {
     setUploadStatus("已提交给 Codex。", { clear: true });
     return;
   }
+  if (payload.kind === "startup-submit") {
+    lastSubmittedPrompt = "";
+    if (payload.turnState) renderTurnState(payload.turnState);
+    setUploadStatus("会话已恢复，任务已经开始。", { clear: true });
+    return;
+  }
   if (payload.kind !== "submit") return;
-  lastSubmittedPrompt = "";
+  if (payload.deliveryMode !== "startup-queue") lastSubmittedPrompt = "";
   if (payload.turnState) renderTurnState(payload.turnState);
   const message = {
     new: "已开始新任务。",
     steer: "已追加到当前任务；不会替换前面的要求。",
     queue: "已排到下一轮。",
     "queue-fallback": "当前任务刚刚结束，已自动转到下一轮。",
+    "startup-queue": "已排队；会话恢复后会自动开始。",
   }[payload.deliveryMode];
   if (message) setUploadStatus(message, { clear: true });
 }
@@ -1313,6 +1329,7 @@ function renderStatus(status) {
   activeTransport = status.transport === "app-server" ? "app-server" : "terminal";
   activeAccessMode = status.access === "full" ? "full" : "safe";
   activeSessionReady = status.ready !== false;
+  activeStartupQueueSupported = Boolean(status.capabilities?.startupQueue);
   document.body.classList.toggle("app-server-session", activeTransport === "app-server");
   updateSessionViewLabels();
   currentSessionExited = Boolean(status.exited);
@@ -1380,7 +1397,12 @@ function setConnectedState(state) {
     activeTransport === "terminal" &&
     ["connected", "loading"].includes(state) &&
     socket?.readyState === WebSocket.OPEN;
-  const connected = (state === "connected" || terminalCanAcceptInput) && activeSessionReady;
+  const appServerCanQueueStartup =
+    activeTransport === "app-server" &&
+    activeStartupQueueSupported &&
+    ["starting", "loading", "connected"].includes(state) &&
+    socket?.readyState === WebSocket.OPEN;
+  const connected = ((state === "connected" || terminalCanAcceptInput) && activeSessionReady) || appServerCanQueueStartup;
   sendPromptButton.disabled = !connected;
   queuePromptButton.disabled = !connected;
   textTabButton.disabled = !connected;
@@ -1839,6 +1861,7 @@ function syncPrimarySessionView() {
 function replaceAppTranscript(payload = {}) {
   const allItems = Array.isArray(payload.items) ? payload.items : [];
   appTranscriptItems = recentAppTranscriptItems(allItems).map(normalizeClientTranscriptItem);
+  if (appTranscriptItems.length) cachedSessionPreview = null;
   const availableTurnCount = Number.isFinite(payload.restoredTurnCount) ? payload.restoredTurnCount : 0;
   restoredAppTurnCount = Math.min(availableTurnCount, APP_RECENT_TURN_LIMIT);
   restoredAppHistoryHasMore = Boolean(payload.hasEarlierTurns) || availableTurnCount > APP_RECENT_TURN_LIMIT;
@@ -1934,7 +1957,52 @@ function renderAppTranscript({ follow = false } = {}) {
     fragment.append(banner);
   }
 
-  if (!appTranscriptItems.length) {
+  if (!appTranscriptItems.length && cachedSessionPreview?.result) {
+    const banner = document.createElement("div");
+    banner.className = "app-history-banner app-preview-banner";
+    const title = document.createElement("strong");
+    title.textContent = "上次完成";
+    const note = document.createElement("span");
+    note.textContent = activeSessionReady ? "最近记录已恢复" : "完整会话正在后台连接";
+    banner.append(title, note);
+    fragment.append(banner);
+    if (cachedSessionPreview.prompt) {
+      fragment.append(
+        createAppTranscriptCard({
+          id: "session-preview-user",
+          type: "user",
+          label: "你",
+          text: cachedSessionPreview.prompt,
+          detail: "",
+          output: "",
+          status: "completed",
+          tone: "",
+          phase: "",
+          durationMs: null,
+          exitCode: null,
+          turnId: "session-preview",
+          turnStartedAt: null,
+        }),
+      );
+    }
+    fragment.append(
+      createAppTranscriptCard({
+        id: "session-preview-assistant",
+        type: "assistant",
+        label: "Codex",
+        text: cachedSessionPreview.result,
+        detail: "",
+        output: "",
+        status: "completed",
+        tone: "",
+        phase: "final_answer",
+        durationMs: null,
+        exitCode: null,
+        turnId: "session-preview",
+        turnStartedAt: null,
+      }),
+    );
+  } else if (!appTranscriptItems.length) {
     const emptyState = document.createElement("div");
     emptyState.className = "app-transcript-empty";
     const title = document.createElement("strong");
@@ -1970,6 +2038,23 @@ function renderAppTranscript({ follow = false } = {}) {
 
   appServerTranscript.replaceChildren(fragment);
   if (shouldFollow) followAppTranscriptIfNeeded(true);
+}
+
+async function loadSessionPreview(sessionId, requestSequence) {
+  try {
+    const response = await fetch(`/api/session-preview/${encodeURIComponent(sessionId)}`);
+    if (!response.ok) return;
+    const data = await response.json();
+    if (requestSequence !== sessionPreviewRequestSequence || activeSessionParams.sessionId !== sessionId) return;
+    const preview = data.preview;
+    if (!preview?.result || appTranscriptItems.length) return;
+    cachedSessionPreview = {
+      prompt: String(preview.prompt || ""),
+      result: String(preview.result || ""),
+      completedAt: String(preview.completedAt || ""),
+    };
+    renderAppTranscript({ follow: true });
+  } catch {}
 }
 
 function isProcessTranscriptItem(item) {

@@ -25,6 +25,14 @@ test("App Server resume restores structured history and keeps raw text available
   assert.match(app, /`最近 \$\{restoredAppTurnCount\} 轮`/);
   assert.match(app, /note\.textContent = "更早记录未加载"/);
   assert.match(app, /function recentAppTranscriptItems\(items\)/);
+  assert.match(app, /fetch\(`\/api\/session-preview\/\$\{encodeURIComponent\(sessionId\)\}`\)/);
+  assert.match(app, /title\.textContent = "上次完成"/);
+  assert.match(app, /"startup-queue": "已排队；会话恢复后会自动开始。"/);
+  assert.match(server, /pendingStartupPrompts: \[\]/);
+  assert.match(server, /capabilities: \{[\s\S]*startupQueue: session\.transport === APP_SERVER_TRANSPORT/);
+  assert.match(server, /void drainAppServerStartupPrompts\(session\)/);
+  assert.match(server, /kind: "startup-submit"/);
+  assert.match(app, /payload\.kind === "startup-submit"/);
   assert.match(app, /availableTurnCount > APP_RECENT_TURN_LIMIT/);
   assert.match(styles, /\.app-transcript-user/);
   assert.match(styles, /\.app-transcript-assistant/);

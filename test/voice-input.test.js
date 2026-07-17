@@ -16,6 +16,6 @@ test("Agent voice input transcribes without using the Home capture endpoint", as
   assert.doesNotMatch(source, /完成，但有/);
   assert.match(source, /new CustomEvent\("agentvoicestatechange"/);
   assert.match(page, /voice-recovery-store\.js\?v=20260717-1/);
-  assert.match(page, /voice-capture-widget\.js\?v=20260717-recovery-1/);
+  assert.match(page, /voice-capture-widget\.js\?v=20260717-recovery-2/);
   assert.match(page, /agent-voice-input\.js\?v=20260717-recovery-1/);
 });

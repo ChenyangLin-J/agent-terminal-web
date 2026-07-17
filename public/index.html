@@ -36,7 +36,7 @@
       }
     </style>
     <link rel="stylesheet" href="/vendor/xterm-css/xterm.css?v=20260625-5" />
-    <link rel="stylesheet" href="/styles.css?v=20260717-fast-resume-3" />
+    <link rel="stylesheet" href="/styles.css?v=20260717-real-history-4" />
     <link rel="stylesheet" href="/session-focus-mode.css?v=20260716-app-chrome-2" />
     <link rel="stylesheet" href="/thinking-session.css?v=20260716-1" />
   </head>
@@ -133,6 +133,14 @@
 
         <section class="terminal-view">
           <div id="terminal" aria-label="Codex terminal"></div>
+          <section id="terminal-session-preview" class="terminal-session-preview hidden" aria-live="polite">
+            <header>
+              <strong>上次完成</strong>
+              <span>Terminal 会话正在后台恢复</span>
+            </header>
+            <pre id="terminal-session-preview-result"></pre>
+            <button id="terminal-session-preview-dismiss" type="button">查看 Terminal 加载画面</button>
+          </section>
         </section>
 
         <section id="app-server-view" class="app-server-view hidden" aria-label="App Server conversation">
@@ -240,7 +248,7 @@
     <script src="/shared/voice-capture-widget.js?v=20260717-recovery-2"></script>
     <script src="/agent-upload.js?v=20260713-progress-1"></script>
     <script src="/agent-voice-input.js?v=20260717-recovery-1"></script>
-    <script src="/app.js?v=20260717-fast-resume-3"></script>
+    <script src="/app.js?v=20260717-real-history-4"></script>
     <script src="/session-focus-mode.js?v=20260716-app-chrome-1"></script>
   </body>
 </html>

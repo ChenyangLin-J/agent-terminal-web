@@ -504,6 +504,64 @@ input {
   touch-action: none;
 }
 
+.terminal-session-preview {
+  position: absolute;
+  inset: 8px;
+  z-index: 6;
+  display: grid;
+  align-content: start;
+  gap: 0;
+  overflow: auto;
+  border: 1px solid #293443;
+  background: #080a0f;
+  color: #eef2f8;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.terminal-session-preview.hidden {
+  display: none;
+}
+
+.terminal-session-preview header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border-bottom: 1px solid #252a35;
+  background: #10141c;
+}
+
+.terminal-session-preview header strong {
+  color: #70d7a6;
+  font-size: 13px;
+}
+
+.terminal-session-preview header span {
+  color: #7f899a;
+  font-size: 11px;
+  text-align: right;
+}
+
+.terminal-session-preview pre {
+  min-height: 0;
+  margin: 0;
+  padding: 12px 11px;
+  overflow: auto;
+  color: #eef2f8;
+  font: 13px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.terminal-session-preview button {
+  justify-self: start;
+  min-height: 36px;
+  margin: 0 11px 12px;
+  color: #aeb9ca;
+  font-size: 12px;
+}
+
 #terminal .xterm,
 #terminal .xterm-screen,
 #terminal .xterm-viewport,
@@ -691,6 +749,14 @@ input {
   color: #7f899a;
   font-size: 12px;
   text-align: right;
+}
+
+.app-history-load {
+  min-height: 30px;
+  padding: 4px 9px;
+  border-color: #334052;
+  color: #b7c2d2;
+  font: 12px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 .app-transcript-empty {

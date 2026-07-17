@@ -11,6 +11,7 @@ import express from "express";
 import { WebSocketServer } from "ws";
 import { CodexAppServerClient } from "./lib/codex-app-server-client.js";
 import {
+  extractSessionConversationFromJsonl,
   extractSessionPreviewFromJsonl,
   readSessionPreviews,
   saveSessionPreview,
@@ -50,8 +51,9 @@ const MAX_UPLOAD_FILE_BYTES = Number(process.env.MAX_UPLOAD_FILE_BYTES || 50 * 1
 const MAX_RAW_BUFFER = 1024 * 1024;
 const MAX_FULL_REPLAY_BYTES = 32 * 1024;
 const MAX_TURN_REQUIREMENTS = 20;
-const APP_RECENT_TURN_LIMIT = 3;
-const MAX_APP_TRANSCRIPT_ITEMS = 800;
+const APP_INITIAL_TURN_LIMIT = 10;
+const APP_HISTORY_PAGE_LIMIT = 10;
+const MAX_APP_TRANSCRIPT_ITEMS = 4_000;
 const MAX_APP_TRANSCRIPT_TEXT = 200_000;
 const MAX_APP_TRANSCRIPT_DETAIL = 40_000;
 const MAX_APP_TRANSCRIPT_OUTPUT = 80_000;
@@ -265,24 +267,46 @@ app.get("/api/session-preview/:id", async (req, res) => {
 
   try {
     const cached = readSessionPreviews(CODEX_SESSION_PREVIEWS_FILE)[id];
-    if (cached) {
-      res.json({ preview: cached });
-      return;
-    }
-
     const file = await findCodexSessionFile(id);
-    const extracted = file ? await extractSessionPreviewFromJsonl(file) : null;
-    if (!extracted) {
+    const conversation = file ? await extractSessionConversationFromJsonl(file, { limit: APP_INITIAL_TURN_LIMIT }) : null;
+    const conversationPreview = sessionPreviewFromConversation(conversation);
+    const extracted = newerSessionPreview(cached, conversationPreview) || (file ? await extractSessionPreviewFromJsonl(file) : null);
+    if (!extracted && !conversation?.turns?.length) {
       res.status(404).json({ error: "No completed result is available yet." });
       return;
     }
-    const preview = saveSessionPreview(CODEX_SESSION_PREVIEWS_FILE, { ...extracted, sessionId: id });
-    res.json({ preview });
+    const preview = extracted
+      ? extracted === cached
+        ? cached
+        : saveSessionPreview(CODEX_SESSION_PREVIEWS_FILE, { ...extracted, sessionId: id })
+      : null;
+    res.json({ preview, conversation: conversation || { turns: [], hasEarlier: false } });
   } catch (error) {
     console.error(`Failed to read session preview ${id}: ${error.message}`);
     res.status(500).json({ error: "Session preview is unavailable." });
   }
 });
+
+function sessionPreviewFromConversation(conversation) {
+  for (let turnIndex = (conversation?.turns?.length || 0) - 1; turnIndex >= 0; turnIndex -= 1) {
+    const turn = conversation.turns[turnIndex];
+    const answer = [...(turn.assistant || [])].reverse().find((item) => item.phase === "final_answer");
+    if (!answer?.text) continue;
+    return {
+      sessionId: "preview",
+      prompt: turn.user || "",
+      result: answer.text,
+      completedAt: answer.completedAt || new Date().toISOString(),
+    };
+  }
+  return null;
+}
+
+function newerSessionPreview(left, right) {
+  if (!left) return right || null;
+  if (!right) return left;
+  return new Date(right.completedAt || 0) > new Date(left.completedAt || 0) ? right : left;
+}
 
 app.put("/api/codex-sessions/:id/title", async (req, res) => {
   const id = String(req.params.id || "").trim();
@@ -751,6 +775,8 @@ function createAppServerSession(cwd, launch, restored = {}) {
     appTranscriptSequence: 0,
     restoredTurnCount: 0,
     restoredHistoryHasMore: false,
+    restoredHistoryCursor: null,
+    restoredHistoryLoading: false,
     clients: new Set(),
     cleanupTimer: null,
     exited: false,
@@ -808,8 +834,9 @@ async function initializeAppServerSession(session, launch) {
     let thread;
     if (launch.sessionId) {
       thread = await session.appServer.resumeThread(launch.sessionId, { ...params, excludeTurns: true });
-      const recentPage = await session.appServer.listThreadTurns({ limit: APP_RECENT_TURN_LIMIT });
+      const recentPage = await session.appServer.listThreadTurns({ limit: APP_INITIAL_TURN_LIMIT });
       restoreAppServerTranscript(session, { ...thread, turns: recentPage?.data || [] }, { resumed: true });
+      session.restoredHistoryCursor = recentPage?.nextCursor || null;
       session.restoredHistoryHasMore = Boolean(recentPage?.nextCursor);
       logAgentEvent("app-server-recent-history", {
         webSessionId: session.id,
@@ -898,16 +925,17 @@ function restoreTmuxSession(id) {
 
   if (!USE_TMUX_SESSIONS) {
     if (!record.sessionId) return null;
-    const reusable = findReusableSession({ sessionId: record.sessionId });
+    const reusable = findReusableSession({ sessionId: record.sessionId, transport: APP_SERVER_TRANSPORT });
     if (reusable) return reusable;
 
     return createSession(
       cwd,
       {
         mode: "resume-id",
+        transport: APP_SERVER_TRANSPORT,
         access: normalizeAccessMode(record.access),
         sessionId: record.sessionId,
-        args: terminalLaunchArgs(record.access, ["resume", record.sessionId]),
+        args: ["app-server"],
         title: record.title || "",
         purpose: normalizeSessionPurpose(record.purpose),
       },
@@ -1128,6 +1156,13 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
           turnState: publicTurnState(session.turnState),
         });
       }
+      return;
+    }
+
+    if (message.type === "load-app-history" && session.transport === APP_SERVER_TRANSPORT) {
+      void loadEarlierAppServerHistory(session).catch((error) => {
+        send(ws, "error", { message: `Earlier history was not loaded: ${error.message}` });
+      });
       return;
     }
 
@@ -1495,8 +1530,36 @@ function publicAppTranscript(session) {
   return {
     restoredTurnCount: session.restoredTurnCount || 0,
     hasEarlierTurns: Boolean(session.restoredHistoryHasMore),
+    loadingEarlier: Boolean(session.restoredHistoryLoading),
     items: session.appTranscript.map((item) => ({ ...item })),
   };
+}
+
+async function loadEarlierAppServerHistory(session) {
+  if (!session.ready || session.exited || session.restoredHistoryLoading || !session.restoredHistoryCursor) return;
+  session.restoredHistoryLoading = true;
+  broadcast(session, "app-history-state", { loadingEarlier: true });
+  try {
+    const page = await session.appServer.listThreadTurns({
+      limit: APP_HISTORY_PAGE_LIMIT,
+      cursor: session.restoredHistoryCursor,
+    });
+    const turns = Array.isArray(page?.data) ? page.data : [];
+    prependAppServerTranscript(session, turns);
+    session.restoredTurnCount += turns.length;
+    session.restoredHistoryCursor = page?.nextCursor || null;
+    session.restoredHistoryHasMore = Boolean(page?.nextCursor);
+    logAgentEvent("app-server-earlier-history", {
+      webSessionId: session.id,
+      codexSessionId: session.sessionId,
+      loadedTurns: turns.length,
+      restoredTurns: session.restoredTurnCount,
+      hasEarlierTurns: session.restoredHistoryHasMore,
+    });
+  } finally {
+    session.restoredHistoryLoading = false;
+    broadcast(session, "app-transcript", { ...publicAppTranscript(session), prepended: true });
+  }
 }
 
 function restoreAppServerTranscript(session, thread, { resumed = false } = {}) {
@@ -1504,6 +1567,24 @@ function restoreAppServerTranscript(session, thread, { resumed = false } = {}) {
   turns.sort((a, b) => (a?.startedAt ?? 0) - (b?.startedAt ?? 0));
   session.appTranscript = [];
   session.restoredTurnCount = resumed ? turns.length : 0;
+
+  for (const item of appTranscriptItemsFromTurns(session, turns)) {
+    upsertAppTranscriptItem(session, item, { notify: false });
+  }
+}
+
+function prependAppServerTranscript(session, turns) {
+  const sortedTurns = [...turns].sort((a, b) => (a?.startedAt ?? 0) - (b?.startedAt ?? 0));
+  const existingIds = new Set(session.appTranscript.map((item) => item.id));
+  const earlierItems = appTranscriptItemsFromTurns(session, sortedTurns).filter((item) => !existingIds.has(item.id));
+  session.appTranscript = [...earlierItems.map(normalizeAppTranscriptItem), ...session.appTranscript];
+  if (session.appTranscript.length > MAX_APP_TRANSCRIPT_ITEMS) {
+    session.appTranscript.splice(0, session.appTranscript.length - MAX_APP_TRANSCRIPT_ITEMS);
+  }
+}
+
+function appTranscriptItemsFromTurns(session, turns) {
+  const items = [];
 
   for (const turn of turns) {
     const context = {
@@ -1513,9 +1594,10 @@ function restoreAppServerTranscript(session, thread, { resumed = false } = {}) {
     };
     for (const item of Array.isArray(turn?.items) ? turn.items : []) {
       const transcriptItem = appTranscriptFromThreadItem(session, item, context);
-      if (transcriptItem) upsertAppTranscriptItem(session, transcriptItem, { notify: false });
+      if (transcriptItem) items.push(transcriptItem);
     }
   }
+  return items;
 }
 
 function upsertAppTranscriptItem(session, item, { notify = true } = {}) {

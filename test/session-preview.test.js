@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  extractSessionConversationFromJsonl,
   extractSessionPreviewFromJsonl,
   readSessionPreviews,
   saveSessionPreview,
@@ -28,6 +29,33 @@ test("extracts the latest completed answer and its preceding user request from a
   assert.equal(preview.prompt, "latest request");
   assert.equal(preview.result, "latest answer");
   assert.equal(preview.completedAt, "2026-07-17T00:04:00.000Z");
+});
+
+test("extracts recent user and assistant conversation turns directly from disk", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "agent-session-conversation-"));
+  const file = path.join(directory, "rollout-session.jsonl");
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const records = [];
+  for (let index = 1; index <= 12; index += 1) {
+    records.push({
+      timestamp: `2026-07-17T00:${String(index).padStart(2, "0")}:00.000Z`,
+      type: "event_msg",
+      payload: { type: "user_message", message: `request ${index}` },
+    });
+    records.push(message("assistant", `progress ${index}`, `2026-07-17T00:${String(index).padStart(2, "0")}:10.000Z`, "commentary"));
+    records.push(message("assistant", `answer ${index}`, `2026-07-17T00:${String(index).padStart(2, "0")}:20.000Z`, "final_answer"));
+  }
+  await fs.writeFile(file, `${records.map(JSON.stringify).join("\n")}\n`);
+
+  const conversation = await extractSessionConversationFromJsonl(file, { limit: 10 });
+  assert.equal(conversation.turns.length, 10);
+  assert.equal(conversation.hasEarlier, true);
+  assert.equal(conversation.turns[0].user, "request 3");
+  assert.deepEqual(
+    conversation.turns.at(-1).assistant.map((item) => item.phase),
+    ["commentary", "final_answer"],
+  );
 });
 
 test("preview cache is stored atomically and normalized by session id", async (t) => {

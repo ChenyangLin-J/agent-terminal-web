@@ -51,6 +51,9 @@ const agentRequestAccept = document.querySelector("#agent-request-accept");
 const agentRequestSession = document.querySelector("#agent-request-session");
 const agentRequestDecline = document.querySelector("#agent-request-decline");
 const terminalView = document.querySelector(".terminal-view");
+const terminalSessionPreview = document.querySelector("#terminal-session-preview");
+const terminalSessionPreviewResult = document.querySelector("#terminal-session-preview-result");
+const terminalSessionPreviewDismiss = document.querySelector("#terminal-session-preview-dismiss");
 const appServerView = document.querySelector("#app-server-view");
 const appServerTranscript = document.querySelector("#app-server-transcript");
 const textView = document.querySelector("#text-view");
@@ -82,7 +85,7 @@ const TERMINAL_RECENT_HISTORY_MAX_CHARS = 24_000;
 const TERMINAL_HISTORY_QUIET_MS = 1_200;
 const TERMINAL_HISTORY_EMPTY_READY_MS = 120;
 const TERMINAL_DELAYED_HISTORY_GUARD_MS = 60_000;
-const APP_RECENT_TURN_LIMIT = 3;
+const APP_INITIAL_TURN_LIMIT = 10;
 
 let terminal = null;
 let fitAddon = null;
@@ -130,8 +133,12 @@ let pendingResumeSession = null;
 let appTranscriptItems = [];
 let restoredAppTurnCount = 0;
 let restoredAppHistoryHasMore = false;
+let restoredAppHistoryLoading = false;
+let appTranscriptSource = "";
 let cachedSessionPreview = null;
 let sessionPreviewRequestSequence = 0;
+let terminalPreviewAllowed = false;
+let terminalOutputWhilePreviewChars = 0;
 const openAppProcessGroups = new Set();
 const clientId = getClientId();
 const notificationTarget = getNotificationTarget();
@@ -181,6 +188,7 @@ keyEscButton.addEventListener("click", () => sendTerminalKey("\x1b"));
 sendStatusButton.addEventListener("click", () => command("/status"));
 sendPermissionsButton.addEventListener("click", () => command("/permissions"));
 killSessionButton.addEventListener("click", endSession);
+terminalSessionPreviewDismiss.addEventListener("click", hideTerminalSessionPreview);
 sendPromptButton.addEventListener("click", () => submitPrompt("auto"));
 queuePromptButton.addEventListener("click", () => submitPrompt("queue"));
 agentRequestAccept.addEventListener("click", () => respondToAgentRequest("accept"));
@@ -643,14 +651,18 @@ function openSocket(params, options = {}) {
     appTranscriptItems = [];
     restoredAppTurnCount = 0;
     restoredAppHistoryHasMore = false;
+    restoredAppHistoryLoading = false;
+    appTranscriptSource = "";
     cachedSessionPreview = null;
+    hideTerminalSessionPreview();
+    terminalPreviewAllowed = activeTransport === "terminal" && !hasSnapshot && resumesTerminalHistory;
     sessionPreviewRequestSequence += 1;
     openAppProcessGroups.clear();
     renderAppTranscript();
     lastOutputRevision = 0;
     queuedOutputRevision = 0;
     if (hasSnapshot) restoreSessionSnapshot(snapshotKey);
-    if (activeTransport === "app-server" && params.sessionId) {
+    if (params.sessionId) {
       void loadSessionPreview(params.sessionId, sessionPreviewRequestSequence);
     }
   }
@@ -728,6 +740,11 @@ function openSocket(params, options = {}) {
     }
     if (message.type === "app-transcript-delta") {
       appendAppTranscriptDelta(message.payload);
+      return;
+    }
+    if (message.type === "app-history-state") {
+      restoredAppHistoryLoading = Boolean(message.payload?.loadingEarlier);
+      renderAppTranscript({ follow: false });
       return;
     }
     if (message.type === "agent-request") {
@@ -1384,7 +1401,7 @@ function setConnectedState(state) {
     connected: "已连接",
     connecting: "连接中",
     reconnecting: "重新连接中",
-    starting: "启动中",
+    starting: activeSessionParams.sessionId ? "恢复历史中 · 可先提交" : "启动中 · 可先提交",
     loading: "已连接 · 恢复最新记录中",
     detached: "已离开",
     exited: "已停止",
@@ -1580,6 +1597,10 @@ function resetSessionDocumentScroll() {
 }
 
 function handleTerminalOutput(payload = {}) {
+  if (activeTransport === "terminal" && !terminalSessionPreview.classList.contains("hidden")) {
+    terminalOutputWhilePreviewChars += String(payload.raw || "").length;
+    if (terminalOutputWhilePreviewChars > 1_000) hideTerminalSessionPreview();
+  }
   const revision = validOutputRevision(payload.revision);
   if (revision !== null) {
     if (revision <= queuedOutputRevision) return;
@@ -1755,7 +1776,7 @@ function exposeTerminalWhileHistoryIsPending() {
   terminalHistoryUiReady = true;
   window.clearTimeout(terminalHistoryFlushTimer);
   terminalHistoryFlushTimer = window.setTimeout(disarmDelayedTerminalHistory, TERMINAL_DELAYED_HISTORY_GUARD_MS);
-  setConnectedState(socket?.readyState === WebSocket.OPEN ? "connected" : "detached");
+  setConnectedState(currentSocketConnectionState());
   logClientEvent("terminal-ui-ready", {
     waitingForDelayedHistory: true,
     outputRevision: lastOutputRevision,
@@ -1782,7 +1803,7 @@ function finishHistorySync(mode, rawChars) {
   window.clearTimeout(terminalHistoryFlushTimer);
   terminalHistoryFlushTimer = null;
   terminalView.classList.remove("replaying");
-  setConnectedState(socket?.readyState === WebSocket.OPEN ? "connected" : "detached");
+  setConnectedState(currentSocketConnectionState());
   logClientEvent("history-sync-complete", {
     replayMode: mode,
     rawChars,
@@ -1790,7 +1811,14 @@ function finishHistorySync(mode, rawChars) {
     durationMs: historySyncStartedAt ? Date.now() - historySyncStartedAt : 0,
   });
   historySyncStartedAt = 0;
+  if (activeTransport === "terminal" && rawChars > 1_000) hideTerminalSessionPreview();
   saveActiveSessionSnapshot();
+}
+
+function currentSocketConnectionState() {
+  if (socket?.readyState !== WebSocket.OPEN) return "detached";
+  if (activeTransport === "app-server" && !activeSessionReady) return "starting";
+  return "connected";
 }
 
 function validOutputRevision(value) {
@@ -1859,28 +1887,28 @@ function syncPrimarySessionView() {
 }
 
 function replaceAppTranscript(payload = {}) {
+  const prepended = Boolean(payload.prepended);
+  const replacingDiskPreview = appTranscriptSource === "disk";
+  const wasAtBottom = isAppTranscriptAtBottom();
+  const previousScrollHeight = appServerView.scrollHeight;
+  const previousScrollTop = appServerView.scrollTop;
   const allItems = Array.isArray(payload.items) ? payload.items : [];
-  appTranscriptItems = recentAppTranscriptItems(allItems).map(normalizeClientTranscriptItem);
+  // A resumed App Server sends an empty transcript before its recent turns are
+  // available. Do not let that placeholder win the race against disk history.
+  if (!allItems.length && !activeSessionReady) return;
+  appTranscriptItems = allItems.map(normalizeClientTranscriptItem);
+  appTranscriptSource = "app-server";
   if (appTranscriptItems.length) cachedSessionPreview = null;
   const availableTurnCount = Number.isFinite(payload.restoredTurnCount) ? payload.restoredTurnCount : 0;
-  restoredAppTurnCount = Math.min(availableTurnCount, APP_RECENT_TURN_LIMIT);
-  restoredAppHistoryHasMore = Boolean(payload.hasEarlierTurns) || availableTurnCount > APP_RECENT_TURN_LIMIT;
-  renderAppTranscript({ follow: true });
-}
-
-function recentAppTranscriptItems(items) {
-  const turnIds = new Set();
-  let startIndex = 0;
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const turnId = String(items[index]?.turnId || "");
-    if (!turnId || turnIds.has(turnId)) continue;
-    if (turnIds.size >= APP_RECENT_TURN_LIMIT) {
-      startIndex = index + 1;
-      break;
-    }
-    turnIds.add(turnId);
+  restoredAppTurnCount = availableTurnCount;
+  restoredAppHistoryHasMore = Boolean(payload.hasEarlierTurns);
+  restoredAppHistoryLoading = Boolean(payload.loadingEarlier);
+  renderAppTranscript({ follow: !prepended && (!replacingDiskPreview || wasAtBottom) });
+  if (prepended) {
+    requestAnimationFrame(() => {
+      appServerView.scrollTop = previousScrollTop + (appServerView.scrollHeight - previousScrollHeight);
+    });
   }
-  return items.slice(startIndex);
 }
 
 function upsertAppTranscript(payload = {}) {
@@ -1947,11 +1975,33 @@ function renderAppTranscript({ follow = false } = {}) {
     const banner = document.createElement("div");
     banner.className = "app-history-banner";
     const title = document.createElement("strong");
-    title.textContent = `最近 ${restoredAppTurnCount} 轮`;
+    title.textContent =
+      appTranscriptSource === "disk"
+        ? `已从磁盘显示最近 ${restoredAppTurnCount} 轮`
+        : `已加载最近 ${restoredAppTurnCount} 轮`;
     banner.append(title);
-    if (restoredAppHistoryHasMore) {
+    if (appTranscriptSource === "disk") {
       const note = document.createElement("span");
-      note.textContent = "更早记录未加载";
+      note.textContent = "App Server 正在后台连接";
+      banner.append(note);
+    } else if (restoredAppHistoryHasMore) {
+      const loadEarlier = document.createElement("button");
+      loadEarlier.type = "button";
+      loadEarlier.className = "app-history-load";
+      loadEarlier.disabled = restoredAppHistoryLoading;
+      loadEarlier.textContent = restoredAppHistoryLoading ? "正在加载…" : `加载更早 ${APP_INITIAL_TURN_LIMIT} 轮`;
+      loadEarlier.addEventListener("click", () => {
+        restoredAppHistoryLoading = true;
+        renderAppTranscript({ follow: false });
+        if (!send({ type: "load-app-history" })) {
+          restoredAppHistoryLoading = false;
+          renderAppTranscript({ follow: false });
+        }
+      });
+      banner.append(loadEarlier);
+    } else {
+      const note = document.createElement("span");
+      note.textContent = "已到最早记录";
       banner.append(note);
     }
     fragment.append(banner);
@@ -2047,14 +2097,77 @@ async function loadSessionPreview(sessionId, requestSequence) {
     const data = await response.json();
     if (requestSequence !== sessionPreviewRequestSequence || activeSessionParams.sessionId !== sessionId) return;
     const preview = data.preview;
-    if (!preview?.result || appTranscriptItems.length) return;
-    cachedSessionPreview = {
-      prompt: String(preview.prompt || ""),
-      result: String(preview.result || ""),
-      completedAt: String(preview.completedAt || ""),
-    };
-    renderAppTranscript({ follow: true });
+    if (preview?.result) {
+      cachedSessionPreview = {
+        prompt: String(preview.prompt || ""),
+        result: String(preview.result || ""),
+        completedAt: String(preview.completedAt || ""),
+      };
+    }
+    if (activeTransport === "terminal") {
+      renderTerminalSessionPreview();
+    } else if (appTranscriptSource !== "app-server") {
+      const diskItems = diskConversationItems(data.conversation);
+      if (diskItems.length) {
+        appTranscriptItems = diskItems;
+        appTranscriptSource = "disk";
+        restoredAppTurnCount = Array.isArray(data.conversation?.turns) ? data.conversation.turns.length : 0;
+        restoredAppHistoryHasMore = Boolean(data.conversation?.hasEarlier);
+        renderAppTranscript({ follow: true });
+      } else if (!appTranscriptItems.length) {
+        renderAppTranscript({ follow: true });
+      }
+    }
   } catch {}
+}
+
+function diskConversationItems(conversation = {}) {
+  const items = [];
+  for (const [turnIndex, turn] of (Array.isArray(conversation.turns) ? conversation.turns : []).entries()) {
+    const turnId = String(turn.id || `disk-turn-${turnIndex + 1}`);
+    const turnStartedAt = Date.parse(turn.startedAt || "");
+    if (turn.user) {
+      items.push(
+        normalizeClientTranscriptItem({
+          id: `${turnId}-user`,
+          type: "user",
+          label: "你",
+          text: turn.user,
+          status: "completed",
+          turnId,
+          turnStartedAt: Number.isFinite(turnStartedAt) ? turnStartedAt : null,
+        }),
+      );
+    }
+    for (const [answerIndex, answer] of (Array.isArray(turn.assistant) ? turn.assistant : []).entries()) {
+      items.push(
+        normalizeClientTranscriptItem({
+          id: `${turnId}-assistant-${answerIndex + 1}`,
+          type: "assistant",
+          label: "Codex",
+          text: answer.text,
+          phase: answer.phase,
+          status: "completed",
+          turnId,
+          turnStartedAt: Number.isFinite(turnStartedAt) ? turnStartedAt : null,
+        }),
+      );
+    }
+  }
+  return items;
+}
+
+function renderTerminalSessionPreview() {
+  if (!terminalPreviewAllowed || !cachedSessionPreview?.result) return;
+  terminalOutputWhilePreviewChars = 0;
+  terminalSessionPreviewResult.textContent = cachedSessionPreview.result;
+  terminalSessionPreview.classList.remove("hidden");
+}
+
+function hideTerminalSessionPreview() {
+  terminalPreviewAllowed = false;
+  terminalOutputWhilePreviewChars = 0;
+  terminalSessionPreview.classList.add("hidden");
 }
 
 function isProcessTranscriptItem(item) {

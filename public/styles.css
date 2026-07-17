@@ -289,6 +289,116 @@ input {
   backdrop-filter: blur(4px);
 }
 
+.app-command-dialog {
+  width: min(520px, calc(100vw - 28px));
+  max-height: min(720px, calc(100dvh - 28px));
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #353c4c;
+  border-radius: 16px;
+  color: #f4f6fb;
+  background: #11151d;
+  box-shadow: 0 24px 80px rgb(0 0 0 / 55%);
+}
+
+.app-command-dialog::backdrop {
+  background: rgb(3 6 12 / 72%);
+  backdrop-filter: blur(4px);
+}
+
+.app-command-dialog form {
+  display: grid;
+  gap: 14px;
+  max-height: inherit;
+  padding: 18px;
+  overflow-y: auto;
+}
+
+.app-command-dialog header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.app-command-dialog header span {
+  color: #8994a8;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.app-command-dialog h2 {
+  margin: 3px 0 0;
+  font-size: 20px;
+}
+
+.app-command-dialog .dialog-close {
+  min-width: 38px;
+  min-height: 38px;
+  padding: 0;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.app-command-content {
+  min-width: 0;
+}
+
+.app-command-message,
+.app-command-note {
+  margin: 0;
+  color: #aeb7c8;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.app-command-note {
+  padding: 10px 11px;
+  border: 1px solid #3a4556;
+  border-radius: 9px;
+  background: #151a23;
+}
+
+.app-command-status {
+  display: grid;
+  grid-template-columns: minmax(100px, 0.34fr) minmax(0, 1fr);
+  margin: 0;
+  border: 1px solid #29313f;
+  border-radius: 10px;
+  overflow: hidden;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.app-command-status dt,
+.app-command-status dd {
+  min-width: 0;
+  margin: 0;
+  padding: 8px 10px;
+  border-bottom: 1px solid #252d39;
+  overflow-wrap: anywhere;
+}
+
+.app-command-status dt {
+  color: #8994a8;
+  background: #10141c;
+}
+
+.app-command-status dd {
+  color: #e2e7f0;
+  background: #0d1118;
+}
+
+.app-command-status > :nth-last-child(-n + 2) {
+  border-bottom: 0;
+}
+
+.app-command-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .resume-engine-dialog form {
   display: grid;
   gap: 16px;
@@ -373,7 +483,8 @@ input {
 }
 
 @media (max-width: 520px) {
-  .resume-engine-dialog {
+  .resume-engine-dialog,
+  .app-command-dialog {
     inset: auto 10px 10px;
     width: auto;
     max-height: calc(100dvh - 20px);
@@ -986,6 +1097,7 @@ input {
 }
 
 .composer {
+  position: relative;
   grid-area: composer;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 86px;
@@ -994,6 +1106,72 @@ input {
   padding-bottom: max(10px, env(safe-area-inset-bottom));
   background: #10141c;
   border-top: 1px solid transparent;
+}
+
+.composer-suggestions {
+  grid-column: 1 / -1;
+  display: grid;
+  max-height: min(250px, 34dvh);
+  overflow-y: auto;
+  border: 1px solid #343e50;
+  border-radius: 10px;
+  background: #0d121a;
+  box-shadow: 0 -12px 36px rgb(0 0 0 / 32%);
+}
+
+.composer-suggestions header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 7px 10px;
+  border-bottom: 1px solid #27303e;
+  color: #8994a8;
+  background: #111722;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.composer-suggestions > p {
+  margin: 0;
+  padding: 13px 10px;
+  color: #8994a8;
+  font-size: 12px;
+}
+
+.composer-suggestions > button {
+  display: grid;
+  gap: 3px;
+  min-height: 52px;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid #222a36;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.composer-suggestions > button:last-child {
+  border-bottom: 0;
+}
+
+.composer-suggestions > button.active,
+.composer-suggestions > button:hover {
+  background: #182238;
+}
+
+.composer-suggestions strong {
+  color: #dfe6f5;
+  font: 13px/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.composer-suggestions span {
+  overflow: hidden;
+  color: #8e99aa;
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .composer.drag-over {

@@ -85,6 +85,44 @@ test("a turn that completes in the same output chunk is not left active", async 
   await assert.rejects(() => client.steerTurn("Arrived too late"), /no active turn/i);
 });
 
+test("app-server client submits structured skills and reads command data", async (t) => {
+  const fake = createFakeAppServer();
+  const client = new CodexAppServerClient({ spawnImpl: () => fake.child, requestTimeoutMs: 1_000, cwd: "/workspace" });
+  t.after(() => client.close());
+
+  await client.start();
+  await client.startThread();
+  await client.startTurn(
+    [
+      { type: "skill", name: "thinking-partner", path: "/skills/thinking-partner/SKILL.md" },
+      { type: "text", text: "$thinking-partner 帮我想清楚" },
+    ],
+    {
+      sandboxPolicy: { type: "workspaceWrite", writableRoots: ["/workspace"], networkAccess: false },
+      approvalPolicy: "on-request",
+    },
+  );
+  const turn = fake.received.find((message) => message.method === "turn/start");
+  assert.equal(turn.params.input[0].type, "skill");
+  assert.equal(turn.params.input[0].name, "thinking-partner");
+  assert.deepEqual(turn.params.sandboxPolicy, {
+    type: "workspaceWrite",
+    writableRoots: ["/workspace"],
+    networkAccess: false,
+  });
+
+  const [skills, config, rateLimits, thread] = await Promise.all([
+    client.listSkills(),
+    client.readConfig(),
+    client.readRateLimits(),
+    client.readThread(),
+  ]);
+  assert.equal(skills.data[0].skills[0].name, "thinking-partner");
+  assert.equal(config.config.model, "gpt-test");
+  assert.equal(rateLimits.rateLimits.primary.usedPercent, 12);
+  assert.equal(thread.id, "thread-1");
+});
+
 function createFakeAppServer({ completeTurnImmediately = false } = {}) {
   const child = new EventEmitter();
   const stdout = new PassThrough();
@@ -134,6 +172,39 @@ function createFakeAppServer({ completeTurnImmediately = false } = {}) {
     }
     if (message.method === "thread/turns/list") {
       send({ id: message.id, result: { data: [{ id: "recent-turn", items: [] }], nextCursor: "older" } });
+      return;
+    }
+    if (message.method === "thread/read") {
+      send({ id: message.id, result: { thread: { id: message.params.threadId, cliVersion: "0.test" } } });
+      return;
+    }
+    if (message.method === "skills/list") {
+      send({
+        id: message.id,
+        result: {
+          data: [
+            {
+              cwd: "/workspace",
+              skills: [
+                {
+                  name: "thinking-partner",
+                  description: "Think clearly",
+                  path: "/skills/thinking-partner/SKILL.md",
+                  enabled: true,
+                },
+              ],
+            },
+          ],
+        },
+      });
+      return;
+    }
+    if (message.method === "config/read") {
+      send({ id: message.id, result: { config: { model: "gpt-test" }, origins: {} } });
+      return;
+    }
+    if (message.method === "account/rateLimits/read") {
+      send({ id: message.id, result: { rateLimits: { primary: { usedPercent: 12 } } } });
       return;
     }
     if (message.method === "turn/start") {

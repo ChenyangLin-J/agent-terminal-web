@@ -39,6 +39,7 @@ const queuePromptButton = document.querySelector("#queue-prompt");
 const fileInput = document.querySelector("#file-input");
 const promptInput = document.querySelector("#prompt");
 const composer = document.querySelector("#composer");
+const composerSuggestions = document.querySelector("#composer-suggestions");
 const uploadStatus = document.querySelector("#upload-status");
 const turnLedger = document.querySelector("#turn-ledger");
 const turnLedgerStatus = document.querySelector("#turn-ledger-status");
@@ -58,6 +59,12 @@ const appServerView = document.querySelector("#app-server-view");
 const appServerTranscript = document.querySelector("#app-server-transcript");
 const textView = document.querySelector("#text-view");
 const terminalText = document.querySelector("#terminal-text");
+const appCommandDialog = document.querySelector("#app-command-dialog");
+const appCommandEyebrow = document.querySelector("#app-command-eyebrow");
+const appCommandTitle = document.querySelector("#app-command-title");
+const appCommandContent = document.querySelector("#app-command-content");
+const appCommandActions = document.querySelector("#app-command-actions");
+const appCommandClose = document.querySelector("#app-command-close");
 
 if ("scrollRestoration" in history) history.scrollRestoration = "manual";
 
@@ -86,6 +93,11 @@ const TERMINAL_HISTORY_QUIET_MS = 1_200;
 const TERMINAL_HISTORY_EMPTY_READY_MS = 120;
 const TERMINAL_DELAYED_HISTORY_GUARD_MS = 60_000;
 const APP_INITIAL_TURN_LIMIT = 10;
+const APP_COMMANDS = [
+  { name: "/status", description: "查看模型、权限、Token 与用量" },
+  { name: "/permissions", description: "切换按需确认或全部允许" },
+  { name: "/skills", description: "浏览并插入可用 Skill" },
+];
 
 let terminal = null;
 let fitAddon = null;
@@ -139,6 +151,10 @@ let cachedSessionPreview = null;
 let sessionPreviewRequestSequence = 0;
 let terminalPreviewAllowed = false;
 let terminalOutputWhilePreviewChars = 0;
+let appSkills = [];
+let appSkillsRequested = false;
+let suggestionItems = [];
+let activeSuggestionIndex = 0;
 const openAppProcessGroups = new Set();
 const clientId = getClientId();
 const notificationTarget = getNotificationTarget();
@@ -189,6 +205,10 @@ sendStatusButton.addEventListener("click", () => command("/status"));
 sendPermissionsButton.addEventListener("click", () => command("/permissions"));
 killSessionButton.addEventListener("click", endSession);
 terminalSessionPreviewDismiss.addEventListener("click", hideTerminalSessionPreview);
+appCommandClose.addEventListener("click", () => appCommandDialog.close());
+appCommandDialog.addEventListener("click", (event) => {
+  if (event.target === appCommandDialog) appCommandDialog.close();
+});
 sendPromptButton.addEventListener("click", () => submitPrompt("auto"));
 queuePromptButton.addEventListener("click", () => submitPrompt("queue"));
 agentRequestAccept.addEventListener("click", () => respondToAgentRequest("accept"));
@@ -196,11 +216,14 @@ agentRequestSession.addEventListener("click", () => respondToAgentRequest("accep
 agentRequestDecline.addEventListener("click", () => respondToAgentRequest("decline"));
 promptInput.addEventListener("keydown", (event) => {
   if (event.isComposing) return;
+  if (handleSuggestionKeydown(event)) return;
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     submitPrompt("auto");
   }
 });
+promptInput.addEventListener("input", updateComposerSuggestions);
+promptInput.addEventListener("focus", updateComposerSuggestions);
 window.AgentUpload.create({
   attachButton: attachFileButton,
   fileInput,
@@ -656,6 +679,9 @@ function openSocket(params, options = {}) {
     restoredAppHistoryLoading = false;
     appTranscriptSource = "";
     cachedSessionPreview = null;
+    appSkills = [];
+    appSkillsRequested = false;
+    hideComposerSuggestions();
     hideTerminalSessionPreview();
     terminalPreviewAllowed = activeTransport === "terminal" && !hasSnapshot && resumesTerminalHistory;
     sessionPreviewRequestSequence += 1;
@@ -749,6 +775,14 @@ function openSocket(params, options = {}) {
       renderAppTranscript({ follow: false });
       return;
     }
+    if (message.type === "app-command-result") {
+      renderAppCommandResult(message.payload);
+      return;
+    }
+    if (message.type === "app-skills") {
+      receiveAppSkills(message.payload);
+      return;
+    }
     if (message.type === "agent-request") {
       renderAgentRequest(message.payload);
       return;
@@ -759,6 +793,10 @@ function openSocket(params, options = {}) {
     }
     if (message.type === "error") {
       terminal?.writeln(`\r\n${message.payload.message}\r\n`);
+      if (activeTransport === "app-server") setUploadStatus(message.payload.message);
+      if (appCommandDialog.open && !message.payload.preservePrompt) {
+        showAppCommandDialog({ title: appCommandTitle.textContent || "Command", content: message.payload.message });
+      }
       if (message.payload.preservePrompt && lastSubmittedPrompt && !promptInput.value.trim()) {
         promptInput.value = lastSubmittedPrompt;
         setUploadStatus("发送失败，文本已保留。");
@@ -792,6 +830,7 @@ function openSocket(params, options = {}) {
 function submitPrompt(deliveryMode = "auto") {
   const prompt = promptInput.value.trim();
   if (!prompt) return;
+  if (activeTransport === "app-server" && runAppComposerCommand(prompt)) return;
   if (notificationTarget.app === "agent") {
     void ensureAgentPushSubscription({ requestPermission: true }).catch(logPushRegistrationError);
   }
@@ -800,12 +839,14 @@ function submitPrompt(deliveryMode = "auto") {
       type: "submit",
       data: prompt,
       deliveryMode,
+      skills: activeTransport === "app-server" ? extractSkillMentions(prompt) : [],
       notificationApp: notificationTarget.app,
       notificationDeviceId: pushDeviceId,
     })
   ) {
     lastSubmittedPrompt = prompt;
     promptInput.value = "";
+    hideComposerSuggestions();
     setUploadStatus("正在发送…");
   } else {
     setUploadStatus("连接恢复中，文本已保留。");
@@ -814,6 +855,10 @@ function submitPrompt(deliveryMode = "auto") {
 
 function handleControlAck(payload = {}) {
   if (["submit", "startup-submit"].includes(payload.kind)) void voiceInputController.discardStoredRecovery();
+  if (payload.kind === "access") {
+    setUploadStatus(`已切换为${appAccessLabel(payload.access)}。`, { clear: true });
+    return;
+  }
   if (payload.kind === "agent-response") {
     setUploadStatus("已提交给 Codex。", { clear: true });
     return;
@@ -821,7 +866,8 @@ function handleControlAck(payload = {}) {
   if (payload.kind === "startup-submit") {
     lastSubmittedPrompt = "";
     if (payload.turnState) renderTurnState(payload.turnState);
-    setUploadStatus("会话已恢复，任务已经开始。", { clear: true });
+    const skills = activeSkillAckText(payload.skills);
+    setUploadStatus(`会话已恢复，任务已经开始。${skills}`, { clear: true });
     return;
   }
   if (payload.kind !== "submit") return;
@@ -834,7 +880,11 @@ function handleControlAck(payload = {}) {
     "queue-fallback": "当前任务刚刚结束，已自动转到下一轮。",
     "startup-queue": "已排队；会话恢复后会自动开始。",
   }[payload.deliveryMode];
-  if (message) setUploadStatus(message, { clear: true });
+  if (message) setUploadStatus(`${message}${activeSkillAckText(payload.skills)}`, { clear: true });
+}
+
+function activeSkillAckText(skills) {
+  return Array.isArray(skills) && skills.length ? ` 已启用：${skills.map((name) => `$${name}`).join("、")}。` : "";
 }
 
 function renderAgentRequest(payload = {}) {
@@ -881,12 +931,322 @@ function clearAgentRequest() {
 }
 
 function command(value) {
+  if (activeTransport === "app-server") {
+    runAppCommand(value);
+    return;
+  }
   send({
     type: "command",
     data: value,
     notificationApp: notificationTarget.app,
     notificationDeviceId: pushDeviceId,
   });
+}
+
+function runAppComposerCommand(prompt) {
+  if (!prompt.startsWith("/") || prompt.startsWith("//")) return false;
+  promptInput.value = "";
+  hideComposerSuggestions();
+  runAppCommand(prompt);
+  return true;
+}
+
+function runAppCommand(value) {
+  const commandName = String(value || "")
+    .trim()
+    .split(/\s+/)[0]
+    .toLowerCase();
+  if (!commandName) return;
+  if (commandName === "/status") {
+    showAppCommandDialog({ title: "Session status", content: "正在读取真实 App Server 状态…" });
+  } else if (commandName === "/permissions") {
+    showAppCommandDialog({ title: "Permissions", content: "正在读取当前权限…" });
+  } else if (commandName === "/skills") {
+    if (!appSkills.length) showAppCommandDialog({ title: "Skills", content: "正在读取可用 Skills…" });
+  }
+  if (!send({ type: "command", data: commandName })) {
+    setUploadStatus("连接恢复中，命令尚未发送。");
+  }
+}
+
+function renderAppCommandResult(payload = {}) {
+  if (payload.kind === "permissions") {
+    renderAppPermissions(payload);
+    return;
+  }
+  if (payload.kind !== "status") return;
+
+  const rows = [
+    ["Session", payload.title || "未命名"],
+    ["Session ID", payload.sessionId || "尚未建立"],
+    ["Engine", payload.cliVersion ? `${payload.engine} · Codex ${payload.cliVersion}` : payload.engine],
+    ["Model", [payload.model, payload.reasoningEffort].filter(Boolean).join(" · ")],
+    ["Service tier", payload.serviceTier || "default"],
+    ["Workspace", payload.cwd || payload.project || "."],
+    ["Permissions", appAccessLabel(payload.access)],
+    ["Sandbox", `${payload.sandbox || "-"} · ${payload.approvalPolicy || "-"}`],
+    ["Turn", payload.activeTurn ? "正在处理" : "空闲"],
+  ];
+  if (payload.tokenUsage) {
+    rows.push(
+      ["Tokens", `${formatCount(payload.tokenUsage.totalTokens)} total`],
+      ["Input / output", `${formatCount(payload.tokenUsage.inputTokens)} / ${formatCount(payload.tokenUsage.outputTokens)}`],
+      ["Context window", formatCount(payload.tokenUsage.modelContextWindow) || "未知"],
+    );
+  } else {
+    rows.push(["Tokens", "恢复后尚未收到本线程 Token 更新"]);
+  }
+  if (payload.rateLimit) {
+    rows.push(
+      ["Usage window", `${payload.rateLimit.usedPercent}% 已使用`],
+      ["Resets", payload.rateLimit.resetsAt ? formatUnixTime(payload.rateLimit.resetsAt) : "未知"],
+    );
+  }
+  showAppCommandDialog({ title: "Session status", rows });
+}
+
+function renderAppPermissions(payload = {}) {
+  const activeNote = payload.activeTurn ? "当前任务已经开始；新权限会从下一轮任务生效。" : "新权限会从下一轮任务生效。";
+  showAppCommandDialog({
+    title: "Permissions",
+    rows: [
+      ["Current", appAccessLabel(payload.access)],
+      ["Scope", payload.access === "full" ? "服务器全部文件与网络" : "工作区写入，越界时确认"],
+    ],
+    note: activeNote,
+    actions: [
+      {
+        label: "按需确认",
+        primary: payload.access !== "safe",
+        action: () => setAppAccess("safe"),
+      },
+      {
+        label: "全部允许",
+        danger: true,
+        primary: payload.access !== "full",
+        action: () => setAppAccess("full"),
+      },
+    ],
+  });
+}
+
+function setAppAccess(access) {
+  if (!send({ type: "set-access", access })) return;
+  appCommandDialog.close();
+  setUploadStatus(`正在切换为${appAccessLabel(access)}…`);
+}
+
+function showAppCommandDialog({ title, content = "", rows = [], note = "", actions = [] }) {
+  appCommandEyebrow.textContent = "App Server";
+  appCommandTitle.textContent = title;
+  const fragment = document.createDocumentFragment();
+  if (content) {
+    const message = document.createElement("p");
+    message.className = "app-command-message";
+    message.textContent = content;
+    fragment.append(message);
+  }
+  if (rows.length) {
+    const list = document.createElement("dl");
+    list.className = "app-command-status";
+    for (const [label, value] of rows) {
+      const term = document.createElement("dt");
+      term.textContent = label;
+      const detail = document.createElement("dd");
+      detail.textContent = String(value || "-");
+      list.append(term, detail);
+    }
+    fragment.append(list);
+  }
+  if (note) {
+    const copy = document.createElement("p");
+    copy.className = "app-command-note";
+    copy.textContent = note;
+    fragment.append(copy);
+  }
+  appCommandContent.replaceChildren(fragment);
+  appCommandActions.replaceChildren(
+    ...actions.map((item) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = item.label;
+      if (item.primary) button.classList.add("primary");
+      if (item.danger) button.classList.add("danger");
+      button.addEventListener("click", item.action);
+      return button;
+    }),
+  );
+  appCommandActions.classList.toggle("hidden", !actions.length);
+  if (!appCommandDialog.open) appCommandDialog.showModal();
+}
+
+function updateComposerSuggestions() {
+  if (activeTransport !== "app-server") {
+    hideComposerSuggestions();
+    return;
+  }
+  const beforeCaret = promptInput.value.slice(0, promptInput.selectionStart ?? promptInput.value.length);
+  if (/^\/[^\s]*$/.test(beforeCaret)) {
+    const query = beforeCaret.toLowerCase();
+    const items = APP_COMMANDS.filter((item) => item.name.startsWith(query)).map((item) => ({
+      type: "command",
+      label: item.name,
+      detail: item.description,
+    }));
+    renderComposerSuggestions(items, "Commands");
+    return;
+  }
+  const skillMatch = beforeCaret.match(/(?:^|\s)\$([a-zA-Z0-9_:-]*)$/);
+  if (!skillMatch) {
+    hideComposerSuggestions();
+    return;
+  }
+  if (!appSkills.length) {
+    if (!activeSessionReady) {
+      renderSuggestionLoading("会话恢复后会自动读取 Skills…");
+      return;
+    }
+    if (!appSkillsRequested) {
+      appSkillsRequested = true;
+      send({ type: "skills-list" });
+    }
+    renderSuggestionLoading("正在读取 Skills…");
+    return;
+  }
+  const query = skillMatch[1].toLowerCase();
+  const items = appSkills
+    .filter((skill) => skill.name.toLowerCase().includes(query))
+    .slice(0, 50)
+    .map((skill) => ({ type: "skill", label: `$${skill.name}`, detail: skill.description, skill }));
+  renderComposerSuggestions(items, "Skills");
+}
+
+function renderComposerSuggestions(items, label) {
+  suggestionItems = items;
+  activeSuggestionIndex = Math.min(activeSuggestionIndex, Math.max(0, items.length - 1));
+  const header = document.createElement("header");
+  header.textContent = label;
+  const fragment = document.createDocumentFragment();
+  fragment.append(header);
+  if (!items.length) {
+    const empty = document.createElement("p");
+    empty.textContent = "没有匹配项";
+    fragment.append(empty);
+  } else {
+    items.forEach((item, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.role = "option";
+      button.dataset.index = String(index);
+      button.classList.toggle("active", index === activeSuggestionIndex);
+      const name = document.createElement("strong");
+      name.textContent = item.label;
+      const detail = document.createElement("span");
+      detail.textContent = item.detail || "";
+      button.append(name, detail);
+      button.addEventListener("pointerdown", (event) => event.preventDefault());
+      button.addEventListener("click", () => selectComposerSuggestion(index));
+      fragment.append(button);
+    });
+  }
+  composerSuggestions.replaceChildren(fragment);
+  composerSuggestions.classList.remove("hidden");
+}
+
+function renderSuggestionLoading(message) {
+  suggestionItems = [];
+  const header = document.createElement("header");
+  header.textContent = "Skills";
+  const loading = document.createElement("p");
+  loading.textContent = message;
+  composerSuggestions.replaceChildren(header, loading);
+  composerSuggestions.classList.remove("hidden");
+}
+
+function receiveAppSkills(payload = {}) {
+  appSkills = (Array.isArray(payload.skills) ? payload.skills : []).sort((left, right) => left.name.localeCompare(right.name));
+  appSkillsRequested = true;
+  if (payload.openPicker) {
+    if (appCommandDialog.open) appCommandDialog.close();
+    promptInput.value = "$";
+    promptInput.focus();
+    promptInput.setSelectionRange(1, 1);
+  }
+  updateComposerSuggestions();
+}
+
+function selectComposerSuggestion(index) {
+  const item = suggestionItems[index];
+  if (!item) return;
+  if (item.type === "command") {
+    promptInput.value = "";
+    hideComposerSuggestions();
+    runAppCommand(item.label);
+    return;
+  }
+  const caret = promptInput.selectionStart ?? promptInput.value.length;
+  const beforeCaret = promptInput.value.slice(0, caret);
+  const match = beforeCaret.match(/(?:^|\s)\$[a-zA-Z0-9_:-]*$/);
+  if (!match) return;
+  const tokenOffset = match[0].lastIndexOf("$");
+  const start = (match.index || 0) + tokenOffset;
+  const inserted = `$${item.skill.name} `;
+  promptInput.value = `${promptInput.value.slice(0, start)}${inserted}${promptInput.value.slice(caret)}`;
+  const nextCaret = start + inserted.length;
+  promptInput.setSelectionRange(nextCaret, nextCaret);
+  promptInput.focus();
+  hideComposerSuggestions();
+}
+
+function handleSuggestionKeydown(event) {
+  if (composerSuggestions.classList.contains("hidden")) return false;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    hideComposerSuggestions();
+    return true;
+  }
+  if (!suggestionItems.length) return false;
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    const delta = event.key === "ArrowDown" ? 1 : -1;
+    activeSuggestionIndex = (activeSuggestionIndex + delta + suggestionItems.length) % suggestionItems.length;
+    renderComposerSuggestions(suggestionItems, suggestionItems[0]?.type === "skill" ? "Skills" : "Commands");
+    composerSuggestions.querySelector("button.active")?.scrollIntoView({ block: "nearest" });
+    return true;
+  }
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    selectComposerSuggestion(activeSuggestionIndex);
+    return true;
+  }
+  return false;
+}
+
+function hideComposerSuggestions() {
+  suggestionItems = [];
+  activeSuggestionIndex = 0;
+  composerSuggestions.classList.add("hidden");
+  composerSuggestions.replaceChildren();
+}
+
+function extractSkillMentions(text) {
+  const names = [];
+  for (const match of String(text || "").matchAll(/(?:^|\s)\$([a-zA-Z0-9][a-zA-Z0-9_:-]*)/g)) names.push(match[1]);
+  return [...new Set(names)].slice(0, 8);
+}
+
+function appAccessLabel(access) {
+  return access === "full" ? "全部允许" : "按需确认";
+}
+
+function formatCount(value) {
+  const number = Number(value || 0);
+  return number ? new Intl.NumberFormat("zh-CN").format(number) : "0";
+}
+
+function formatUnixTime(value) {
+  const date = new Date(Number(value) * 1_000);
+  return Number.isNaN(date.getTime()) ? "未知" : agentDateTimeFormatter.format(date);
 }
 
 function sendTerminalKey(value) {
@@ -1363,6 +1723,9 @@ function renderStatus(status) {
   syncPrimarySessionView();
   if (activeTransport === "app-server" && appTranscriptItems.length) {
     renderAppTranscript({ follow: isAppTranscriptAtBottom() });
+  }
+  if (activeTransport === "app-server" && activeSessionReady && promptInput.value.includes("$")) {
+    updateComposerSuggestions();
   }
   syncSessionUrl(status);
 }
@@ -2304,8 +2667,7 @@ function createAppTranscriptCard(item) {
   }
   if (item.output) {
     const lines = item.output.split("\n").length;
-    const shouldOpen = (item.exitCode !== null && item.exitCode !== 0) || (item.output.length < 700 && lines <= 12);
-    card.append(createTranscriptDetails(`查看输出 · ${lines} 行`, item.output, shouldOpen));
+    card.append(createTranscriptDetails(`查看输出 · ${lines} 行`, item.output, false));
   }
   return card;
 }

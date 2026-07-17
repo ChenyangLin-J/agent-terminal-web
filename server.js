@@ -777,6 +777,8 @@ function createAppServerSession(cwd, launch, restored = {}) {
     restoredHistoryHasMore: false,
     restoredHistoryCursor: null,
     restoredHistoryLoading: false,
+    appSkills: null,
+    appTokenUsage: null,
     clients: new Set(),
     cleanupTimer: null,
     exited: false,
@@ -1103,6 +1105,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
         logControlMessage(session, ws, "submit", normalized);
         if (!session.title) session.title = cleanTitle(normalized) || "New Codex session";
         const prompt = prepareSessionPrompt(session, normalized);
+        const skillNames = requestedAppSkillNames(prompt.text, message.skills);
         if (prompt.activatesThink) session.thinkSkillActivationPending = true;
         if (session.transport === APP_SERVER_TRANSPORT) {
           if (!session.ready) {
@@ -1110,6 +1113,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
               text: prompt.text,
               deliveryMode: message.deliveryMode,
               activatesThink: prompt.activatesThink,
+              skillNames,
             });
             send(ws, "control-ack", {
               kind: "submit",
@@ -1119,7 +1123,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
             });
             return;
           }
-          void submitAppServerPrompt(session, prompt.text, message.deliveryMode)
+          void submitAppServerPrompt(session, prompt.text, message.deliveryMode, skillNames)
             .then((submission) => {
               if (prompt.activatesThink) {
                 session.thinkSkillActivated = true;
@@ -1132,6 +1136,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
                 kind: "submit",
                 receivedAt: Date.now(),
                 deliveryMode: submission.deliveryMode,
+                skills: submission.skills,
                 turnState: publicTurnState(session.turnState),
               });
             })
@@ -1153,6 +1158,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
           kind: "submit",
           receivedAt: Date.now(),
           deliveryMode: submission.deliveryMode,
+          skills: submission.skills,
           turnState: publicTurnState(session.turnState),
         });
       }
@@ -1166,9 +1172,31 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
       return;
     }
 
+    if (message.type === "skills-list" && session.transport === APP_SERVER_TRANSPORT) {
+      void sendAppServerSkills(session, ws, { forceReload: Boolean(message.forceReload) }).catch((error) => {
+        send(ws, "error", { message: `Skills were not loaded: ${error.message}` });
+      });
+      return;
+    }
+
+    if (message.type === "set-access" && session.transport === APP_SERVER_TRANSPORT) {
+      session.access = normalizeAccessMode(message.access);
+      session.lastActivityAt = new Date().toISOString();
+      persistRestorableWebSession(session);
+      broadcast(session, "status", publicSession(session));
+      send(ws, "control-ack", {
+        kind: "access",
+        access: session.access,
+        receivedAt: Date.now(),
+      });
+      return;
+    }
+
     if (message.type === "command" && typeof message.data === "string") {
       if (session.transport === APP_SERVER_TRANSPORT) {
-        send(ws, "error", { message: "Slash commands are not available in App Server experiment mode." });
+        void handleAppServerCommand(session, ws, message.data).catch((error) => {
+          send(ws, "error", { message: `Command failed: ${error.message}` });
+        });
         return;
       }
       rememberNotificationTarget(session, message.notificationApp, message.notificationDeviceId);
@@ -1442,27 +1470,183 @@ function writeAndSubmit(session, text, { paste, submitKey = "\r" }) {
   }, 20);
 }
 
-async function submitAppServerPrompt(session, text, requestedMode) {
+async function handleAppServerCommand(session, ws, value) {
+  const command = String(value || "")
+    .trim()
+    .split(/\s+/)[0]
+    .toLowerCase();
+
+  if (command === "/permissions") {
+    send(ws, "app-command-result", {
+      command,
+      kind: "permissions",
+      access: session.access,
+      activeTurn: Boolean(session.turnState?.active),
+    });
+    return;
+  }
+
+  if (command === "/skills") {
+    await sendAppServerSkills(session, ws, { openPicker: true });
+    return;
+  }
+
+  if (command !== "/status") {
+    throw new Error(`${command || "This command"} is not available in App Server mode.`);
+  }
+
+  const payload = await appServerStatus(session);
+  send(ws, "app-command-result", { command, kind: "status", ...payload });
+}
+
+async function appServerStatus(session) {
+  const requests = session.ready
+    ? await Promise.allSettled([
+        session.appServer.readThread({ includeTurns: false }),
+        session.appServer.readConfig({ cwd: session.cwd, includeLayers: false }),
+        session.appServer.readRateLimits(),
+      ])
+    : [];
+  const thread = fulfilledValue(requests[0]);
+  const config = fulfilledValue(requests[1])?.config || {};
+  const rateLimits = fulfilledValue(requests[2])?.rateLimits || null;
+  const usage = session.appTokenUsage;
+  return {
+    sessionId: session.sessionId,
+    title: session.title || "New Codex session",
+    project: session.project,
+    cwd: session.cwd,
+    engine: "App Server",
+    cliVersion: thread?.cliVersion || "",
+    model: config.model || "default",
+    reasoningEffort: config.model_reasoning_effort || "default",
+    serviceTier: config.service_tier || "default",
+    access: session.access,
+    approvalPolicy: session.access === FULL_ACCESS_MODE ? "never" : "on-request",
+    sandbox: session.access === FULL_ACCESS_MODE ? "danger-full-access" : "workspace-write",
+    activeTurn: Boolean(session.turnState?.active),
+    tokenUsage: usage
+      ? {
+          totalTokens: Number(usage.total?.totalTokens || 0),
+          inputTokens: Number(usage.total?.inputTokens || 0),
+          outputTokens: Number(usage.total?.outputTokens || 0),
+          modelContextWindow: Number(usage.modelContextWindow || config.model_context_window || 0),
+        }
+      : null,
+    rateLimit: rateLimits
+      ? {
+          usedPercent: Number(rateLimits.primary?.usedPercent || 0),
+          windowDurationMins: Number(rateLimits.primary?.windowDurationMins || 0),
+          resetsAt: Number(rateLimits.primary?.resetsAt || 0),
+          planType: String(rateLimits.planType || ""),
+        }
+      : null,
+  };
+}
+
+function fulfilledValue(result) {
+  return result?.status === "fulfilled" ? result.value : null;
+}
+
+async function sendAppServerSkills(session, ws, { forceReload = false, openPicker = false } = {}) {
+  if (!session.ready || session.exited) throw new Error("App Server is still restoring the session.");
+  const skills = await getAppServerSkills(session, { forceReload });
+  send(ws, "app-skills", {
+    openPicker,
+    skills: skills.map((skill) => ({
+      name: skill.name,
+      description: skill.description,
+      scope: skill.scope,
+    })),
+  });
+}
+
+async function getAppServerSkills(session, { forceReload = false } = {}) {
+  if (session.appSkills && !forceReload) return session.appSkills;
+  const response = await session.appServer.listSkills({ cwds: [session.cwd], forceReload });
+  const seen = new Set();
+  const skills = [];
+  for (const entry of Array.isArray(response?.data) ? response.data : []) {
+    for (const skill of Array.isArray(entry?.skills) ? entry.skills : []) {
+      const name = String(skill?.name || "").trim();
+      const skillPath = String(skill?.path || "").trim();
+      const key = `${name}\u0000${skillPath}`;
+      if (!name || !skillPath || skill?.enabled === false || seen.has(key)) continue;
+      seen.add(key);
+      skills.push({
+        name,
+        path: skillPath,
+        description: String(skill?.description || "").trim(),
+        scope: String(skill?.scope || "").trim(),
+      });
+    }
+  }
+  skills.sort((left, right) => left.name.localeCompare(right.name));
+  session.appSkills = skills;
+  return skills;
+}
+
+async function resolveAppServerSkills(session, names) {
+  const requested = new Set((Array.isArray(names) ? names : []).map((name) => String(name).toLowerCase()));
+  if (!requested.size) return [];
+  const available = await getAppServerSkills(session);
+  return available.filter((skill) => requested.has(skill.name.toLowerCase())).slice(0, 8);
+}
+
+function requestedAppSkillNames(text, supplied) {
+  const names = Array.isArray(supplied) ? supplied.map(String) : [];
+  const pattern = /(?:^|\s)\$([a-zA-Z0-9][a-zA-Z0-9_:-]*)/g;
+  for (const match of String(text || "").matchAll(pattern)) names.push(match[1]);
+  return [...new Set(names.map((name) => name.trim()).filter(Boolean))].slice(0, 8);
+}
+
+function appServerPromptInput(text, skills) {
+  if (!skills.length) return text;
+  return [
+    ...skills.map((skill) => ({ type: "skill", name: skill.name, path: skill.path })),
+    { type: "text", text },
+  ];
+}
+
+function appServerTurnAccess(session) {
+  return {
+    approvalPolicy: session.access === FULL_ACCESS_MODE ? "never" : "on-request",
+    sandboxPolicy:
+      session.access === FULL_ACCESS_MODE
+        ? { type: "dangerFullAccess" }
+        : { type: "workspaceWrite", writableRoots: [session.cwd], networkAccess: false },
+  };
+}
+
+async function submitAppServerPrompt(session, text, requestedMode, skillNames = []) {
   if (!session.ready || session.exited) throw new Error("App Server is still starting or has exited.");
   const state = session.turnState;
   const appServer = session.appServer;
   const wantsQueue = requestedMode === "queue";
+  const skills = await resolveAppServerSkills(session, skillNames);
+  const activeSkills = skills.map((skill) => skill.name);
+  const input = (value) => appServerPromptInput(value, skills);
   let lateSteer = false;
 
   if (wantsQueue && appServer.activeTurnId) {
     const requirement = turnRequirement(state, text, "queued", "queued");
     state.queuedTurns.push(requirement);
     trimTrackedRequirements(state);
-    void appServer.queueTurn(queuePromptText(text), { clientUserMessageId: requirement.id }).catch((error) => {
-      requirement.status = "failed";
-      if (!appServer.activeTurnId) state.active = false;
-      appendSessionOutput(session, `\r\n\x1b[31mQueued prompt failed: ${error.message}\x1b[0m\r\n`);
-      persistRestorableWebSession(session);
-      broadcast(session, "status", publicSession(session));
-    });
+    void appServer
+      .queueTurn(input(queuePromptText(text)), {
+        ...appServerTurnAccess(session),
+        clientUserMessageId: requirement.id,
+      })
+      .catch((error) => {
+        requirement.status = "failed";
+        if (!appServer.activeTurnId) state.active = false;
+        appendSessionOutput(session, `\r\n\x1b[31mQueued prompt failed: ${error.message}\x1b[0m\r\n`);
+        persistRestorableWebSession(session);
+        broadcast(session, "status", publicSession(session));
+      });
     persistRestorableWebSession(session);
     broadcast(session, "status", publicSession(session));
-    return { deliveryMode: "queue" };
+    return { deliveryMode: "queue", skills: activeSkills };
   }
 
   if (appServer.activeTurnId) {
@@ -1470,14 +1654,14 @@ async function submitAppServerPrompt(session, text, requestedMode) {
     state.requirements.push(requirement);
     trimTrackedRequirements(state);
     try {
-      const result = await appServer.steerTurn(steerPromptText(text, state.requirements.length), {
+      const result = await appServer.steerTurn(input(steerPromptText(text, state.requirements.length)), {
         clientUserMessageId: requirement.id,
       });
       state.active = true;
       state.turnId = result.turnId;
       persistRestorableWebSession(session);
       broadcast(session, "status", publicSession(session));
-      return { deliveryMode: "steer" };
+      return { deliveryMode: "steer", skills: activeSkills };
     } catch (error) {
       state.requirements = state.requirements.filter((item) => item.id !== requirement.id);
       if (!/no active turn/i.test(error.message)) throw error;
@@ -1492,21 +1676,22 @@ async function submitAppServerPrompt(session, text, requestedMode) {
   const requirement = turnRequirement(state, text, wantsQueue || lateSteer ? "queued" : "original", "working");
   state.requirements = [requirement];
   session.lastAssistantMessage = "";
-  const turn = await appServer.startTurn(lateSteer ? lateFollowupPromptText(text) : text, {
+  const turn = await appServer.startTurn(input(lateSteer ? lateFollowupPromptText(text) : text), {
+    ...appServerTurnAccess(session),
     clientUserMessageId: requirement.id,
   });
   state.turnId = appServer.activeTurnId ? turn.id : state.turnId;
   state.active = Boolean(appServer.activeTurnId);
   persistRestorableWebSession(session);
   broadcast(session, "status", publicSession(session));
-  return { deliveryMode: wantsQueue || lateSteer ? "queue-fallback" : "new" };
+  return { deliveryMode: wantsQueue || lateSteer ? "queue-fallback" : "new", skills: activeSkills };
 }
 
 async function drainAppServerStartupPrompts(session) {
   while (session.ready && !session.exited && session.pendingStartupPrompts.length) {
     const prompt = session.pendingStartupPrompts.shift();
     try {
-      await submitAppServerPrompt(session, prompt.text, prompt.deliveryMode);
+      const submission = await submitAppServerPrompt(session, prompt.text, prompt.deliveryMode, prompt.skillNames);
       if (prompt.activatesThink) {
         session.thinkSkillActivated = true;
         session.thinkSkillActivationPending = false;
@@ -1517,6 +1702,7 @@ async function drainAppServerStartupPrompts(session) {
       broadcast(session, "control-ack", {
         kind: "startup-submit",
         receivedAt: Date.now(),
+        skills: submission.skills,
         turnState: publicTurnState(session.turnState),
       });
     } catch (error) {
@@ -1792,6 +1978,7 @@ function handleAppServerNotification(session, message) {
   session.lastActivityAt = new Date().toISOString();
 
   if (method === "thread/started" && params.thread?.id) session.sessionId = params.thread.id;
+  if (method === "thread/tokenUsage/updated" && params.tokenUsage) session.appTokenUsage = params.tokenUsage;
   if (method === "turn/started") {
     session.turnState.active = true;
     session.turnState.turnId = params.turn?.id || "";
@@ -2349,6 +2536,8 @@ function publicSession(session) {
     outputRevision: session.outputRevision,
     capabilities: {
       startupQueue: session.transport === APP_SERVER_TRANSPORT,
+      appCommands: session.transport === APP_SERVER_TRANSPORT,
+      skills: session.transport === APP_SERVER_TRANSPORT,
     },
     turnState: publicTurnState(session.turnState),
   };

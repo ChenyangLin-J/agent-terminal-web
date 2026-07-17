@@ -30,6 +30,7 @@
       start,
       stop,
       cancel,
+      retry,
       getState: () => state,
     };
     button.agentVoiceInputController = controller;
@@ -37,6 +38,7 @@
 
     function install() {
       button.addEventListener("click", toggle);
+      void offerStoredRecovery();
     }
 
     async function toggle() {
@@ -71,8 +73,37 @@
       await voiceCapture.stop();
       return {
         summary: lastCompletion,
-        textAdded: recordingAddedText,
+        textAdded: recordingAddedText && !lastCompletion?.failed,
       };
+    }
+
+    async function retry() {
+      if (!voiceCapture || state !== "idle") return null;
+      setVoiceState("transcribing");
+      const result = await voiceCapture.retry();
+      if (!result) {
+        setVoiceState("idle");
+        showRecoveryFailure();
+      }
+      return result;
+    }
+
+    async function offerStoredRecovery() {
+      const [record] = await VoiceCapture.listRecoveryRecords();
+      if (!record || state !== "idle") return;
+      setUploadStatus("有一条未完成的原始录音。", {
+        actionLabel: "恢复上次录音",
+        onAction: async () => {
+          if (state !== "idle") return;
+          if (!voiceCapture) installVoiceCapture();
+          setVoiceState("transcribing");
+          const result = await voiceCapture.retryStored(record);
+          if (!result) {
+            setVoiceState("idle");
+            showRecoveryFailure();
+          }
+        },
+      });
     }
 
     async function cancel() {
@@ -119,17 +150,28 @@
         },
         onChunkError(event) {
           if (state === "starting") setVoiceState("idle");
-          setUploadStatus(event.error?.message || `第 ${event.index} 段转写失败。`);
+          setUploadStatus("转写连接中断；请继续说，结束后会用原始录音自动重试。");
         },
         onProgress(event) {
           if (event.pending > 0) setUploadStatus(`转写中，剩余 ${event.pending} 段...`);
         },
+        onRecovering(event) {
+          setVoiceState("transcribing");
+          setUploadStatus(event.attempt > 1 ? "恢复转写仍未成功，正在再次重试..." : "正在用原始录音恢复转写...");
+        },
+        onRecoveryError() {
+          showRecoveryFailure();
+        },
         onComplete(summary) {
           lastCompletion = summary;
           setVoiceState("idle");
-          VoiceCapture.removeDraft(VOICE_DRAFT_KEY);
-          if (summary.failed) {
-            setUploadStatus(`完成，但有 ${summary.failed} 段失败。`);
+          if (!summary.failed) VoiceCapture.removeDraft(VOICE_DRAFT_KEY);
+          if (summary.recovered) {
+            setUploadStatus("已从原始录音恢复并完成转写。", { clear: true });
+          } else if (summary.failed && summary.recoverable) {
+            showRecoveryFailure();
+          } else if (summary.failed) {
+            setUploadStatus("转写失败；已保留识别出的文字。原始录音未能建立恢复记录。");
           } else if (summary.chunks) {
             setUploadStatus("已转写。", { clear: true });
           } else {
@@ -139,6 +181,13 @@
         onCancel() {
           setVoiceState("idle");
         },
+      });
+    }
+
+    function showRecoveryFailure() {
+      setUploadStatus("自动重试失败，原始录音已保留。", {
+        actionLabel: "重试转写",
+        onAction: retry,
       });
     }
 

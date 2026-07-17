@@ -1192,6 +1192,15 @@ input {
   min-height: 18px;
 }
 
+.upload-status-action {
+  margin-left: 8px;
+  min-height: 28px;
+  padding: 3px 9px;
+  border-color: #465064;
+  color: #dce2ef;
+  font-size: 12px;
+}
+
 @media (min-width: 900px) {
   .start-screen {
     padding-top: 40px;

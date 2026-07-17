@@ -1268,9 +1268,20 @@ function insertPromptText(text) {
   promptInput.setSelectionRange(nextCursor, nextCursor);
 }
 
-function setUploadStatus(message, { clear = false } = {}) {
+function setUploadStatus(message, { clear = false, actionLabel = "", onAction = null } = {}) {
   window.clearTimeout(uploadStatusTimer);
-  uploadStatus.textContent = message;
+  uploadStatus.replaceChildren(document.createTextNode(message));
+  if (actionLabel && typeof onAction === "function") {
+    const action = document.createElement("button");
+    action.type = "button";
+    action.className = "upload-status-action";
+    action.textContent = actionLabel;
+    action.addEventListener("click", async () => {
+      action.disabled = true;
+      await onAction();
+    });
+    uploadStatus.append(action);
+  }
   uploadStatus.classList.toggle("active", Boolean(message));
   if (clear) {
     uploadStatusTimer = window.setTimeout(() => {

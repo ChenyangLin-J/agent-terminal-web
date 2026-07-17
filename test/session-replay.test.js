@@ -87,7 +87,7 @@ setInterval(() => {}, 1000);
   assert.equal(full.payload.mode, "full");
   assert.match(full.payload.raw, /first-marker/);
   assert.match(full.payload.raw, /second-marker/);
-  assert.ok(Buffer.byteLength(full.payload.raw, "utf8") <= 256 * 1024);
+  assert.ok(Buffer.byteLength(full.payload.raw, "utf8") <= 32 * 1024);
   fallback.ws.send(JSON.stringify({ type: "kill" }));
   fallback.ws.close();
 });

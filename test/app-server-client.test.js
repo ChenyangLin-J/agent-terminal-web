@@ -50,6 +50,28 @@ test("app-server client rejects a steer when there is no active turn", async (t)
   await assert.rejects(() => client.steerTurn("Too late"), /no active turn/i);
 });
 
+test("app-server client resumes metadata first and requests only recent turns", async (t) => {
+  const fake = createFakeAppServer();
+  const client = new CodexAppServerClient({ spawnImpl: () => fake.child, requestTimeoutMs: 1_000 });
+  t.after(() => client.close());
+
+  await client.start();
+  await client.resumeThread("thread-large", { excludeTurns: true });
+  const page = await client.listThreadTurns({ limit: 3 });
+
+  const resume = fake.received.find((message) => message.method === "thread/resume");
+  assert.deepEqual(resume.params, { threadId: "thread-large", excludeTurns: true });
+  const recent = fake.received.find((message) => message.method === "thread/turns/list");
+  assert.deepEqual(recent.params, {
+    threadId: "thread-large",
+    limit: 3,
+    cursor: null,
+    sortDirection: "desc",
+    itemsView: "full",
+  });
+  assert.equal(page.data.length, 1);
+});
+
 test("a turn that completes in the same output chunk is not left active", async (t) => {
   const fake = createFakeAppServer({ completeTurnImmediately: true });
   const client = new CodexAppServerClient({ spawnImpl: () => fake.child, requestTimeoutMs: 1_000 });
@@ -104,6 +126,14 @@ function createFakeAppServer({ completeTurnImmediately = false } = {}) {
     }
     if (message.method === "thread/start") {
       send({ id: message.id, result: { thread: { id: "thread-1" } } });
+      return;
+    }
+    if (message.method === "thread/resume") {
+      send({ id: message.id, result: { thread: { id: message.params.threadId, turns: [] } } });
+      return;
+    }
+    if (message.method === "thread/turns/list") {
+      send({ id: message.id, result: { data: [{ id: "recent-turn", items: [] }], nextCursor: "older" } });
       return;
     }
     if (message.method === "turn/start") {

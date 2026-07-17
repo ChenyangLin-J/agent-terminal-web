@@ -42,8 +42,9 @@ const UPLOADS_ROOT = path.resolve(process.env.UPLOADS_ROOT || path.join(WORKSPAC
 const MAX_UPLOAD_FILES = Number(process.env.MAX_UPLOAD_FILES || 5);
 const MAX_UPLOAD_FILE_BYTES = Number(process.env.MAX_UPLOAD_FILE_BYTES || 50 * 1024 * 1024);
 const MAX_RAW_BUFFER = 1024 * 1024;
-const MAX_FULL_REPLAY_BYTES = 256 * 1024;
+const MAX_FULL_REPLAY_BYTES = 32 * 1024;
 const MAX_TURN_REQUIREMENTS = 20;
+const APP_RECENT_TURN_LIMIT = 3;
 const MAX_APP_TRANSCRIPT_ITEMS = 800;
 const MAX_APP_TRANSCRIPT_TEXT = 200_000;
 const MAX_APP_TRANSCRIPT_DETAIL = 40_000;
@@ -713,6 +714,7 @@ function createAppServerSession(cwd, launch, restored = {}) {
     appTranscript: [],
     appTranscriptSequence: 0,
     restoredTurnCount: 0,
+    restoredHistoryHasMore: false,
     clients: new Set(),
     cleanupTimer: null,
     exited: false,
@@ -759,6 +761,7 @@ function wireAppServerSession(session) {
 
 async function initializeAppServerSession(session, launch) {
   try {
+    const initializationStartedAt = Date.now();
     await session.appServer.start();
     session.pid = session.appServer.child?.pid || null;
     const params = {
@@ -766,11 +769,24 @@ async function initializeAppServerSession(session, launch) {
       sandbox: session.access === FULL_ACCESS_MODE ? "danger-full-access" : "workspace-write",
       approvalPolicy: session.access === FULL_ACCESS_MODE ? "never" : "on-request",
     };
-    const thread = launch.sessionId
-      ? await session.appServer.resumeThread(launch.sessionId, params)
-      : await session.appServer.startThread(params);
+    let thread;
+    if (launch.sessionId) {
+      thread = await session.appServer.resumeThread(launch.sessionId, { ...params, excludeTurns: true });
+      const recentPage = await session.appServer.listThreadTurns({ limit: APP_RECENT_TURN_LIMIT });
+      restoreAppServerTranscript(session, { ...thread, turns: recentPage?.data || [] }, { resumed: true });
+      session.restoredHistoryHasMore = Boolean(recentPage?.nextCursor);
+      logAgentEvent("app-server-recent-history", {
+        webSessionId: session.id,
+        codexSessionId: launch.sessionId,
+        durationMs: Date.now() - initializationStartedAt,
+        restoredTurns: session.restoredTurnCount,
+        hasEarlierTurns: session.restoredHistoryHasMore,
+      });
+    } else {
+      thread = await session.appServer.startThread(params);
+      restoreAppServerTranscript(session, thread, { resumed: false });
+    }
     session.sessionId = thread.id;
-    restoreAppServerTranscript(session, thread, { resumed: Boolean(launch.sessionId) });
     session.ready = true;
     session.lastActivityAt = new Date().toISOString();
     appendSessionOutput(session, "\r\n\x1b[36mApp Server ready. Follow-ups are bound to an exact turn.\x1b[0m\r\n");
@@ -1396,6 +1412,7 @@ async function submitAppServerPrompt(session, text, requestedMode) {
 function publicAppTranscript(session) {
   return {
     restoredTurnCount: session.restoredTurnCount || 0,
+    hasEarlierTurns: Boolean(session.restoredHistoryHasMore),
     items: session.appTranscript.map((item) => ({ ...item })),
   };
 }
@@ -2121,6 +2138,11 @@ function outputReplay(session, afterRevision) {
   const recentChunks = [];
   for (let index = chunks.length - 1; index >= 0; index -= 1) {
     const chunk = chunks[index];
+    if (!recentChunks.length && chunk.bytes > MAX_FULL_REPLAY_BYTES) {
+      recentChunks.push(Buffer.from(chunk.raw, "utf8").subarray(-MAX_FULL_REPLAY_BYTES).toString("utf8"));
+      bytes = MAX_FULL_REPLAY_BYTES;
+      break;
+    }
     if (recentChunks.length && bytes + chunk.bytes > MAX_FULL_REPLAY_BYTES) break;
     recentChunks.push(chunk.raw);
     bytes += chunk.bytes;

@@ -10,7 +10,9 @@ test("App Server resume restores structured history and keeps raw text available
     readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
   ]);
 
-  assert.match(server, /restoreAppServerTranscript\(session, thread, \{ resumed: Boolean\(launch\.sessionId\) \}\)/);
+  assert.match(server, /resumeThread\(launch\.sessionId, \{ \.\.\.params, excludeTurns: true \}\)/);
+  assert.match(server, /listThreadTurns\(\{ limit: APP_RECENT_TURN_LIMIT \}\)/);
+  assert.match(server, /restoreAppServerTranscript\(session, \{ \.\.\.thread, turns: recentPage\?\.data \|\| \[\] \}, \{ resumed: true \}\)/);
   assert.match(server, /for \(const turn of turns\)[\s\S]*for \(const item of Array\.isArray\(turn\?\.items\)/);
   assert.match(server, /send\(ws, "app-transcript", publicAppTranscript\(session\)\)/);
   assert.match(server, /item\.type === "userMessage"/);
@@ -20,7 +22,8 @@ test("App Server resume restores structured history and keeps raw text available
   assert.match(page, /id="app-server-view"/);
   assert.match(app, /terminalTabButton\.textContent = isAppServer \? "对话" : "Terminal"/);
   assert.match(app, /textTabButton\.textContent = isAppServer \? "原始" : "Text"/);
-  assert.match(app, /`已恢复 \$\{restoredAppTurnCount\} 轮历史`/);
+  assert.match(app, /`最近 \$\{restoredAppTurnCount\} 轮`/);
+  assert.match(app, /note\.textContent = "更早记录未加载"/);
   assert.match(styles, /\.app-transcript-user/);
   assert.match(styles, /\.app-transcript-assistant/);
   assert.match(styles, /\.app-transcript-command/);

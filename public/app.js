@@ -80,7 +80,8 @@ const SESSION_SNAPSHOT_LIMIT = 8;
 const SESSION_SNAPSHOT_MAX_CHARS = 200_000;
 const TERMINAL_RECENT_HISTORY_MAX_CHARS = 24_000;
 const TERMINAL_HISTORY_QUIET_MS = 1_200;
-const TERMINAL_HISTORY_EMPTY_FALLBACK_MS = 8_000;
+const TERMINAL_HISTORY_EMPTY_READY_MS = 120;
+const TERMINAL_DELAYED_HISTORY_GUARD_MS = 60_000;
 
 let terminal = null;
 let fitAddon = null;
@@ -113,6 +114,7 @@ let terminalHistoryChunks = [];
 let terminalHistoryChars = 0;
 let terminalHistoryRevision = null;
 let terminalHistoryFlushTimer = null;
+let terminalHistoryUiReady = false;
 let uploadStatusTimer = null;
 let liveSessionsByCodexId = new Map();
 let archivedSessionsExpanded = false;
@@ -125,6 +127,7 @@ let lastSubmittedPrompt = "";
 let pendingResumeSession = null;
 let appTranscriptItems = [];
 let restoredAppTurnCount = 0;
+let restoredAppHistoryHasMore = false;
 const openAppProcessGroups = new Set();
 const clientId = getClientId();
 const notificationTarget = getNotificationTarget();
@@ -624,15 +627,18 @@ function openSocket(params, options = {}) {
   activeTransport = params.transport === "app-server" ? "app-server" : "terminal";
   const hasSnapshot = !isReconnect && hasSessionSnapshot(snapshotKey);
   const shouldReplay = options.replay !== false;
+  const resumesTerminalHistory =
+    Boolean(params.sessionId) || ["resume-last", "resume-picker"].includes(params.mode);
   beginTerminalHistoryBuffer({
     active: shouldReplay && activeTransport === "terminal",
-    forceFull: !isReconnect && Boolean(params.sessionId),
-    waitForOutput: !isReconnect && Boolean(params.sessionId) && !params.attach,
+    forceFull: !isReconnect && resumesTerminalHistory,
+    waitForOutput: !isReconnect && resumesTerminalHistory && !params.attach,
   });
   if (!isReconnect) {
     terminal?.reset();
     appTranscriptItems = [];
     restoredAppTurnCount = 0;
+    restoredAppHistoryHasMore = false;
     openAppProcessGroups.clear();
     renderAppTranscript();
     lastOutputRevision = 0;
@@ -1626,6 +1632,7 @@ function beginTerminalHistoryBuffer({ active, forceFull = false, waitForOutput =
   terminalHistoryChunks = [];
   terminalHistoryChars = 0;
   terminalHistoryRevision = null;
+  terminalHistoryUiReady = false;
 }
 
 function bufferTerminalHistory(raw, { revision = null, forceFull = false } = {}) {
@@ -1636,6 +1643,12 @@ function bufferTerminalHistory(raw, { revision = null, forceFull = false } = {})
   }
 
   if (raw) {
+    if (terminalHistoryUiReady) {
+      logClientEvent("terminal-history-late-output", {
+        waitedMs: historySyncStartedAt ? Date.now() - historySyncStartedAt : 0,
+      });
+      terminalHistoryUiReady = false;
+    }
     terminalHistoryWaitForOutput = false;
     terminalHistoryChunks.push(raw);
     terminalHistoryChars += raw.length;
@@ -1644,7 +1657,7 @@ function bufferTerminalHistory(raw, { revision = null, forceFull = false } = {})
 
   window.clearTimeout(terminalHistoryFlushTimer);
   if (terminalHistoryWaitForOutput && !terminalHistoryChars) {
-    terminalHistoryFlushTimer = window.setTimeout(flushTerminalHistoryBuffer, TERMINAL_HISTORY_EMPTY_FALLBACK_MS);
+    terminalHistoryFlushTimer = window.setTimeout(flushTerminalHistoryBuffer, TERMINAL_HISTORY_EMPTY_READY_MS);
     return;
   }
   terminalHistoryFlushTimer = window.setTimeout(flushTerminalHistoryBuffer, raw ? TERMINAL_HISTORY_QUIET_MS : 120);
@@ -1673,6 +1686,12 @@ function flushTerminalHistoryBuffer() {
   const rawChars = terminalHistoryChars;
   const revision = terminalHistoryRevision;
   const mode = terminalHistoryForceFull ? "recent" : "delta";
+
+  if (!raw && terminalHistoryWaitForOutput) {
+    exposeTerminalWhileHistoryIsPending();
+    return;
+  }
+
   terminalHistoryBuffering = false;
   terminalHistoryWaitForOutput = false;
   terminalHistoryChunks = [];
@@ -1697,11 +1716,35 @@ function flushTerminalHistoryBuffer() {
   });
 }
 
+function exposeTerminalWhileHistoryIsPending() {
+  historySyncPending = false;
+  terminalHistoryUiReady = true;
+  window.clearTimeout(terminalHistoryFlushTimer);
+  terminalHistoryFlushTimer = window.setTimeout(disarmDelayedTerminalHistory, TERMINAL_DELAYED_HISTORY_GUARD_MS);
+  setConnectedState(socket?.readyState === WebSocket.OPEN ? "connected" : "detached");
+  logClientEvent("terminal-ui-ready", {
+    waitingForDelayedHistory: true,
+    outputRevision: lastOutputRevision,
+    durationMs: historySyncStartedAt ? Date.now() - historySyncStartedAt : 0,
+  });
+}
+
+function disarmDelayedTerminalHistory() {
+  terminalHistoryFlushTimer = null;
+  terminalHistoryBuffering = false;
+  terminalHistoryWaitForOutput = false;
+  terminalHistoryForceFull = false;
+  terminalHistoryUiReady = false;
+  historySyncStartedAt = 0;
+  logClientEvent("terminal-history-guard-expired");
+}
+
 function finishHistorySync(mode, rawChars) {
   historySyncPending = false;
   terminalHistoryBuffering = false;
   terminalHistoryWaitForOutput = false;
   terminalHistoryForceFull = false;
+  terminalHistoryUiReady = false;
   window.clearTimeout(terminalHistoryFlushTimer);
   terminalHistoryFlushTimer = null;
   terminalView.classList.remove("replaying");
@@ -1784,6 +1827,7 @@ function syncPrimarySessionView() {
 function replaceAppTranscript(payload = {}) {
   appTranscriptItems = Array.isArray(payload.items) ? payload.items.map(normalizeClientTranscriptItem) : [];
   restoredAppTurnCount = Number.isFinite(payload.restoredTurnCount) ? payload.restoredTurnCount : 0;
+  restoredAppHistoryHasMore = Boolean(payload.hasEarlierTurns);
   renderAppTranscript({ follow: true });
 }
 
@@ -1851,8 +1895,13 @@ function renderAppTranscript({ follow = false } = {}) {
     const banner = document.createElement("div");
     banner.className = "app-history-banner";
     const title = document.createElement("strong");
-    title.textContent = `已恢复 ${restoredAppTurnCount} 轮历史`;
+    title.textContent = `最近 ${restoredAppTurnCount} 轮`;
     banner.append(title);
+    if (restoredAppHistoryHasMore) {
+      const note = document.createElement("span");
+      note.textContent = "更早记录未加载";
+      banner.append(note);
+    }
     fragment.append(banner);
   }
 

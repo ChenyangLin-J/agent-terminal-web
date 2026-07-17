@@ -18,8 +18,8 @@ test("follow-ups are explicitly tracked as current-turn requirements", () => {
 });
 
 test("App Server is optional and binds steer and queue to structured turns", () => {
-  assert.match(page, /<option value="terminal">Terminal（稳定）<\/option>/);
-  assert.match(page, /<option value="app-server">App Server（试用）<\/option>/);
+  assert.match(page, /<option value="terminal">Terminal（完整 CLI）<\/option>/);
+  assert.match(page, /<option value="app-server">App Server（快速恢复）<\/option>/);
   assert.match(server, /appServer\.steerTurn\(steerPromptText\(text/);
   assert.match(server, /appServer\.queueTurn\(queuePromptText\(text/);
   assert.match(appServerClient, /const expectedTurnId = this\.activeTurnId/);

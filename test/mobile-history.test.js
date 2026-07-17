@@ -20,13 +20,17 @@ test("mobile session recovery persists and incrementally restores terminal histo
   assert.match(source, /terminalView\.classList\.add\("replaying"\)/);
   assert.match(source, /\["connected", "loading"\]\.includes\(state\)/);
   assert.match(source, /loading: "已连接 · 恢复最新记录中"/);
+  assert.match(source, /function exposeTerminalWhileHistoryIsPending\(\)/);
+  assert.match(source, /waitingForDelayedHistory: true/);
+  assert.match(source, /terminal-history-late-output/);
+  assert.match(source, /const TERMINAL_DELAYED_HISTORY_GUARD_MS = 60_000/);
   assert.match(source, /scrollback: 12000/);
   assert.match(source, /document\.documentElement\.classList\.toggle\("session-active", active\)/);
   assert.match(source, /document\.scrollingElement\.scrollTop = 0/);
   assert.match(styles, /html\.session-active[\s\S]*overflow: hidden/);
   assert.match(styles, /body\.session-active[\s\S]*height: 100dvh/);
-  assert.match(page, /app\.js\?v=20260717-fast-resume-1/);
-  assert.match(page, /styles\.css\?v=20260717-fast-resume-1/);
+  assert.match(page, /app\.js\?v=20260717-fast-resume-2/);
+  assert.match(page, /styles\.css\?v=20260717-fast-resume-2/);
 });
 
 test("Agent displays dates and starts Codex in Beijing time", async () => {

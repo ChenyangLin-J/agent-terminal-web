@@ -36,7 +36,7 @@
       }
     </style>
     <link rel="stylesheet" href="/vendor/xterm-css/xterm.css?v=20260625-5" />
-    <link rel="stylesheet" href="/styles.css?v=20260717-fast-resume-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260717-fast-resume-2" />
     <link rel="stylesheet" href="/session-focus-mode.css?v=20260716-app-chrome-2" />
     <link rel="stylesheet" href="/thinking-session.css?v=20260716-1" />
   </head>
@@ -72,8 +72,8 @@
           <label>
             <span>Engine</span>
             <select id="transport">
-              <option value="terminal">Terminal（稳定）</option>
-              <option value="app-server">App Server（试用）</option>
+              <option value="terminal">Terminal（完整 CLI）</option>
+              <option value="app-server">App Server（快速恢复）</option>
             </select>
           </label>
 
@@ -223,12 +223,12 @@
         </p>
         <div class="resume-engine-options">
           <button id="resume-with-terminal" class="engine-choice" type="button">
-            <strong>Terminal（稳定）</strong>
-            <span>完整 CLI 交互</span>
+            <strong>Terminal（完整 CLI）</strong>
+            <span>超大 Session 首次恢复较慢</span>
           </button>
           <button id="resume-with-app-server" class="engine-choice primary" type="button">
-            <strong>App Server（试用）</strong>
-            <span>精确处理追加当前与下一轮</span>
+            <strong>App Server（推荐）</strong>
+            <span>快速恢复最近内容，精确处理追加</span>
           </button>
         </div>
       </form>
@@ -239,7 +239,7 @@
     <script src="/shared/voice-capture-widget.js?v=20260715-mic-release-1"></script>
     <script src="/agent-upload.js?v=20260713-progress-1"></script>
     <script src="/agent-voice-input.js?v=20260716-focus-send-1"></script>
-    <script src="/app.js?v=20260717-fast-resume-1"></script>
+    <script src="/app.js?v=20260717-fast-resume-2"></script>
     <script src="/session-focus-mode.js?v=20260716-app-chrome-1"></script>
   </body>
 </html>

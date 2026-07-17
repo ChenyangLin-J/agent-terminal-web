@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   extractSessionConversationFromJsonl,
   extractSessionPreviewFromJsonl,
+  extractSessionTokenUsageFromJsonl,
   readSessionPreviews,
   saveSessionPreview,
 } from "../lib/session-preview.js";
@@ -29,6 +30,43 @@ test("extracts the latest completed answer and its preceding user request from a
   assert.equal(preview.prompt, "latest request");
   assert.equal(preview.result, "latest answer");
   assert.equal(preview.completedAt, "2026-07-17T00:04:00.000Z");
+});
+
+test("extracts the latest context and cumulative token usage from a JSONL tail", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "agent-session-tokens-"));
+  const file = path.join(directory, "rollout-session.jsonl");
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const record = {
+    timestamp: "2026-07-17T00:05:00.000Z",
+    type: "event_msg",
+    payload: {
+      type: "token_count",
+      info: {
+        total_token_usage: {
+          input_tokens: 1000,
+          cached_input_tokens: 800,
+          output_tokens: 200,
+          reasoning_output_tokens: 50,
+          total_tokens: 1200,
+        },
+        last_token_usage: {
+          input_tokens: 400,
+          cached_input_tokens: 300,
+          output_tokens: 20,
+          reasoning_output_tokens: 5,
+          total_tokens: 420,
+        },
+        model_context_window: 258400,
+      },
+    },
+  };
+  await fs.writeFile(file, `${JSON.stringify(record)}\n`);
+
+  const usage = await extractSessionTokenUsageFromJsonl(file);
+  assert.equal(usage.total.totalTokens, 1200);
+  assert.equal(usage.last.totalTokens, 420);
+  assert.equal(usage.modelContextWindow, 258400);
 });
 
 test("extracts recent user and assistant conversation turns directly from disk", async (t) => {

@@ -10,6 +10,7 @@ test("app-server client steers the exact active turn and starts queued work afte
   t.after(() => client.close());
 
   await client.start();
+  assert.equal(client.serverInfo.userAgent, "fake");
   const thread = await client.startThread({ cwd: "/tmp" });
   assert.equal(thread.id, "thread-1");
 
@@ -111,16 +112,37 @@ test("app-server client submits structured skills and reads command data", async
     networkAccess: false,
   });
 
-  const [skills, config, rateLimits, thread] = await Promise.all([
+  const [skills, config, rateLimits, thread, account, usage, models, mcp, plugins, hooks] = await Promise.all([
     client.listSkills(),
     client.readConfig(),
     client.readRateLimits(),
     client.readThread(),
+    client.readAccount(),
+    client.readAccountUsage(),
+    client.listModels(),
+    client.listMcpServers(),
+    client.listPlugins(),
+    client.listHooks(),
   ]);
   assert.equal(skills.data[0].skills[0].name, "thinking-partner");
   assert.equal(config.config.model, "gpt-test");
   assert.equal(rateLimits.rateLimits.primary.usedPercent, 12);
   assert.equal(thread.id, "thread-1");
+  assert.equal(account.account.email, "test@example.com");
+  assert.equal(usage.summary.currentStreakDays, 3);
+  assert.equal(models.data[0].id, "gpt-test");
+  assert.equal(mcp.data[0].name, "docs");
+  assert.equal(plugins.marketplaces[0].plugins[0].name, "test-plugin");
+  assert.equal(hooks.data[0].hooks.length, 0);
+
+  await client.setThreadName("Renamed");
+  await client.compactThread();
+  await client.setThreadGoal("Ship it");
+  const goal = await client.readThreadGoal();
+  assert.equal(goal.goal.objective, "Ship it");
+  await client.clearThreadGoal();
+  assert.ok(fake.received.some((message) => message.method === "thread/name/set"));
+  assert.ok(fake.received.some((message) => message.method === "thread/compact/start"));
 });
 
 function createFakeAppServer({ completeTurnImmediately = false } = {}) {
@@ -205,6 +227,42 @@ function createFakeAppServer({ completeTurnImmediately = false } = {}) {
     }
     if (message.method === "account/rateLimits/read") {
       send({ id: message.id, result: { rateLimits: { primary: { usedPercent: 12 } } } });
+      return;
+    }
+    if (message.method === "account/read") {
+      send({ id: message.id, result: { account: { type: "chatgpt", email: "test@example.com", planType: "plus" } } });
+      return;
+    }
+    if (message.method === "account/usage/read") {
+      send({ id: message.id, result: { summary: { currentStreakDays: 3 }, dailyUsageBuckets: [] } });
+      return;
+    }
+    if (message.method === "model/list") {
+      send({ id: message.id, result: { data: [{ id: "gpt-test" }], nextCursor: null } });
+      return;
+    }
+    if (message.method === "mcpServerStatus/list") {
+      send({ id: message.id, result: { data: [{ name: "docs", tools: {} }], nextCursor: null } });
+      return;
+    }
+    if (message.method === "plugin/list") {
+      send({ id: message.id, result: { marketplaces: [{ name: "test", plugins: [{ name: "test-plugin" }] }] } });
+      return;
+    }
+    if (message.method === "hooks/list") {
+      send({ id: message.id, result: { data: [{ cwd: "/workspace", hooks: [], warnings: [], errors: [] }] } });
+      return;
+    }
+    if (message.method === "thread/name/set" || message.method === "thread/compact/start" || message.method === "thread/goal/clear") {
+      send({ id: message.id, result: {} });
+      return;
+    }
+    if (message.method === "thread/goal/set") {
+      send({ id: message.id, result: { goal: { objective: message.params.objective } } });
+      return;
+    }
+    if (message.method === "thread/goal/get") {
+      send({ id: message.id, result: { goal: { objective: "Ship it" } } });
       return;
     }
     if (message.method === "turn/start") {

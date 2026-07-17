@@ -94,9 +94,21 @@ const TERMINAL_HISTORY_EMPTY_READY_MS = 120;
 const TERMINAL_DELAYED_HISTORY_GUARD_MS = 60_000;
 const APP_INITIAL_TURN_LIMIT = 10;
 const APP_COMMANDS = [
-  { name: "/status", description: "查看模型、权限、Token 与用量" },
+  { name: "/status", description: "完整 Session 状态、上下文与额度" },
+  { name: "/usage", description: "查看一周额度、重置时间与 Token 活动" },
   { name: "/permissions", description: "切换按需确认或全部允许" },
+  { name: "/model", description: "查看或切换模型与 reasoning" },
+  { name: "/fast", description: "切换 Fast 模式" },
   { name: "/skills", description: "浏览并插入可用 Skill" },
+  { name: "/goal", description: "查看或设置当前长期 Goal" },
+  { name: "/rename", description: "重命名当前 Session", requiresArgument: true },
+  { name: "/compact", description: "压缩上下文，释放容量" },
+  { name: "/copy", description: "复制最近一次完整回答", clientOnly: true },
+  { name: "/diff", description: "查看工作区未提交修改" },
+  { name: "/review", description: "Review 当前未提交修改" },
+  { name: "/mcp", description: "查看已连接的 MCP Server" },
+  { name: "/plugins", description: "查看 Plugin 安装状态" },
+  { name: "/hooks", description: "查看当前工作区 Hooks" },
 ];
 
 let terminal = null;
@@ -952,19 +964,26 @@ function runAppComposerCommand(prompt) {
 }
 
 function runAppCommand(value) {
-  const commandName = String(value || "")
-    .trim()
-    .split(/\s+/)[0]
-    .toLowerCase();
+  const commandText = String(value || "").trim();
+  const commandName = commandText.split(/\s+/)[0].toLowerCase();
   if (!commandName) return;
+  if (commandName === "/copy") {
+    void copyLatestAppAnswer();
+    return;
+  }
   if (commandName === "/status") {
     showAppCommandDialog({ title: "Session status", content: "正在读取真实 App Server 状态…" });
+  } else if (commandName === "/usage") {
+    showAppCommandDialog({ title: "Account usage", content: "正在读取额度和 Token 活动…" });
   } else if (commandName === "/permissions") {
     showAppCommandDialog({ title: "Permissions", content: "正在读取当前权限…" });
   } else if (commandName === "/skills") {
     if (!appSkills.length) showAppCommandDialog({ title: "Skills", content: "正在读取可用 Skills…" });
+  } else {
+    const title = APP_COMMANDS.find((item) => item.name === commandName)?.name || commandName;
+    showAppCommandDialog({ title, content: "正在读取…" });
   }
-  if (!send({ type: "command", data: commandName })) {
+  if (!send({ type: "command", data: commandText })) {
     setUploadStatus("连接恢复中，命令尚未发送。");
   }
 }
@@ -974,35 +993,159 @@ function renderAppCommandResult(payload = {}) {
     renderAppPermissions(payload);
     return;
   }
+  if (payload.kind === "usage") {
+    renderAppUsage(payload);
+    return;
+  }
+  if (payload.kind === "models") {
+    renderAppModels(payload);
+    return;
+  }
+  if (payload.kind === "goal") {
+    renderAppGoal(payload);
+    return;
+  }
+  if (payload.kind === "inventory") {
+    showAppCommandDialog({
+      title: payload.title || "Inventory",
+      rows: (payload.items || []).map((item) => [item.name, item.detail]),
+      content: payload.items?.length ? "" : "没有可显示的项目。",
+      note: payload.note || "",
+    });
+    return;
+  }
+  if (payload.kind === "notice") {
+    showAppCommandDialog({ title: payload.title || "App Server", content: payload.content || "已完成。" });
+    return;
+  }
+  if (payload.kind === "text") {
+    showAppCommandDialog({
+      title: payload.title || "Output",
+      content: payload.content || "没有输出。",
+      note: payload.note || "",
+      preformatted: true,
+    });
+    return;
+  }
   if (payload.kind !== "status") return;
 
   const rows = [
+    ["Account", formatAppAccount(payload.account)],
     ["Session", payload.title || "未命名"],
     ["Session ID", payload.sessionId || "尚未建立"],
-    ["Engine", payload.cliVersion ? `${payload.engine} · Codex ${payload.cliVersion}` : payload.engine],
+    ["Codex", payload.cliVersion ? `v${payload.cliVersion}` : "未知"],
+    ["Engine", payload.engine || "App Server"],
     ["Model", [payload.model, payload.reasoningEffort].filter(Boolean).join(" · ")],
-    ["Service tier", payload.serviceTier || "default"],
-    ["Workspace", payload.cwd || payload.project || "."],
+    ["Provider", payload.modelProvider || "default"],
+    ["Service tier", payload.serviceTier === "priority" ? "Fast" : payload.serviceTier || "default"],
+    ["Directory", payload.cwd || payload.project || "."],
     ["Permissions", appAccessLabel(payload.access)],
-    ["Sandbox", `${payload.sandbox || "-"} · ${payload.approvalPolicy || "-"}`],
+    ["Approval", payload.approvalPolicy || "-"],
+    ["Sandbox", payload.sandbox || "-"],
+    ["Writable roots", (payload.writableRoots || []).join("\n") || "未知"],
+    ["Network", payload.networkAccess || "未知"],
+    ["AGENTS.md", (payload.agentsFiles || []).join("\n") || "未发现"],
     ["Turn", payload.activeTurn ? "正在处理" : "空闲"],
   ];
+  if (payload.sessionCliVersion && payload.sessionCliVersion !== payload.cliVersion) {
+    rows.splice(4, 0, ["Session created with", `v${payload.sessionCliVersion}`]);
+  }
+  if (payload.gitBranch) rows.splice(9, 0, ["Git branch", payload.gitBranch]);
   if (payload.tokenUsage) {
+    const contextWindow = Number(payload.tokenUsage.modelContextWindow || 0);
+    const contextUsed = Number(payload.tokenUsage.contextUsedTokens || 0);
+    const contextRemaining = contextWindow ? Math.max(0, Math.round((1 - contextUsed / contextWindow) * 100)) : null;
     rows.push(
       ["Tokens", `${formatCount(payload.tokenUsage.totalTokens)} total`],
       ["Input / output", `${formatCount(payload.tokenUsage.inputTokens)} / ${formatCount(payload.tokenUsage.outputTokens)}`],
-      ["Context window", formatCount(payload.tokenUsage.modelContextWindow) || "未知"],
+      ["Cached input", formatCount(payload.tokenUsage.cachedInputTokens)],
+      ["Reasoning output", formatCount(payload.tokenUsage.reasoningOutputTokens)],
+      [
+        "Context window",
+        contextRemaining === null
+          ? "未知"
+          : `${contextRemaining}% 剩余（${formatCount(contextUsed)} / ${formatCount(contextWindow)}）`,
+      ],
     );
   } else {
     rows.push(["Tokens", "恢复后尚未收到本线程 Token 更新"]);
   }
-  if (payload.rateLimit) {
-    rows.push(
-      ["Usage window", `${payload.rateLimit.usedPercent}% 已使用`],
-      ["Resets", payload.rateLimit.resetsAt ? formatUnixTime(payload.rateLimit.resetsAt) : "未知"],
-    );
+  if (payload.resetCredits) rows.push(["Limit resets", `${payload.resetCredits} 次可用`]);
+  showAppCommandDialog({ title: "Session status", meters: appRateLimitMeters(payload.rateLimits), rows });
+}
+
+function renderAppUsage(payload = {}) {
+  const summary = payload.activitySummary || {};
+  const dailyUsage = Array.isArray(payload.dailyUsage) ? payload.dailyUsage : [];
+  const sevenDayTokens = dailyUsage.reduce((total, item) => total + Number(item.tokens || 0), 0);
+  const rows = [
+    ["Account", formatAppAccount(payload.account)],
+    ["过去 7 天 Tokens", formatCount(sevenDayTokens)],
+    ["Lifetime Tokens", formatCount(summary.lifetimeTokens)],
+    ["当前连续使用", summary.currentStreakDays ? `${summary.currentStreakDays} 天` : "未知"],
+    ["最长连续使用", summary.longestStreakDays ? `${summary.longestStreakDays} 天` : "未知"],
+    ["单日峰值", formatCount(summary.peakDailyTokens)],
+    ["最长单轮", summary.longestRunningTurnSec ? formatElapsedSeconds(summary.longestRunningTurnSec) : "未知"],
+    ["Limit resets", payload.resetCredits ? `${payload.resetCredits} 次可用` : "无"],
+  ];
+  for (const item of dailyUsage) rows.push([item.startDate || "日期未知", `${formatCount(item.tokens)} tokens`]);
+  showAppCommandDialog({
+    title: "Account usage",
+    meters: appRateLimitMeters(payload.rateLimits),
+    rows,
+    note: "额度条显示官方返回的使用窗口；Token 活动是账户统计，不等于当前 Session 的上下文占用。",
+  });
+}
+
+function renderAppModels(payload = {}) {
+  const models = Array.isArray(payload.models) ? payload.models : [];
+  showAppCommandDialog({
+    title: "Model",
+    rows: [
+      ["Current", `${payload.currentModel || "default"} · ${payload.currentReasoningEffort || "default"}`],
+      ["Available", `${models.length} 个模型`],
+    ],
+    note: payload.activeTurn
+      ? "当前任务已经开始；新模型会从下一轮任务生效。需要指定 reasoning 时可输入：/model 模型名 high"
+      : "选择后从下一轮任务生效。需要指定 reasoning 时可输入：/model 模型名 high",
+    actions: models.map((model) => ({
+      label: model.id === payload.currentModel ? `${model.name} · 当前` : model.name,
+      primary: model.id === payload.currentModel,
+      action: () => runAppCommand(`/model ${model.id}`),
+    })),
+  });
+}
+
+function renderAppGoal(payload = {}) {
+  const goal = payload.goal;
+  showAppCommandDialog({
+    title: "Goal",
+    content: goal?.objective || "当前 Session 没有 Goal。",
+    rows: goal
+      ? [
+          ["Status", goal.status || "active"],
+          ["Tokens", formatCount(goal.tokensUsed)],
+          ["Time", formatElapsedSeconds(goal.timeUsedSeconds)],
+        ]
+      : [],
+    note: "设置：/goal 目标内容　清除：/goal clear",
+  });
+}
+
+async function copyLatestAppAnswer() {
+  const answer = [...appTranscriptItems]
+    .reverse()
+    .find((item) => item.type === "assistant" && item.text && (!item.phase || item.phase === "final_answer"));
+  if (!answer?.text) {
+    setUploadStatus("当前没有可复制的完整回答。", { clear: true });
+    return;
   }
-  showAppCommandDialog({ title: "Session status", rows });
+  try {
+    await navigator.clipboard.writeText(answer.text);
+    setUploadStatus("已复制最近一次完整回答。", { clear: true });
+  } catch {
+    showAppCommandDialog({ title: "Latest answer", content: answer.text, preformatted: true });
+  }
 }
 
 function renderAppPermissions(payload = {}) {
@@ -1036,15 +1179,46 @@ function setAppAccess(access) {
   setUploadStatus(`正在切换为${appAccessLabel(access)}…`);
 }
 
-function showAppCommandDialog({ title, content = "", rows = [], note = "", actions = [] }) {
+function showAppCommandDialog({
+  title,
+  content = "",
+  meters = [],
+  rows = [],
+  note = "",
+  actions = [],
+  preformatted = false,
+}) {
   appCommandEyebrow.textContent = "App Server";
   appCommandTitle.textContent = title;
   const fragment = document.createDocumentFragment();
   if (content) {
-    const message = document.createElement("p");
-    message.className = "app-command-message";
+    const message = document.createElement(preformatted ? "pre" : "p");
+    message.className = preformatted ? "app-command-output" : "app-command-message";
     message.textContent = content;
     fragment.append(message);
+  }
+  if (meters.length) {
+    const meterList = document.createElement("section");
+    meterList.className = "app-command-meters";
+    for (const meter of meters) {
+      const card = document.createElement("article");
+      const heading = document.createElement("header");
+      const name = document.createElement("strong");
+      name.textContent = meter.label;
+      const value = document.createElement("span");
+      value.textContent = `${meter.remainingPercent}% 剩余`;
+      heading.append(name, value);
+      const track = document.createElement("div");
+      track.className = "app-command-meter-track";
+      const fill = document.createElement("i");
+      fill.style.width = `${meter.usedPercent}%`;
+      track.append(fill);
+      const detail = document.createElement("p");
+      detail.textContent = `${meter.usedPercent}% 已使用${meter.resetText ? ` · ${meter.resetText}` : ""}`;
+      card.append(heading, track, detail);
+      meterList.append(card);
+    }
+    fragment.append(meterList);
   }
   if (rows.length) {
     const list = document.createElement("dl");
@@ -1092,6 +1266,7 @@ function updateComposerSuggestions() {
       type: "command",
       label: item.name,
       detail: item.description,
+      command: item,
     }));
     renderComposerSuggestions(items, "Commands");
     return;
@@ -1179,6 +1354,14 @@ function selectComposerSuggestion(index) {
   const item = suggestionItems[index];
   if (!item) return;
   if (item.type === "command") {
+    if (item.command?.requiresArgument) {
+      promptInput.value = `${item.label} `;
+      const nextCaret = promptInput.value.length;
+      promptInput.setSelectionRange(nextCaret, nextCaret);
+      promptInput.focus();
+      hideComposerSuggestions();
+      return;
+    }
     promptInput.value = "";
     hideComposerSuggestions();
     runAppCommand(item.label);
@@ -1242,6 +1425,49 @@ function appAccessLabel(access) {
 function formatCount(value) {
   const number = Number(value || 0);
   return number ? new Intl.NumberFormat("zh-CN").format(number) : "0";
+}
+
+function formatAppAccount(account) {
+  if (!account) return "未知";
+  const plan = String(account.planType || "").replaceAll("_", " ");
+  if (account.type === "apiKey") return "API key";
+  return [account.email, plan ? plan.replace(/\b\w/g, (letter) => letter.toUpperCase()) : ""].filter(Boolean).join(" · ");
+}
+
+function appRateLimitMeters(rateLimits) {
+  return (Array.isArray(rateLimits) ? rateLimits : [])
+    .map((limit) => ({
+      label: appRateLimitLabel(limit),
+      usedPercent: Math.max(0, Math.min(100, Number(limit.usedPercent || 0))),
+      remainingPercent: Math.max(0, 100 - Number(limit.usedPercent || 0)),
+      resetText: limit.resetsAt ? `${formatUnixTime(limit.resetsAt)} 重置` : "",
+      duration: Number(limit.windowDurationMins || 0),
+    }))
+    .sort((left, right) => left.duration - right.duration);
+}
+
+function appRateLimitLabel(limit) {
+  const duration = Number(limit.windowDurationMins || 0);
+  const windowLabel =
+    duration === 300
+      ? "5 小时额度"
+      : duration === 10_080
+        ? "一周额度"
+        : duration >= 1_440 && duration % 1_440 === 0
+          ? `${duration / 1_440} 天额度`
+          : duration >= 60 && duration % 60 === 0
+            ? `${duration / 60} 小时额度`
+            : duration
+              ? `${duration} 分钟额度`
+              : "使用额度";
+  return limit.limitName ? `${limit.limitName} · ${windowLabel}` : windowLabel;
+}
+
+function formatElapsedSeconds(value) {
+  const seconds = Math.max(0, Number(value || 0));
+  if (seconds < 60) return `${Math.round(seconds)} 秒`;
+  if (seconds < 3_600) return `${Math.floor(seconds / 60)} 分 ${Math.round(seconds % 60)} 秒`;
+  return `${Math.floor(seconds / 3_600)} 小时 ${Math.round((seconds % 3_600) / 60)} 分`;
 }
 
 function formatUnixTime(value) {

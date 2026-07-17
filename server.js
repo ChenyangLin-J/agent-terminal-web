@@ -13,6 +13,7 @@ import { CodexAppServerClient } from "./lib/codex-app-server-client.js";
 import {
   extractSessionConversationFromJsonl,
   extractSessionPreviewFromJsonl,
+  extractSessionTokenUsageFromJsonl,
   readSessionPreviews,
   saveSessionPreview,
 } from "./lib/session-preview.js";
@@ -779,6 +780,9 @@ function createAppServerSession(cwd, launch, restored = {}) {
     restoredHistoryLoading: false,
     appSkills: null,
     appTokenUsage: null,
+    appModel: String(restored.appModel || ""),
+    appReasoningEffort: String(restored.appReasoningEffort || ""),
+    appServiceTier: ["priority", "default"].includes(restored.appServiceTier) ? restored.appServiceTier : null,
     clients: new Set(),
     cleanupTimer: null,
     exited: false,
@@ -920,6 +924,9 @@ function restoreTmuxSession(id) {
         notificationDeviceId: record.notificationDeviceId,
         purpose: normalizeSessionPurpose(record.purpose),
         thinkSkillActivated: Boolean(record.thinkSkillActivated),
+        appModel: record.appModel,
+        appReasoningEffort: record.appReasoningEffort,
+        appServiceTier: record.appServiceTier,
         turnState: { ...record.turnState, active: false },
       },
     );
@@ -949,6 +956,9 @@ function restoreTmuxSession(id) {
         notificationDeviceId: record.notificationDeviceId,
         purpose: normalizeSessionPurpose(record.purpose),
         thinkSkillActivated: Boolean(record.thinkSkillActivated),
+        appModel: record.appModel,
+        appReasoningEffort: record.appReasoningEffort,
+        appServiceTier: record.appServiceTier,
         turnState: { ...record.turnState, active: false },
       },
     );
@@ -1471,10 +1481,9 @@ function writeAndSubmit(session, text, { paste, submitKey = "\r" }) {
 }
 
 async function handleAppServerCommand(session, ws, value) {
-  const command = String(value || "")
-    .trim()
-    .split(/\s+/)[0]
-    .toLowerCase();
+  const raw = String(value || "").trim();
+  const command = raw.split(/\s+/)[0].toLowerCase();
+  const argument = raw.slice(command.length).trim();
 
   if (command === "/permissions") {
     send(ws, "app-command-result", {
@@ -1491,12 +1500,97 @@ async function handleAppServerCommand(session, ws, value) {
     return;
   }
 
-  if (command !== "/status") {
-    throw new Error(`${command || "This command"} is not available in App Server mode.`);
+  if (command === "/status") {
+    const payload = await appServerStatus(session);
+    send(ws, "app-command-result", { command, kind: "status", ...payload });
+    return;
   }
 
-  const payload = await appServerStatus(session);
-  send(ws, "app-command-result", { command, kind: "status", ...payload });
+  if (command === "/usage") {
+    send(ws, "app-command-result", { command, kind: "usage", ...(await appServerUsage(session)) });
+    return;
+  }
+
+  if (command === "/model") {
+    send(ws, "app-command-result", { command, kind: "models", ...(await appServerModels(session, argument)) });
+    return;
+  }
+
+  if (command === "/fast") {
+    const config = (await session.appServer.readConfig({ cwd: session.cwd }))?.config || {};
+    const current = session.appServiceTier || config.service_tier || "default";
+    session.appServiceTier = current === "priority" ? "default" : "priority";
+    persistRestorableWebSession(session);
+    send(ws, "app-command-result", {
+      command,
+      kind: "notice",
+      title: "Fast mode",
+      content: session.appServiceTier === "priority" ? "Fast 已开启，将从下一轮任务生效。" : "Fast 已关闭，将从下一轮任务生效。",
+    });
+    return;
+  }
+
+  if (command === "/goal") {
+    send(ws, "app-command-result", { command, kind: "goal", ...(await appServerGoal(session, argument)) });
+    return;
+  }
+
+  if (command === "/rename") {
+    const title = cleanCustomTitle(argument);
+    if (!title) throw new Error("请使用 /rename 新名称。");
+    await session.appServer.setThreadName(title);
+    session.title = title;
+    const titles = await readSessionTitles();
+    titles[session.sessionId] = title;
+    await writeSessionTitles(titles);
+    persistRestorableWebSession(session);
+    broadcast(session, "status", publicSession(session));
+    send(ws, "app-command-result", { command, kind: "notice", title: "Rename", content: `Session 已重命名为“${title}”。` });
+    return;
+  }
+
+  if (command === "/compact") {
+    if (session.turnState.active || session.appServer.activeTurnId) throw new Error("当前任务仍在处理，完成后再压缩上下文。");
+    await session.appServer.compactThread();
+    send(ws, "app-command-result", { command, kind: "notice", title: "Compact", content: "已开始压缩当前 Session 的上下文。" });
+    return;
+  }
+
+  if (command === "/diff") {
+    send(ws, "app-command-result", { command, kind: "text", title: "Working tree diff", ...(await appServerGitDiff(session.cwd)) });
+    return;
+  }
+
+  if (command === "/review") {
+    if (session.turnState.active || session.appServer.activeTurnId) throw new Error("当前任务仍在处理，完成后再启动 Review。");
+    const result = await session.appServer.startReview({ type: "uncommittedChanges" });
+    session.turnState.sequence += 1;
+    session.turnState.active = true;
+    const requirement = turnRequirement(session.turnState, "Review uncommitted changes", "original", "working");
+    session.turnState.requirements = [requirement];
+    session.turnState.turnId = result?.turn?.id || session.appServer.activeTurnId || "";
+    persistRestorableWebSession(session);
+    broadcast(session, "status", publicSession(session));
+    send(ws, "app-command-result", { command, kind: "notice", title: "Review", content: "已开始检查当前工作区的未提交修改。" });
+    return;
+  }
+
+  if (command === "/mcp") {
+    send(ws, "app-command-result", { command, kind: "inventory", title: "MCP servers", ...(await appServerMcpInventory(session)) });
+    return;
+  }
+
+  if (command === "/plugins") {
+    send(ws, "app-command-result", { command, kind: "inventory", title: "Plugins", ...(await appServerPluginInventory(session)) });
+    return;
+  }
+
+  if (command === "/hooks") {
+    send(ws, "app-command-result", { command, kind: "inventory", title: "Hooks", ...(await appServerHookInventory(session)) });
+    return;
+  }
+
+  throw new Error(`${command || "This command"} is not available in App Server mode.`);
 }
 
 async function appServerStatus(session) {
@@ -1505,43 +1599,242 @@ async function appServerStatus(session) {
         session.appServer.readThread({ includeTurns: false }),
         session.appServer.readConfig({ cwd: session.cwd, includeLayers: false }),
         session.appServer.readRateLimits(),
+        session.appServer.readAccount(),
       ])
     : [];
   const thread = fulfilledValue(requests[0]);
   const config = fulfilledValue(requests[1])?.config || {};
-  const rateLimits = fulfilledValue(requests[2])?.rateLimits || null;
-  const usage = session.appTokenUsage;
+  const rateLimitResponse = fulfilledValue(requests[2]) || {};
+  const account = fulfilledValue(requests[3])?.account || null;
+  const usage = session.appTokenUsage || (await appServerDiskTokenUsage(session.sessionId));
+  if (usage && !session.appTokenUsage) session.appTokenUsage = usage;
   return {
     sessionId: session.sessionId,
     title: session.title || "New Codex session",
     project: session.project,
     cwd: session.cwd,
     engine: "App Server",
-    cliVersion: thread?.cliVersion || "",
-    model: config.model || "default",
-    reasoningEffort: config.model_reasoning_effort || "default",
-    serviceTier: config.service_tier || "default",
+    cliVersion: appServerVersion(session.appServer.serverInfo?.userAgent) || thread?.cliVersion || "",
+    sessionCliVersion: thread?.cliVersion || "",
+    modelProvider: thread?.modelProvider || config.model_provider || "",
+    model: session.appModel || config.model || "default",
+    reasoningEffort: session.appReasoningEffort || config.model_reasoning_effort || "default",
+    serviceTier: session.appServiceTier === "priority" ? "priority" : session.appServiceTier === "default" ? "default" : config.service_tier || "default",
+    account: account
+      ? {
+          type: String(account.type || ""),
+          email: String(account.email || ""),
+          planType: String(account.planType || rateLimitResponse.rateLimits?.planType || ""),
+        }
+      : null,
     access: session.access,
     approvalPolicy: session.access === FULL_ACCESS_MODE ? "never" : "on-request",
     sandbox: session.access === FULL_ACCESS_MODE ? "danger-full-access" : "workspace-write",
+    writableRoots: session.access === FULL_ACCESS_MODE ? ["全部服务器文件"] : [session.cwd, "/tmp"],
+    networkAccess: session.access === FULL_ACCESS_MODE ? "允许" : "受限",
+    agentsFiles: appServerInstructionFiles(session.cwd),
+    gitBranch: String(thread?.gitInfo?.branch || ""),
     activeTurn: Boolean(session.turnState?.active),
     tokenUsage: usage
       ? {
           totalTokens: Number(usage.total?.totalTokens || 0),
           inputTokens: Number(usage.total?.inputTokens || 0),
           outputTokens: Number(usage.total?.outputTokens || 0),
+          cachedInputTokens: Number(usage.total?.cachedInputTokens || 0),
+          reasoningOutputTokens: Number(usage.total?.reasoningOutputTokens || 0),
+          contextUsedTokens: Number(usage.last?.totalTokens || 0),
           modelContextWindow: Number(usage.modelContextWindow || config.model_context_window || 0),
         }
       : null,
-    rateLimit: rateLimits
-      ? {
-          usedPercent: Number(rateLimits.primary?.usedPercent || 0),
-          windowDurationMins: Number(rateLimits.primary?.windowDurationMins || 0),
-          resetsAt: Number(rateLimits.primary?.resetsAt || 0),
-          planType: String(rateLimits.planType || ""),
-        }
-      : null,
+    rateLimits: appServerRateLimits(rateLimitResponse),
+    resetCredits: Number(rateLimitResponse.rateLimitResetCredits?.availableCount || 0),
   };
+}
+
+function appServerVersion(userAgent) {
+  return String(userAgent || "").match(/\b\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?\b/)?.[0] || "";
+}
+
+async function appServerDiskTokenUsage(sessionId) {
+  if (!isValidSessionId(sessionId)) return null;
+  const file = await findCodexSessionFile(sessionId);
+  if (!file) return null;
+  try {
+    return await extractSessionTokenUsageFromJsonl(file);
+  } catch {
+    return null;
+  }
+}
+
+async function appServerUsage(session) {
+  const [rateResult, usageResult, accountResult] = await Promise.allSettled([
+    session.appServer.readRateLimits(),
+    session.appServer.readAccountUsage(),
+    session.appServer.readAccount(),
+  ]);
+  const rateResponse = fulfilledValue(rateResult) || {};
+  const activity = fulfilledValue(usageResult) || {};
+  const account = fulfilledValue(accountResult)?.account || null;
+  return {
+    account: account
+      ? { type: String(account.type || ""), email: String(account.email || ""), planType: String(account.planType || "") }
+      : null,
+    rateLimits: appServerRateLimits(rateResponse),
+    resetCredits: Number(rateResponse.rateLimitResetCredits?.availableCount || 0),
+    credits: rateResponse.rateLimits?.credits || null,
+    activitySummary: activity.summary || null,
+    dailyUsage: Array.isArray(activity.dailyUsageBuckets) ? activity.dailyUsageBuckets.slice(-7) : [],
+  };
+}
+
+function appServerRateLimits(response = {}) {
+  const snapshots = [];
+  const primarySnapshot = response.rateLimits || null;
+  if (primarySnapshot) snapshots.push(primarySnapshot);
+  for (const [id, snapshot] of Object.entries(response.rateLimitsByLimitId || {})) {
+    if (!snapshot || id === primarySnapshot?.limitId) continue;
+    snapshots.push({ ...snapshot, limitId: snapshot.limitId || id });
+  }
+
+  const windows = [];
+  for (const snapshot of snapshots) {
+    for (const [kind, window] of [
+      ["primary", snapshot.primary],
+      ["secondary", snapshot.secondary],
+    ]) {
+      if (!window) continue;
+      windows.push({
+        limitId: String(snapshot.limitId || "codex"),
+        limitName: String(snapshot.limitName || ""),
+        kind,
+        usedPercent: clampInteger(window.usedPercent, 0, 100, 0),
+        windowDurationMins: Number(window.windowDurationMins || 0),
+        resetsAt: Number(window.resetsAt || 0),
+      });
+    }
+  }
+  return windows;
+}
+
+function appServerInstructionFiles(cwd) {
+  const files = [];
+  let current = path.resolve(cwd);
+  while (true) {
+    const candidate = path.join(current, "AGENTS.md");
+    if (fsSync.existsSync(candidate)) files.push(candidate);
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return files;
+}
+
+async function appServerModels(session, argument) {
+  const [modelsResponse, configResponse] = await Promise.all([
+    session.appServer.listModels(),
+    session.appServer.readConfig({ cwd: session.cwd }),
+  ]);
+  const models = (Array.isArray(modelsResponse?.data) ? modelsResponse.data : []).filter((model) => !model.hidden);
+  const config = configResponse?.config || {};
+  if (argument) {
+    const [requestedModel, requestedEffort] = argument.split(/\s+/);
+    const selected = models.find((model) => model.id === requestedModel || model.model === requestedModel);
+    if (!selected) throw new Error(`未知模型：${requestedModel}`);
+    const efforts = (selected.supportedReasoningEfforts || []).map((entry) => entry.reasoningEffort);
+    const effort = requestedEffort || (efforts.includes(session.appReasoningEffort || config.model_reasoning_effort) ? session.appReasoningEffort || config.model_reasoning_effort : selected.defaultReasoningEffort);
+    if (effort && !efforts.includes(effort)) throw new Error(`${selected.displayName || selected.id} 不支持 ${effort} reasoning。`);
+    session.appModel = selected.model || selected.id;
+    session.appReasoningEffort = effort || "";
+    persistRestorableWebSession(session);
+  }
+  return {
+    currentModel: session.appModel || config.model || "default",
+    currentReasoningEffort: session.appReasoningEffort || config.model_reasoning_effort || "default",
+    activeTurn: Boolean(session.turnState.active),
+    models: models.map((model) => ({
+      id: String(model.id || model.model || ""),
+      name: String(model.displayName || model.id || model.model || ""),
+      description: String(model.description || ""),
+      defaultReasoningEffort: String(model.defaultReasoningEffort || ""),
+      reasoningEfforts: (model.supportedReasoningEfforts || []).map((entry) => String(entry.reasoningEffort || "")).filter(Boolean),
+    })),
+  };
+}
+
+async function appServerGoal(session, argument) {
+  if (argument.toLowerCase() === "clear") {
+    await session.appServer.clearThreadGoal();
+    return { goal: null, changed: "cleared" };
+  }
+  if (argument) {
+    if (argument.length > 4_000) throw new Error("Goal 不能超过 4,000 个字符。");
+    const response = await session.appServer.setThreadGoal(argument);
+    return { goal: response?.goal || null, changed: "set" };
+  }
+  const response = await session.appServer.readThreadGoal();
+  return { goal: response?.goal || null, changed: "" };
+}
+
+async function appServerMcpInventory(session) {
+  const response = await session.appServer.listMcpServers();
+  const items = (Array.isArray(response?.data) ? response.data : []).map((server) => ({
+    name: String(server.serverInfo?.title || server.name || "MCP"),
+    detail: `${Object.keys(server.tools || {}).length} tools · ${server.authStatus || "auth unknown"}`,
+  }));
+  return { items, note: items.length ? "显示当前 Session 已连接的 MCP Server。" : "当前没有可用的 MCP Server。" };
+}
+
+async function appServerPluginInventory(session) {
+  const response = await session.appServer.listPlugins({ cwds: [session.cwd] });
+  const all = (response?.marketplaces || []).flatMap((marketplace) => marketplace.plugins || []);
+  const installed = all.filter((plugin) => plugin.installed || plugin.enabled);
+  const items = installed.slice(0, 50).map((plugin) => ({
+    name: String(plugin.interface?.displayName || plugin.name || plugin.id || "Plugin"),
+    detail: plugin.enabled ? "已启用" : "已安装",
+  }));
+  return {
+    items,
+    note: installed.length ? `已安装 ${installed.length} 个；市场中共发现 ${all.length} 个。` : `尚未安装 Plugin；市场中发现 ${all.length} 个可用项。`,
+  };
+}
+
+async function appServerHookInventory(session) {
+  const response = await session.appServer.listHooks({ cwds: [session.cwd] });
+  const entries = Array.isArray(response?.data) ? response.data : [];
+  const hooks = entries.flatMap((entry) => entry.hooks || []);
+  const warnings = entries.flatMap((entry) => entry.warnings || []);
+  const errors = entries.flatMap((entry) => entry.errors || []);
+  return {
+    items: hooks.slice(0, 50).map((hook) => ({
+      name: String(hook.key || hook.eventName || "Hook"),
+      detail: `${hook.eventName || "event"} · ${hook.enabled ? "已启用" : "已停用"} · ${hook.trustStatus || "unknown"}`,
+    })),
+    note: hooks.length ? `${hooks.length} 个 Hook · ${warnings.length} 个提醒 · ${errors.length} 个错误。` : "当前工作区没有配置 Hook。",
+  };
+}
+
+async function appServerGitDiff(cwd) {
+  const status = await execFileOutput("git", ["status", "--short"], { cwd });
+  const diff = await execFileOutput("git", ["diff", "--no-ext-diff", "--text", "HEAD", "--"], { cwd });
+  const content = [status.trim() ? `Status\n${status.trim()}` : "", diff.trim() ? `Diff\n${diff.trim()}` : ""]
+    .filter(Boolean)
+    .join("\n\n");
+  return {
+    content: content || "工作区没有未提交修改。",
+    note: "未跟踪文件显示名称；Diff 内容包含已暂存和未暂存修改。",
+  };
+}
+
+function execFileOutput(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { ...options, timeout: 10_000, maxBuffer: 512 * 1024 }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(String(stderr || error.message).trim()));
+        return;
+      }
+      resolve(String(stdout || ""));
+    });
+  });
 }
 
 function fulfilledValue(result) {
@@ -1609,13 +1902,18 @@ function appServerPromptInput(text, skills) {
 }
 
 function appServerTurnAccess(session) {
-  return {
+  const settings = {
     approvalPolicy: session.access === FULL_ACCESS_MODE ? "never" : "on-request",
     sandboxPolicy:
       session.access === FULL_ACCESS_MODE
         ? { type: "dangerFullAccess" }
         : { type: "workspaceWrite", writableRoots: [session.cwd], networkAccess: false },
   };
+  if (session.appModel) settings.model = session.appModel;
+  if (session.appReasoningEffort) settings.effort = session.appReasoningEffort;
+  if (session.appServiceTier === "priority") settings.serviceTier = "priority";
+  if (session.appServiceTier === "default") settings.serviceTier = null;
+  return settings;
 }
 
 async function submitAppServerPrompt(session, text, requestedMode, skillNames = []) {
@@ -2650,6 +2948,9 @@ function persistWebSession(session) {
     access: normalizeAccessMode(session.access),
     purpose: normalizeSessionPurpose(session.purpose),
     thinkSkillActivated: Boolean(session.thinkSkillActivated),
+    appModel: String(session.appModel || ""),
+    appReasoningEffort: String(session.appReasoningEffort || ""),
+    appServiceTier: ["priority", "default"].includes(session.appServiceTier) ? session.appServiceTier : null,
     mode: session.mode,
     sessionId: session.sessionId,
     title: session.title,

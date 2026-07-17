@@ -14,6 +14,11 @@ test("App Server exposes slash commands and structured Skill mentions", async ()
   assert.match(server, /session\.appServer\.readThread/);
   assert.match(server, /session\.appServer\.readConfig/);
   assert.match(server, /session\.appServer\.readRateLimits/);
+  assert.match(server, /session\.appServer\.readAccountUsage/);
+  assert.match(server, /async function appServerModels\(session, argument\)/);
+  assert.match(server, /async function appServerMcpInventory\(session\)/);
+  assert.match(server, /async function appServerPluginInventory\(session\)/);
+  assert.match(server, /async function appServerHookInventory\(session\)/);
   assert.match(server, /message\.type === "skills-list"/);
   assert.match(server, /message\.type === "set-access"/);
   assert.match(server, /type: "skill", name: skill\.name, path: skill\.path/);
@@ -26,12 +31,32 @@ test("App Server exposes slash commands and structured Skill mentions", async ()
   assert.match(page, /id="composer-suggestions"/);
   assert.match(page, /id="app-command-dialog"/);
   assert.match(app, /const APP_COMMANDS = \[/);
+  for (const command of [
+    "/status",
+    "/usage",
+    "/permissions",
+    "/model",
+    "/fast",
+    "/skills",
+    "/goal",
+    "/rename",
+    "/compact",
+    "/copy",
+    "/diff",
+    "/review",
+    "/mcp",
+    "/plugins",
+    "/hooks",
+  ]) {
+    assert.match(app, new RegExp(`name: "${command.replace("/", "\\/")}"`));
+  }
   assert.match(app, /function updateComposerSuggestions\(\)/);
   assert.match(app, /function receiveAppSkills\(payload = \{\}\)/);
   assert.match(app, /function renderAppCommandResult\(payload = \{\}\)/);
   assert.match(app, /skills: activeTransport === "app-server" \? extractSkillMentions\(prompt\) : \[\]/);
   assert.match(styles, /\.composer-suggestions/);
   assert.match(styles, /\.app-command-dialog/);
+  assert.match(styles, /\.app-command-meters/);
 });
 
 test("process output details are collapsed by default", async () => {

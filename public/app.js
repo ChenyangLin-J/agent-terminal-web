@@ -209,11 +209,13 @@ window.AgentUpload.create({
   setUploadStatus,
   redirectToLogin,
 }).install();
-window.AgentVoiceInput.create({
+const voiceInputController = window.AgentVoiceInput.create({
   button: voiceInputButton,
   promptInput,
   setUploadStatus,
-}).install();
+  getRecoveryContext: () => activeSessionId || activeSessionParams.sessionId || "",
+});
+voiceInputController.install();
 installPageDownLongPress();
 installClientEventLogging();
 
@@ -811,6 +813,7 @@ function submitPrompt(deliveryMode = "auto") {
 }
 
 function handleControlAck(payload = {}) {
+  if (["submit", "startup-submit"].includes(payload.kind)) void voiceInputController.discardStoredRecovery();
   if (payload.kind === "agent-response") {
     setUploadStatus("已提交给 Codex。", { clear: true });
     return;
@@ -1356,6 +1359,7 @@ function renderStatus(status) {
   setConnectedState(status.exited ? "exited" : !activeSessionReady ? "starting" : historySyncPending ? "loading" : "connected");
   setDocumentTitle(status.title || displayProject(status.project));
   renderTurnState(status.turnState);
+  void voiceInputController.offerStoredRecovery();
   syncPrimarySessionView();
   if (activeTransport === "app-server" && appTranscriptItems.length) {
     renderAppTranscript({ follow: isAppTranscriptAtBottom() });

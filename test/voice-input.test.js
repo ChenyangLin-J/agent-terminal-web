@@ -5,6 +5,7 @@ import test from "node:test";
 test("Agent voice input transcribes without using the Home capture endpoint", async () => {
   const source = await readFile(new URL("../public/agent-voice-input.js", import.meta.url), "utf8");
   const page = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
+  const app = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
 
   assert.match(source, /https:\/\/home\.chenyanglin\.com\/api\/transcribe\/stream/);
   assert.doesNotMatch(source, /\/api\/capture\/transcribe\/stream/);
@@ -15,7 +16,11 @@ test("Agent voice input transcribes without using the Home capture endpoint", as
   assert.match(source, /正在用原始录音恢复转写/);
   assert.doesNotMatch(source, /完成，但有/);
   assert.match(source, /new CustomEvent\("agentvoicestatechange"/);
-  assert.match(page, /voice-recovery-store\.js\?v=20260717-1/);
-  assert.match(page, /voice-capture-widget\.js\?v=20260717-recovery-2/);
-  assert.match(page, /agent-voice-input\.js\?v=20260717-recovery-1/);
+  assert.match(source, /candidate\.context === context/);
+  assert.match(source, /discardStoredRecovery/);
+  assert.match(app, /getRecoveryContext: \(\) => activeSessionId/);
+  assert.match(app, /voiceInputController\.discardStoredRecovery\(\)/);
+  assert.match(page, /voice-recovery-store\.js\?v=20260717-2/);
+  assert.match(page, /voice-capture-widget\.js\?v=20260717-recovery-3/);
+  assert.match(page, /agent-voice-input\.js\?v=20260717-recovery-2/);
 });

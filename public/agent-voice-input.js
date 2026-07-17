@@ -17,12 +17,14 @@
     <path d="M18 12h3" />
   </svg>`;
 
-  function createVoiceInputController({ button, promptInput, setUploadStatus }) {
+  function createVoiceInputController({ button, promptInput, setUploadStatus, getRecoveryContext }) {
     let voiceCapture = null;
     let state = "idle";
     let promptBeforeRecording = "";
     let recordingAddedText = false;
     let lastCompletion = null;
+    let offeredRecoveryId = "";
+    let offeredRecoveryContext = "";
 
     const controller = {
       install,
@@ -31,6 +33,8 @@
       stop,
       cancel,
       retry,
+      offerStoredRecovery,
+      discardStoredRecovery,
       getState: () => state,
     };
     button.agentVoiceInputController = controller;
@@ -89,8 +93,24 @@
     }
 
     async function offerStoredRecovery() {
-      const [record] = await VoiceCapture.listRecoveryRecords();
-      if (!record || state !== "idle") return;
+      const context = recoveryContext();
+      if (!context || state !== "idle") return;
+      const records = await VoiceCapture.listRecoveryRecords();
+      await Promise.all(
+        records.filter((record) => !record.context).map((record) => VoiceRecoveryStore.remove(record.recordingId)),
+      );
+      const record = records.find((candidate) => candidate.context === context);
+      if (!record) {
+        if (offeredRecoveryContext && offeredRecoveryContext !== context) {
+          offeredRecoveryId = "";
+          offeredRecoveryContext = "";
+          setUploadStatus("", { clear: true });
+        }
+        return;
+      }
+      if (offeredRecoveryId === record.recordingId) return;
+      offeredRecoveryId = record.recordingId;
+      offeredRecoveryContext = context;
       setUploadStatus("有一条未完成的原始录音。", {
         actionLabel: "恢复上次录音",
         onAction: async () => {
@@ -101,9 +121,24 @@
           if (!result) {
             setVoiceState("idle");
             showRecoveryFailure();
+          } else {
+            offeredRecoveryId = "";
+            offeredRecoveryContext = "";
           }
         },
       });
+    }
+
+    async function discardStoredRecovery() {
+      const context = recoveryContext();
+      if (!context) return;
+      const records = await VoiceCapture.listRecoveryRecords();
+      const matching = records.filter((record) => record.context === context);
+      await Promise.all(matching.map((record) => VoiceRecoveryStore.remove(record.recordingId)));
+      if (offeredRecoveryContext === context) {
+        offeredRecoveryId = "";
+        offeredRecoveryContext = "";
+      }
     }
 
     async function cancel() {
@@ -122,6 +157,7 @@
     function installVoiceCapture() {
       voiceCapture = VoiceCapture.create({
         streamEndpoint: TRANSCRIPTION_STREAM_ENDPOINT,
+        recoveryContext,
         onStart() {
           if (state !== "starting") {
             void voiceCapture.cancel();
@@ -189,6 +225,10 @@
         actionLabel: "重试转写",
         onAction: retry,
       });
+    }
+
+    function recoveryContext() {
+      return String(getRecoveryContext?.() || "");
     }
 
     function insertVoiceText(text) {

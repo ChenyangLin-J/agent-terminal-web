@@ -473,6 +473,7 @@ input {
 }
 
 .terminal-view {
+  position: relative;
   grid-area: content;
   min-height: 0;
   overflow: hidden;
@@ -480,6 +481,19 @@ input {
   background: #080a0f;
   overscroll-behavior: contain;
   touch-action: none;
+}
+
+.terminal-view.replaying::after {
+  position: absolute;
+  inset: 8px;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  color: #8d96a8;
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  content: "正在定位到最新内容…";
+  pointer-events: none;
+  background: #080a0f;
 }
 
 #terminal {

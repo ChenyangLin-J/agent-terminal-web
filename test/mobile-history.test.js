@@ -13,14 +13,20 @@ test("mobile session recovery persists and incrementally restores terminal histo
   assert.match(source, /query\.set\("afterRevision", String\(lastOutputRevision\)\)/);
   assert.match(source, /payload\.mode === "delta"/);
   assert.match(source, /terminal\?\.refresh\(0, Math\.max\(0, terminal\.rows - 1\)\)/);
-  assert.doesNotMatch(source, /terminalView\.classList\.add\("replaying"\)/);
+  assert.match(source, /const TERMINAL_RECENT_HISTORY_MAX_CHARS = 24_000/);
+  assert.match(source, /bufferTerminalHistory\(payload\.raw \|\| ""/);
+  assert.match(source, /terminalHistoryChunks\[0\]\.slice\(-TERMINAL_RECENT_HISTORY_MAX_CHARS\)/);
+  assert.match(source, /if \(trimmed\) terminalHistoryForceFull = true/);
+  assert.match(source, /terminalView\.classList\.add\("replaying"\)/);
+  assert.match(source, /\["connected", "loading"\]\.includes\(state\)/);
+  assert.match(source, /loading: "已连接 · 恢复最新记录中"/);
   assert.match(source, /scrollback: 12000/);
   assert.match(source, /document\.documentElement\.classList\.toggle\("session-active", active\)/);
   assert.match(source, /document\.scrollingElement\.scrollTop = 0/);
   assert.match(styles, /html\.session-active[\s\S]*overflow: hidden/);
   assert.match(styles, /body\.session-active[\s\S]*height: 100dvh/);
-  assert.match(page, /app\.js\?v=20260716-shared-shell-1/);
-  assert.match(page, /styles\.css\?v=20260716-shared-shell-1/);
+  assert.match(page, /app\.js\?v=20260717-fast-resume-1/);
+  assert.match(page, /styles\.css\?v=20260717-fast-resume-1/);
 });
 
 test("Agent displays dates and starts Codex in Beijing time", async () => {

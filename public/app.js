@@ -78,6 +78,9 @@ const PUSH_DEVICE_ID_KEY = "agent_terminal_push_device_id";
 const SESSION_SNAPSHOT_STORE_KEY = "agent_terminal_session_snapshots";
 const SESSION_SNAPSHOT_LIMIT = 8;
 const SESSION_SNAPSHOT_MAX_CHARS = 200_000;
+const TERMINAL_RECENT_HISTORY_MAX_CHARS = 24_000;
+const TERMINAL_HISTORY_QUIET_MS = 1_200;
+const TERMINAL_HISTORY_EMPTY_FALLBACK_MS = 8_000;
 
 let terminal = null;
 let fitAddon = null;
@@ -103,6 +106,13 @@ let historySyncPending = false;
 let historySyncStartedAt = 0;
 let lastOutputRevision = 0;
 let queuedOutputRevision = 0;
+let terminalHistoryBuffering = false;
+let terminalHistoryForceFull = false;
+let terminalHistoryWaitForOutput = false;
+let terminalHistoryChunks = [];
+let terminalHistoryChars = 0;
+let terminalHistoryRevision = null;
+let terminalHistoryFlushTimer = null;
 let uploadStatusTimer = null;
 let liveSessionsByCodexId = new Map();
 let archivedSessionsExpanded = false;
@@ -611,8 +621,14 @@ function openSocket(params, options = {}) {
   saveActiveSessionSnapshot();
   closeSocket();
   ensureTerminal();
+  activeTransport = params.transport === "app-server" ? "app-server" : "terminal";
   const hasSnapshot = !isReconnect && hasSessionSnapshot(snapshotKey);
   const shouldReplay = options.replay !== false;
+  beginTerminalHistoryBuffer({
+    active: shouldReplay && activeTransport === "terminal",
+    forceFull: !isReconnect && Boolean(params.sessionId),
+    waitForOutput: !isReconnect && Boolean(params.sessionId) && !params.attach,
+  });
   if (!isReconnect) {
     terminal?.reset();
     appTranscriptItems = [];
@@ -625,7 +641,6 @@ function openSocket(params, options = {}) {
   }
   historySyncPending = shouldReplay;
   historySyncStartedAt = shouldReplay ? Date.now() : 0;
-  activeTransport = params.transport === "app-server" ? "app-server" : "terminal";
   activeAccessMode = params.access === "full" ? "full" : "safe";
   activeSessionReady = activeTransport !== "app-server";
   document.body.classList.toggle("app-server-session", activeTransport === "app-server");
@@ -853,8 +868,10 @@ function detach(goHome = true) {
 function closeSocket() {
   window.clearTimeout(reconnectTimer);
   window.clearTimeout(visibleProbeTimer);
+  window.clearTimeout(terminalHistoryFlushTimer);
   reconnectTimer = null;
   visibleProbeTimer = null;
+  terminalHistoryFlushTimer = null;
   stopClientHeartbeat();
   if (socket) {
     socket.intentionalClose = true;
@@ -900,8 +917,11 @@ function restoreSessionSnapshot(key) {
 
   lastOutputRevision = validOutputRevision(snapshot.revision) ?? 0;
   queuedOutputRevision = lastOutputRevision;
-  terminal.write(snapshot.text.replace(/\n/g, "\r\n"), () => {
+  const recentText = snapshot.text.slice(-TERMINAL_RECENT_HISTORY_MAX_CHARS);
+  terminalView.classList.add("replaying");
+  terminal.write(recentText.replace(/\n/g, "\r\n"), () => {
     terminal.scrollToBottom();
+    terminalView.classList.remove("replaying");
     if (!textView.classList.contains("hidden")) {
       refreshTerminalText({ follow: true });
     }
@@ -1330,7 +1350,7 @@ function setConnectedState(state) {
     connecting: "连接中",
     reconnecting: "重新连接中",
     starting: "启动中",
-    loading: "恢复中",
+    loading: "已连接 · 恢复最新记录中",
     detached: "已离开",
     exited: "已停止",
   };
@@ -1338,7 +1358,11 @@ function setConnectedState(state) {
   const access = activeAccessMode === "full" ? " · 全部允许" : " · 按需确认";
   const stateLabel = connectionStates[state] || state;
   statusEls.connection.textContent = `${transport}${stateLabel}${access}`;
-  const connected = state === "connected" && activeSessionReady;
+  const terminalCanAcceptInput =
+    activeTransport === "terminal" &&
+    ["connected", "loading"].includes(state) &&
+    socket?.readyState === WebSocket.OPEN;
+  const connected = (state === "connected" || terminalCanAcceptInput) && activeSessionReady;
   sendPromptButton.disabled = !connected;
   queuePromptButton.disabled = !connected;
   textTabButton.disabled = !connected;
@@ -1529,6 +1553,10 @@ function handleTerminalOutput(payload = {}) {
     }
     queuedOutputRevision = revision;
   }
+  if (terminalHistoryBuffering && activeTransport === "terminal") {
+    bufferTerminalHistory(payload.raw || "", { revision, forceFull: terminalHistoryForceFull });
+    return;
+  }
   writeTerminalOutput(payload.raw || "", { revision });
 }
 
@@ -1558,6 +1586,11 @@ function writeTerminalReplay(payload = {}) {
   const revision = validOutputRevision(payload.revision);
   const raw = String(payload.raw || "");
 
+  if (terminalHistoryBuffering && activeTransport === "terminal") {
+    bufferTerminalHistory(raw, { revision, forceFull: mode === "full" });
+    return;
+  }
+
   if (mode === "delta") {
     if (revision !== null) queuedOutputRevision = Math.max(queuedOutputRevision, revision);
     if (!raw) {
@@ -1584,8 +1617,94 @@ function writeTerminalReplay(payload = {}) {
   });
 }
 
+function beginTerminalHistoryBuffer({ active, forceFull = false, waitForOutput = false } = {}) {
+  window.clearTimeout(terminalHistoryFlushTimer);
+  terminalHistoryFlushTimer = null;
+  terminalHistoryBuffering = Boolean(active);
+  terminalHistoryForceFull = Boolean(forceFull);
+  terminalHistoryWaitForOutput = Boolean(waitForOutput);
+  terminalHistoryChunks = [];
+  terminalHistoryChars = 0;
+  terminalHistoryRevision = null;
+}
+
+function bufferTerminalHistory(raw, { revision = null, forceFull = false } = {}) {
+  terminalHistoryForceFull ||= Boolean(forceFull);
+  if (revision !== null) {
+    terminalHistoryRevision = Math.max(terminalHistoryRevision ?? 0, revision);
+    queuedOutputRevision = Math.max(queuedOutputRevision, revision);
+  }
+
+  if (raw) {
+    terminalHistoryWaitForOutput = false;
+    terminalHistoryChunks.push(raw);
+    terminalHistoryChars += raw.length;
+    trimTerminalHistoryBuffer();
+  }
+
+  window.clearTimeout(terminalHistoryFlushTimer);
+  if (terminalHistoryWaitForOutput && !terminalHistoryChars) {
+    terminalHistoryFlushTimer = window.setTimeout(flushTerminalHistoryBuffer, TERMINAL_HISTORY_EMPTY_FALLBACK_MS);
+    return;
+  }
+  terminalHistoryFlushTimer = window.setTimeout(flushTerminalHistoryBuffer, raw ? TERMINAL_HISTORY_QUIET_MS : 120);
+}
+
+function trimTerminalHistoryBuffer() {
+  let trimmed = false;
+  while (terminalHistoryChars > TERMINAL_RECENT_HISTORY_MAX_CHARS && terminalHistoryChunks.length > 1) {
+    terminalHistoryChars -= terminalHistoryChunks.shift().length;
+    trimmed = true;
+  }
+  if (terminalHistoryChars > TERMINAL_RECENT_HISTORY_MAX_CHARS && terminalHistoryChunks.length === 1) {
+    terminalHistoryChunks[0] = terminalHistoryChunks[0].slice(-TERMINAL_RECENT_HISTORY_MAX_CHARS);
+    terminalHistoryChars = terminalHistoryChunks[0].length;
+    trimmed = true;
+  }
+  if (trimmed) terminalHistoryForceFull = true;
+}
+
+function flushTerminalHistoryBuffer() {
+  window.clearTimeout(terminalHistoryFlushTimer);
+  terminalHistoryFlushTimer = null;
+  if (!terminalHistoryBuffering || !terminal) return;
+
+  const raw = terminalHistoryChunks.join("");
+  const rawChars = terminalHistoryChars;
+  const revision = terminalHistoryRevision;
+  const mode = terminalHistoryForceFull ? "recent" : "delta";
+  terminalHistoryBuffering = false;
+  terminalHistoryWaitForOutput = false;
+  terminalHistoryChunks = [];
+  terminalHistoryChars = 0;
+  terminalHistoryRevision = null;
+
+  if (!raw) {
+    if (revision !== null) lastOutputRevision = Math.max(lastOutputRevision, revision);
+    finishHistorySync(mode, 0);
+    return;
+  }
+
+  terminalView.classList.add("replaying");
+  const output = terminalHistoryForceFull ? `\x1bc${raw}` : raw;
+  terminalHistoryForceFull = false;
+  terminal.write(output, () => {
+    if (revision !== null) lastOutputRevision = Math.max(lastOutputRevision, revision);
+    terminal.scrollToBottom();
+    terminalView.classList.remove("replaying");
+    if (!textView.classList.contains("hidden")) refreshTerminalText({ follow: true });
+    finishHistorySync(mode, rawChars);
+  });
+}
+
 function finishHistorySync(mode, rawChars) {
   historySyncPending = false;
+  terminalHistoryBuffering = false;
+  terminalHistoryWaitForOutput = false;
+  terminalHistoryForceFull = false;
+  window.clearTimeout(terminalHistoryFlushTimer);
+  terminalHistoryFlushTimer = null;
+  terminalView.classList.remove("replaying");
   setConnectedState(socket?.readyState === WebSocket.OPEN ? "connected" : "detached");
   logClientEvent("history-sync-complete", {
     replayMode: mode,

@@ -30,6 +30,8 @@ test("App Server exposes slash commands and structured Skill mentions", async ()
 
   assert.match(page, /id="composer-suggestions"/);
   assert.match(page, /id="app-command-dialog"/);
+  assert.match(page, /id="app-session-tools"/);
+  assert.match(page, /id="app-session-permissions"/);
   assert.match(app, /const APP_COMMANDS = \[/);
   for (const command of [
     "/status",
@@ -53,10 +55,13 @@ test("App Server exposes slash commands and structured Skill mentions", async ()
   assert.match(app, /function updateComposerSuggestions\(\)/);
   assert.match(app, /function receiveAppSkills\(payload = \{\}\)/);
   assert.match(app, /function renderAppCommandResult\(payload = \{\}\)/);
+  assert.match(app, /function syncAppSessionToolbar\(\)/);
+  assert.match(app, /appSessionPermissionsButton\.addEventListener\("click", \(\) => runAppCommand\("\/permissions"\)\)/);
   assert.match(app, /skills: activeTransport === "app-server" \? extractSkillMentions\(prompt\) : \[\]/);
   assert.match(styles, /\.composer-suggestions/);
   assert.match(styles, /\.app-command-dialog/);
   assert.match(styles, /\.app-command-meters/);
+  assert.match(styles, /\.app-server-session \.app-session-tools/);
 });
 
 test("process output details are collapsed by default", async () => {

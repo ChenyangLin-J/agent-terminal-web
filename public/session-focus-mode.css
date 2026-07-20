@@ -29,7 +29,8 @@
 }
 
 .session-screen.session-focus-mode .session-header,
-.session-screen.session-focus-mode .composer {
+.session-screen.session-focus-mode .composer,
+.session-screen.session-focus-mode .app-session-tools {
   display: none;
 }
 

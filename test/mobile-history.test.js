@@ -29,8 +29,8 @@ test("mobile session recovery persists and incrementally restores terminal histo
   assert.match(source, /document\.scrollingElement\.scrollTop = 0/);
   assert.match(styles, /html\.session-active[\s\S]*overflow: hidden/);
   assert.match(styles, /body\.session-active[\s\S]*height: 100dvh/);
-  assert.match(page, /app\.js\?v=20260717-app-commands-2/);
-  assert.match(page, /styles\.css\?v=20260717-app-commands-2/);
+  assert.match(page, /app\.js\?v=20260720-app-toolbar-1/);
+  assert.match(page, /styles\.css\?v=20260720-app-toolbar-1/);
 });
 
 test("Agent displays dates and starts Codex in Beijing time", async () => {

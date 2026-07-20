@@ -574,8 +574,9 @@ input {
     "tabs"
     "content"
     "quick-actions"
+    "session-tools"
     "composer";
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
@@ -1167,6 +1168,50 @@ input {
 
 .app-server-session .quick-actions {
   display: none;
+}
+
+.app-session-tools {
+  grid-area: session-tools;
+  display: none;
+}
+
+.app-server-session .app-session-tools {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 7px 10px;
+  background: #10141c;
+  border-top: 1px solid #252a35;
+  border-bottom: 1px solid #252a35;
+}
+
+.app-session-tools button {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 36px;
+  padding: 7px 11px;
+  white-space: nowrap;
+  background: #151a23;
+}
+
+.app-session-tools button span {
+  color: #9ca6b8;
+}
+
+.app-session-tools button strong {
+  color: #eef2f8;
+  font-size: 13px;
+}
+
+.app-session-tools button[data-access="full"] {
+  border-color: #8b4d57;
+  background: #2a171c;
+}
+
+.app-session-tools button[data-access="full"] strong {
+  color: #ffbec7;
 }
 
 .composer {

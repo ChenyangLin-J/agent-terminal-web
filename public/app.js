@@ -31,6 +31,8 @@ const keyEnterButton = document.querySelector("#key-enter");
 const keyEscButton = document.querySelector("#key-esc");
 const sendStatusButton = document.querySelector("#send-status");
 const sendPermissionsButton = document.querySelector("#send-permissions");
+const appSessionPermissionsButton = document.querySelector("#app-session-permissions");
+const appSessionPermissionsValue = document.querySelector("#app-session-permissions-value");
 const killSessionButton = document.querySelector("#kill-session");
 const attachFileButton = document.querySelector("#attach-file");
 const voiceInputButton = document.querySelector("#voice-input");
@@ -215,6 +217,7 @@ keyEnterButton.addEventListener("click", () => sendTerminalKey("\r"));
 keyEscButton.addEventListener("click", () => sendTerminalKey("\x1b"));
 sendStatusButton.addEventListener("click", () => command("/status"));
 sendPermissionsButton.addEventListener("click", () => command("/permissions"));
+appSessionPermissionsButton.addEventListener("click", () => runAppCommand("/permissions"));
 killSessionButton.addEventListener("click", endSession);
 terminalSessionPreviewDismiss.addEventListener("click", hideTerminalSessionPreview);
 appCommandClose.addEventListener("click", () => appCommandDialog.close());
@@ -709,6 +712,7 @@ function openSocket(params, options = {}) {
   historySyncPending = shouldReplay;
   historySyncStartedAt = shouldReplay ? Date.now() : 0;
   activeAccessMode = params.access === "full" ? "full" : "safe";
+  syncAppSessionToolbar();
   activeSessionReady = activeTransport !== "app-server";
   activeStartupQueueSupported = false;
   document.body.classList.toggle("app-server-session", activeTransport === "app-server");
@@ -868,6 +872,9 @@ function submitPrompt(deliveryMode = "auto") {
 function handleControlAck(payload = {}) {
   if (["submit", "startup-submit"].includes(payload.kind)) void voiceInputController.discardStoredRecovery();
   if (payload.kind === "access") {
+    activeAccessMode = payload.access === "full" ? "full" : "safe";
+    activeSessionParams.access = activeAccessMode;
+    syncAppSessionToolbar();
     setUploadStatus(`已切换为${appAccessLabel(payload.access)}。`, { clear: true });
     return;
   }
@@ -1422,6 +1429,12 @@ function appAccessLabel(access) {
   return access === "full" ? "全部允许" : "按需确认";
 }
 
+function syncAppSessionToolbar() {
+  appSessionPermissionsButton.dataset.access = activeAccessMode;
+  appSessionPermissionsValue.textContent = appAccessLabel(activeAccessMode);
+  appSessionPermissionsButton.setAttribute("aria-label", `权限：${appAccessLabel(activeAccessMode)}`);
+}
+
 function formatCount(value) {
   const number = Number(value || 0);
   return number ? new Intl.NumberFormat("zh-CN").format(number) : "0";
@@ -1934,6 +1947,7 @@ function renderStatus(status) {
   };
   activeTransport = status.transport === "app-server" ? "app-server" : "terminal";
   activeAccessMode = status.access === "full" ? "full" : "safe";
+  syncAppSessionToolbar();
   activeSessionReady = status.ready !== false;
   activeStartupQueueSupported = Boolean(status.capabilities?.startupQueue);
   document.body.classList.toggle("app-server-session", activeTransport === "app-server");
@@ -2024,6 +2038,7 @@ function setConnectedState(state) {
   keyEscButton.disabled = !connected;
   sendStatusButton.disabled = !connected;
   sendPermissionsButton.disabled = !connected;
+  appSessionPermissionsButton.disabled = activeTransport !== "app-server" || !connected;
   killSessionButton.disabled = !["connected", "starting", "loading"].includes(state);
 }
 

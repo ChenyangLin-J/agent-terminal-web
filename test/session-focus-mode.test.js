@@ -9,7 +9,7 @@ test("session focus mode keeps views and page controls while hiding surrounding 
     readFile(new URL("../public/session-focus-mode.css", import.meta.url), "utf8"),
   ]);
 
-  assert.match(html, /session-focus-mode\.css\?v=20260716-app-chrome-2/);
+  assert.match(html, /session-focus-mode\.css\?v=20260720-app-toolbar-1/);
   assert.match(html, /session-focus-mode\.js\?v=20260716-app-chrome-1/);
   assert.match(script, /viewTabs\.append\(toggle\)/);
   assert.match(script, /toggle\.textContent = "专注"/);
@@ -23,6 +23,7 @@ test("session focus mode keeps views and page controls while hiding surrounding 
   assert.match(script, /controller\.cancel\(\)/);
   assert.match(script, /document\.body\.classList\.contains\("app-server-session"\)/);
   assert.match(styles, /session-focus-mode \.session-header,[\s\S]*session-focus-mode \.composer[\s\S]*display: none/);
+  assert.match(styles, /session-focus-mode \.app-session-tools[\s\S]*display: none/);
   assert.match(styles, /session-focus-mode \.quick-actions/);
   assert.match(styles, /session-focus-mode \.focus-voice-dock/);
   assert.match(styles, /touch-action: pan-y pinch-zoom/);

@@ -112,6 +112,7 @@ const APP_COMMANDS = [
   { name: "/plugins", description: "查看 Plugin 安装状态" },
   { name: "/hooks", description: "查看当前工作区 Hooks" },
 ];
+const appMarkdownRenderer = globalThis.AgentMarkdown?.createRenderer() || null;
 
 let terminal = null;
 let fitAddon = null;
@@ -2899,7 +2900,11 @@ function createAppTranscriptCard(item) {
   if (item.text) {
     const copy = document.createElement(item.type === "command" ? "code" : "div");
     copy.className = item.type === "command" ? "app-transcript-command-text" : "app-transcript-copy";
-    copy.textContent = item.text;
+    if (["assistant", "user"].includes(item.type) && globalThis.AgentMarkdown) {
+      globalThis.AgentMarkdown.render(copy, item.text, appMarkdownRenderer);
+    } else {
+      copy.textContent = item.text;
+    }
     card.append(copy);
   }
 

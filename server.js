@@ -91,6 +91,7 @@ app.use(
   "/vendor/xterm-fit",
   express.static(path.join(__dirname, "node_modules", "@xterm", "addon-fit", "lib")),
 );
+app.use("/vendor/markdown-it", express.static(path.join(__dirname, "node_modules", "markdown-it", "dist")));
 
 app.post("/internal/codex-notify", async (req, res) => {
   if (!isDirectLoopbackRequest(req)) {

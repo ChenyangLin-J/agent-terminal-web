@@ -10,7 +10,7 @@ test("App Server final answers render safe Markdown links", async (t) => {
     readFile(new URL("../public/app.js", import.meta.url), "utf8"),
     readFile(new URL("../server.js", import.meta.url), "utf8"),
   ]);
-  assert.match(pageSource, /markdown-it\.min\.js\?v=14\.3\.0[\s\S]*app-markdown\.js\?v=20260721-local-links-1[\s\S]*app\.js\?v=20260721-session-access-1/);
+  assert.match(pageSource, /markdown-it\.min\.js\?v=14\.3\.0[\s\S]*app-markdown\.js\?v=20260721-local-files-1[\s\S]*app\.js\?v=20260721-session-access-1/);
   assert.match(serverSource, /app\.use\("\/vendor\/markdown-it"/);
   assert.match(appSource, /\["assistant", "user"\]\.includes\(item\.type\)/);
 
@@ -28,7 +28,7 @@ test("App Server final answers render safe Markdown links", async (t) => {
     const renderer = globalThis.AgentMarkdown.createRenderer();
     globalThis.AgentMarkdown.render(
       output,
-      "主站：[https://tibetan.chenyanglin.com/](https://tibetan.chenyanglin.com/)\n\n校准：https://tibetan.chenyanglin.com/superscript-audio-review.html\n\n任务：[Work/Tasks.md](/home/ubuntu/workspace/obsidian/MainVault/Work/Tasks.md)\n\n<script>alert(1)</script>",
+      "主站：[https://tibetan.chenyanglin.com/](https://tibetan.chenyanglin.com/)\n\n校准：https://tibetan.chenyanglin.com/superscript-audio-review.html\n\n任务：[Work/Tasks.md](/home/ubuntu/workspace/obsidian/MainVault/Work/Tasks.md)\n\n代码：[server.js](/home/ubuntu/workspace/agent-terminal-web/server.js:196)\n\n<script>alert(1)</script>",
       renderer,
     );
     return {
@@ -37,10 +37,10 @@ test("App Server final answers render safe Markdown links", async (t) => {
         target: link.target,
         rel: link.rel,
       })),
-      localLink: {
-        href: output.querySelectorAll("a")[2].getAttribute("href"),
-        title: output.querySelectorAll("a")[2].title,
-      },
+      localLinks: [...output.querySelectorAll("a")].slice(2).map((link) => ({
+        href: link.getAttribute("href"),
+        title: link.title,
+      })),
       scripts: output.querySelectorAll("script").length,
       text: output.textContent,
     };
@@ -58,10 +58,16 @@ test("App Server final answers render safe Markdown links", async (t) => {
       rel: "noopener noreferrer",
     },
   ]);
-  assert.deepEqual(rendered.localLink, {
-    href: "/open/local?path=%2Fhome%2Fubuntu%2Fworkspace%2Fobsidian%2FMainVault%2FWork%2FTasks.md",
-    title: "在 Garden 打开",
-  });
+  assert.deepEqual(rendered.localLinks, [
+    {
+      href: "/open/local?path=%2Fhome%2Fubuntu%2Fworkspace%2Fobsidian%2FMainVault%2FWork%2FTasks.md",
+      title: "打开文件",
+    },
+    {
+      href: "/open/local?path=%2Fhome%2Fubuntu%2Fworkspace%2Fagent-terminal-web%2Fserver.js%3A196#L196",
+      title: "打开文件",
+    },
+  ]);
   assert.equal(rendered.scripts, 0);
   assert.match(rendered.text, /<script>alert\(1\)<\/script>/);
 });

@@ -5,9 +5,9 @@
     const defaultLinkOpen = renderer.renderer.rules.link_open;
     renderer.renderer.rules.link_open = (tokens, index, options, environment, self) => {
       const href = tokens[index].attrGet("href");
-      if (isVaultLocalHref(href)) {
-        tokens[index].attrSet("href", `/open/local?path=${encodeURIComponent(href)}`);
-        tokens[index].attrSet("title", "在 Garden 打开");
+      if (isWorkspaceLocalHref(href)) {
+        tokens[index].attrSet("href", localOpenHref(href));
+        tokens[index].attrSet("title", "打开文件");
       }
       tokens[index].attrSet("target", "_blank");
       tokens[index].attrSet("rel", "noopener noreferrer");
@@ -18,12 +18,26 @@
     return renderer;
   }
 
-  function isVaultLocalHref(href) {
+  function isWorkspaceLocalHref(href) {
     if (!href) return false;
     try {
-      return decodeURIComponent(href).startsWith("/home/ubuntu/workspace/obsidian/MainVault/");
+      return decodeURIComponent(href).startsWith("/home/ubuntu/workspace/");
     } catch {
-      return href.startsWith("/home/ubuntu/workspace/obsidian/MainVault/");
+      return href.startsWith("/home/ubuntu/workspace/");
+    }
+  }
+
+  function localOpenHref(href) {
+    const decoded = decodeLocalHref(href);
+    const line = decoded.match(/:(\d+)(?::\d+)?(?:#.*)?$/)?.[1];
+    return `/open/local?path=${encodeURIComponent(href)}${line ? `#L${line}` : ""}`;
+  }
+
+  function decodeLocalHref(href) {
+    try {
+      return decodeURIComponent(href);
+    } catch {
+      return href;
     }
   }
 

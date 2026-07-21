@@ -11,7 +11,16 @@ import express from "express";
 import { WebSocketServer } from "ws";
 import { CodexAppServerClient } from "./lib/codex-app-server-client.js";
 import { readCodexMemoryStatus, readCodexMemoryView } from "./lib/codex-memories.js";
-import { gardenLinkForLocalMarkdown } from "./lib/local-file-link.js";
+import {
+  gardenLinkForLocalMarkdown,
+  isPathInside,
+  workspaceFileForLocalHref,
+} from "./lib/local-file-link.js";
+import {
+  localFilePresentation,
+  renderSandboxFilePage,
+  renderTextFilePage,
+} from "./lib/local-file-view.js";
 import {
   latestPersistedSessionsByCodexId,
   normalizeAccessMode,
@@ -61,6 +70,8 @@ const OBSIDIAN_VAULT_ROOT = path.resolve(
 const GARDEN_BASE_URL = process.env.GARDEN_BASE_URL || "https://garden.chenyanglin.com";
 const MAX_UPLOAD_FILES = Number(process.env.MAX_UPLOAD_FILES || 5);
 const MAX_UPLOAD_FILE_BYTES = Number(process.env.MAX_UPLOAD_FILE_BYTES || 50 * 1024 * 1024);
+const MAX_LOCAL_TEXT_BYTES = 2 * 1024 * 1024;
+const MAX_LOCAL_PREVIEW_BYTES = 50 * 1024 * 1024;
 const MAX_RAW_BUFFER = 1024 * 1024;
 const MAX_FULL_REPLAY_BYTES = 32 * 1024;
 const MAX_TURN_REQUIREMENTS = 20;
@@ -199,20 +210,62 @@ app.get("/open/local", async (req, res) => {
     res.redirect(loginUrlForNext(req, next));
     return;
   }
+  res.set("X-Content-Type-Options", "nosniff");
 
-  const link = gardenLinkForLocalMarkdown(req.query.path, {
-    vaultRoot: OBSIDIAN_VAULT_ROOT,
-    gardenBaseUrl: GARDEN_BASE_URL,
-  });
-  if (!link) {
+  const requested = workspaceFileForLocalHref(req.query.path, WORKSPACE_ROOT);
+  if (!requested) {
     res.status(404).send("This local file cannot be opened in Agent.");
     return;
   }
 
   try {
-    const stat = await fs.stat(link.filePath);
+    const [realWorkspaceRoot, realFilePath] = await Promise.all([
+      fs.realpath(WORKSPACE_ROOT),
+      fs.realpath(requested.filePath),
+    ]);
+    if (!isPathInside(realWorkspaceRoot, realFilePath)) throw new Error("File is outside the workspace");
+    const stat = await fs.stat(realFilePath);
     if (!stat.isFile()) throw new Error("Not a file");
-    res.redirect(link.href);
+
+    const name = path.basename(requested.filePath);
+    if (req.query.download === "1") {
+      res.download(realFilePath, name);
+      return;
+    }
+
+    const gardenHref = `${requested.filePath}${requested.fragment ? `#${requested.fragment}` : ""}`;
+    const gardenLink = gardenLinkForLocalMarkdown(gardenHref, {
+      vaultRoot: OBSIDIAN_VAULT_ROOT,
+      gardenBaseUrl: GARDEN_BASE_URL,
+    });
+    if (gardenLink) {
+      res.redirect(gardenLink.href);
+      return;
+    }
+
+    const presentation = localFilePresentation(realFilePath, stat.size, {
+      maxTextBytes: MAX_LOCAL_TEXT_BYTES,
+      maxPreviewBytes: MAX_LOCAL_PREVIEW_BYTES,
+    });
+    if (presentation.kind === "inline") {
+      res.type(presentation.mime);
+      res.sendFile(realFilePath);
+      return;
+    }
+    if (presentation.kind === "download") {
+      res.download(realFilePath, name);
+      return;
+    }
+
+    const source = await fs.readFile(realFilePath, "utf8");
+    const relativePath = path.relative(realWorkspaceRoot, realFilePath);
+    const downloadHref = `/open/local?path=${encodeURIComponent(requested.filePath)}&download=1`;
+    const page =
+      presentation.kind === "sandbox"
+        ? renderSandboxFilePage({ name, relativePath, source, downloadHref })
+        : renderTextFilePage({ name, relativePath, text: source, line: requested.line, downloadHref });
+    res.set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-src 'self'; base-uri 'none'");
+    res.type("html").send(page);
   } catch {
     res.status(404).send("This local file no longer exists.");
   }

@@ -8,6 +8,11 @@ import {
   readCodexMemoryStatus,
   readCodexMemoryView,
 } from "../lib/codex-memories.js";
+import {
+  deletePersonalMemoryEntry,
+  readPersonalMemoryView,
+  updatePersonalMemoryEntry,
+} from "../lib/personal-memories.js";
 
 test("Codex memory status reflects config and generated files", async (t) => {
   const codexHome = await temporaryCodexHome(t);
@@ -78,6 +83,8 @@ test("Agent Web exposes memory review views and authenticated APIs", async () =>
   ]);
   assert.match(server, /app\.use\("\/api", requireAuth\)[\s\S]*app\.get\("\/api\/memories\/status"/);
   assert.match(server, /app\.get\("\/api\/memories"/);
+  assert.match(server, /app\.patch\("\/api\/memories\/:id"/);
+  assert.match(server, /app\.delete\("\/api\/memories\/:id"/);
   assert.match(page, /id="open-memories"/);
   assert.match(page, /id="app-session-memories"/);
   assert.doesNotMatch(page, /id="open-memories" class="hidden"/);
@@ -87,9 +94,62 @@ test("Agent Web exposes memory review views and authenticated APIs", async () =>
   assert.match(page, /data-memory-view="sources"/);
   assert.match(page, /agent-memories\.js\?v=/);
   assert.match(await fs.readFile(new URL("../public/agent-memories.js", import.meta.url), "utf8"), /查看已抽取内容/);
+  assert.match(await fs.readFile(new URL("../public/agent-memories.js", import.meta.url), "utf8"), /renderPersonalEntries/);
   assert.match(app, /name: "\/memories"/);
   assert.match(app, /AgentMemories\?\.open/);
   assert.match(styles, /\.memory-dialog/);
+});
+
+test("personal memories remain pending until confirmed and can be edited or deleted", async (t) => {
+  const codexHome = await temporaryCodexHome(t);
+  await fs.mkdir(path.join(codexHome, "personal-memories"), { recursive: true });
+  await fs.writeFile(
+    path.join(codexHome, "personal-memories", "store.json"),
+    `${JSON.stringify({
+      version: 1,
+      entries: [
+        {
+          id: "global-answer-style",
+          status: "pending",
+          scope: "global",
+          category: "交流偏好",
+          text: "给具体、有依据的回答。",
+          confidence: "high",
+          evidence: [{ threadId: "thread-1", title: "Memory", quote: "具体、实用、有依据" }],
+        },
+        {
+          id: "project-tibetan-audio",
+          status: "confirmed",
+          scope: "project",
+          project: "tibetan-learning-tool",
+          category: "项目决策",
+          text: "使用五度标记法。",
+        },
+      ],
+      sources: [{ threadId: "thread-1", title: "Memory", decision: "included", archived: false }],
+    })}\n`,
+  );
+
+  const pending = await readPersonalMemoryView(codexHome, { view: "pending" });
+  assert.deepEqual(pending.entries.map((entry) => entry.id), ["global-answer-style"]);
+  assert.equal(pending.counts.pending, 1);
+
+  const detail = await readPersonalMemoryView(codexHome, {
+    view: "detail",
+    project: "/home/ubuntu/workspace/tibetan-learning-tool",
+  });
+  assert.deepEqual(detail.entries.map((entry) => entry.id), ["project-tibetan-audio"]);
+
+  await updatePersonalMemoryEntry(codexHome, "global-answer-style", {
+    status: "confirmed",
+    text: "给具体、实用且有依据的回答。",
+  });
+  const overview = await readPersonalMemoryView(codexHome, { view: "overview" });
+  assert.equal(overview.entries[0].text, "给具体、实用且有依据的回答。");
+
+  await deletePersonalMemoryEntry(codexHome, "global-answer-style");
+  const afterDelete = await readPersonalMemoryView(codexHome, { view: "overview" });
+  assert.equal(afterDelete.entries.length, 0);
 });
 
 async function temporaryCodexHome(t) {

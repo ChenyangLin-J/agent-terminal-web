@@ -12,6 +12,11 @@ import { WebSocketServer } from "ws";
 import { CodexAppServerClient } from "./lib/codex-app-server-client.js";
 import { readCodexMemoryStatus, readCodexMemoryView } from "./lib/codex-memories.js";
 import {
+  deletePersonalMemoryEntry,
+  readPersonalMemoryView,
+  updatePersonalMemoryEntry,
+} from "./lib/personal-memories.js";
+import {
   gardenLinkForLocalMarkdown,
   isPathInside,
   workspaceFileForLocalHref,
@@ -288,7 +293,11 @@ app.get("/api/projects", async (_req, res) => {
 
 app.get("/api/memories/status", async (_req, res) => {
   try {
-    res.json(await readCodexMemoryStatus(CODEX_HOME));
+    const [status, personal] = await Promise.all([
+      readCodexMemoryStatus(CODEX_HOME),
+      readPersonalMemoryView(CODEX_HOME, { view: "overview" }),
+    ]);
+    res.json({ ...status, personal: { counts: personal.counts, importScope: personal.importScope } });
   } catch (error) {
     console.error(`Failed to read Codex memory status: ${error.message}`);
     res.status(500).json({ error: "Codex memory status is unavailable." });
@@ -297,16 +306,39 @@ app.get("/api/memories/status", async (_req, res) => {
 
 app.get("/api/memories", async (req, res) => {
   try {
-    res.json(
-      await readCodexMemoryView(CODEX_HOME, {
+    const options = {
         view: req.query.view,
         project: req.query.project,
         source: req.query.source,
-      }),
-    );
+    };
+    const [native, personal] = await Promise.all([
+      readCodexMemoryView(CODEX_HOME, options),
+      readPersonalMemoryView(CODEX_HOME, options),
+    ]);
+    res.json({ ...native, personal });
   } catch (error) {
     console.error(`Failed to read Codex memories: ${error.message}`);
     res.status(500).json({ error: "Codex memories are unavailable." });
+  }
+});
+
+app.patch("/api/memories/:id", async (req, res) => {
+  try {
+    const entry = await updatePersonalMemoryEntry(CODEX_HOME, req.params.id, req.body || {});
+    res.json({ entry });
+  } catch (error) {
+    console.error(`Failed to update personal memory: ${error.message}`);
+    res.status(error.statusCode || 500).json({ error: error.message || "记忆修改失败。" });
+  }
+});
+
+app.delete("/api/memories/:id", async (req, res) => {
+  try {
+    const entry = await deletePersonalMemoryEntry(CODEX_HOME, req.params.id);
+    res.json({ entry });
+  } catch (error) {
+    console.error(`Failed to delete personal memory: ${error.message}`);
+    res.status(error.statusCode || 500).json({ error: error.message || "记忆删除失败。" });
   }
 });
 

@@ -50,7 +50,7 @@
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "读取失败");
       if (sequence !== requestSequence) return;
-      renderStatus(data.status || {});
+      renderStatus({ ...(data.status || {}), personal: data.personal });
       if (activeView === "sources") renderSources(data);
       else renderDocument(data);
     } catch (error) {
@@ -64,9 +64,16 @@
   }
 
   function renderStatus(status) {
-    const state = !status.enabled ? "未启用" : status.ready ? "已生成" : "后台整理中";
+    const pendingCount = Number(status.personal?.counts?.pending || 0);
+    const state = pendingCount
+      ? `待确认 ${pendingCount}`
+      : !status.enabled
+        ? "未启用"
+        : status.ready
+          ? "已生成"
+          : "后台整理中";
     statusElement.textContent = state;
-    statusElement.dataset.state = !status.enabled ? "off" : status.ready ? "ready" : "working";
+    statusElement.dataset.state = pendingCount ? "working" : !status.enabled ? "off" : status.ready ? "ready" : "working";
     statusElement.title = status.updatedAt
       ? `最近更新：${formatDate(status.updatedAt)}`
       : "完成并闲置一段时间的会话会被自动整理";
@@ -90,7 +97,9 @@
     const memoryDocument = data.document || {};
     const fragment = documentFragment();
     fragment.append(viewNote(activeView, data.status || {}, memoryDocument));
-    if (!memoryDocument.content) {
+    const personalEntries = data.personal?.entries || [];
+    if (personalEntries.length) fragment.append(renderPersonalEntries(personalEntries));
+    if (!memoryDocument.content && !personalEntries.length) {
       const pendingAvailable = activeView === "overview" && data.status?.documents?.pending?.available;
       fragment.append(
         message(
@@ -114,7 +123,12 @@
         });
         fragment.append(review);
       }
-    } else {
+    } else if (memoryDocument.content) {
+      if (personalEntries.length) {
+        const heading = documentElement("h3", "memory-section-title");
+        heading.textContent = activeView === "pending" ? "Codex 原生候选" : "Codex 原生记忆";
+        fragment.append(heading);
+      }
       const article = document.createElement("article");
       article.className = "memory-document app-transcript-markdown";
       if (global.AgentMarkdown) global.AgentMarkdown.render(article, memoryDocument.content, renderer);
@@ -127,6 +141,8 @@
   function renderSources(data) {
     const fragment = documentFragment();
     fragment.append(viewNote("sources", data.status || {}, {}));
+    const personalSources = data.personal?.sources || [];
+    if (personalSources.length) fragment.append(renderImportSources(personalSources, data.personal?.importScope));
     if (data.selected?.content) {
       const back = document.createElement("button");
       back.type = "button";
@@ -142,6 +158,8 @@
       else article.textContent = data.selected.content;
       fragment.append(back, heading, article);
     } else if (data.sources?.length) {
+      const heading = documentElement("h3", "memory-section-title");
+      heading.textContent = "Codex 原生会话摘要";
       const list = document.createElement("div");
       list.className = "memory-source-list";
       for (const source of data.sources) {
@@ -155,11 +173,112 @@
         button.addEventListener("click", () => void loadView(source.name));
         list.append(button);
       }
-      fragment.append(list);
-    } else {
+      fragment.append(heading, list);
+    } else if (!personalSources.length) {
       fragment.append(message("还没有会话摘要来源。", "empty"));
     }
     contentElement.replaceChildren(fragment);
+  }
+
+  function renderPersonalEntries(entries) {
+    const section = documentElement("section", "memory-entry-list");
+    for (const entry of entries) {
+      const card = documentElement("article", "memory-entry-card");
+      const header = documentElement("header", "memory-entry-meta");
+      const category = documentElement("strong", "memory-entry-category");
+      category.textContent = entry.category || "其他";
+      const scope = documentElement("span", "memory-entry-scope");
+      scope.textContent = entry.scope === "project" ? `项目 · ${entry.project}` : "全局";
+      header.append(category, scope);
+      if (entry.sensitive) {
+        const sensitive = documentElement("span", "memory-entry-sensitive");
+        sensitive.textContent = "敏感信息";
+        header.append(sensitive);
+      }
+      const content = documentElement("p", "memory-entry-text");
+      content.textContent = entry.text;
+      const evidence = documentElement("details", "memory-entry-evidence");
+      const evidenceTitle = document.createElement("summary");
+      evidenceTitle.textContent = `来源 ${entry.evidence?.length || 0} · ${confidenceLabel(entry.confidence)}`;
+      evidence.append(evidenceTitle);
+      for (const item of entry.evidence || []) {
+        const row = documentElement("p", "memory-entry-source");
+        row.textContent = item.quote ? `${item.title}：${item.quote}` : item.title;
+        evidence.append(row);
+      }
+      const actions = documentElement("div", "memory-entry-actions");
+      if (entry.status === "pending") actions.append(actionButton("确认", "primary", () => mutateEntry(entry.id, { status: "confirmed" })));
+      else actions.append(actionButton("退回待检查", "secondary", () => mutateEntry(entry.id, { status: "pending" })));
+      actions.append(actionButton("修改", "secondary", () => editEntry(entry)));
+      actions.append(actionButton("删除", "danger", () => removeEntry(entry)));
+      card.append(header, content, evidence, actions);
+      section.append(card);
+    }
+    return section;
+  }
+
+  function renderImportSources(sources, importScope) {
+    const section = documentElement("section", "memory-import-sources");
+    const heading = documentElement("h3", "memory-section-title");
+    const included = sources.filter((source) => source.decision === "included").length;
+    const excluded = sources.length - included;
+    heading.textContent = `本轮未归档 Session：读取 ${included} · 排除 ${excluded}`;
+    const note = documentElement("p", "memory-import-note");
+    note.textContent = importScope?.note || "这批来源只用于生成候选记忆。";
+    const list = documentElement("div", "memory-source-list");
+    for (const source of sources) {
+      const row = documentElement("div", "memory-import-source");
+      const name = document.createElement("strong");
+      name.textContent = source.title;
+      const meta = document.createElement("span");
+      meta.textContent = `${source.decision === "included" ? "已读取" : "已排除"}${source.reason ? ` · ${source.reason}` : ""}`;
+      row.append(name, meta);
+      list.append(row);
+    }
+    section.append(heading, note, list);
+    return section;
+  }
+
+  function actionButton(label, tone, handler) {
+    const button = documentElement("button", `memory-entry-action memory-entry-action-${tone}`);
+    button.type = "button";
+    button.textContent = label;
+    button.addEventListener("click", handler);
+    return button;
+  }
+
+  async function editEntry(entry) {
+    const text = global.prompt("修改这条记忆：", entry.text);
+    if (text === null || text.trim() === entry.text) return;
+    if (!text.trim()) {
+      global.alert("记忆内容不能为空；如果不需要，请使用删除。");
+      return;
+    }
+    await mutateEntry(entry.id, { text: text.trim() });
+  }
+
+  async function removeEntry(entry) {
+    if (!global.confirm(`确定删除这条记忆吗？\n\n${entry.text}`)) return;
+    await mutateEntry(entry.id, null, "DELETE");
+  }
+
+  async function mutateEntry(id, changes, method = "PATCH") {
+    try {
+      const response = await fetch(`/api/memories/${encodeURIComponent(id)}`, {
+        method,
+        headers: method === "PATCH" ? { "Content-Type": "application/json" } : undefined,
+        body: method === "PATCH" ? JSON.stringify(changes) : undefined,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "修改失败");
+      await loadView();
+    } catch (error) {
+      global.alert(error.message || "记忆修改失败。");
+    }
+  }
+
+  function confidenceLabel(value) {
+    return { high: "高置信", medium: "待核对", low: "低置信" }[value] || "待核对";
   }
 
   function viewNote(view, status, document) {
@@ -169,8 +288,8 @@
       detail: document.filtered
         ? "只显示能匹配当前项目名称或路径的工程与过程记忆；未匹配内容不会混入。"
         : "选择具体项目后，会按项目名称和路径筛选工程记忆。",
-      pending: "这是 Codex 自动抽取的原始记忆，适合早期检查误判；它不是逐条审批队列，也不等于每一条都已生效。",
-      sources: `会话摘要是记忆的证据层，目前共有 ${status.sourceCount || 0} 份。`,
+      pending: "历史补录先进入逐条审核；只有点击“确认”后，才会进入正式记忆。下方的 Codex 原生候选仍是只读参考。",
+      sources: `这里列出本轮历史补录范围，以及 Codex 原生生成的 ${status.sourceCount || 0} 份摘要。`,
     };
     note.textContent = copy[view] || status.scope || "";
     return note;

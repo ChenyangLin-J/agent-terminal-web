@@ -169,6 +169,133 @@
   background: #263765;
 }
 
+.memory-section-title {
+  margin: 18px 0 9px;
+  color: #cbd5e1;
+  font-size: 13px;
+}
+
+.memory-entry-list {
+  display: grid;
+  gap: 10px;
+}
+
+.memory-entry-card {
+  padding: 12px;
+  border: 1px solid #344054;
+  border-radius: 12px;
+  background: #111822;
+}
+
+.memory-entry-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+  font-size: 11px;
+}
+
+.memory-entry-category {
+  color: #dce5f4;
+  font-size: 12px;
+}
+
+.memory-entry-scope,
+.memory-entry-sensitive {
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #9fb0c9;
+  background: #202b3a;
+}
+
+.memory-entry-sensitive {
+  color: #f3c1c8;
+  background: #45252d;
+}
+
+.memory-entry-text {
+  margin: 0;
+  color: #e1e7f0;
+  font-size: 14px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.memory-entry-evidence {
+  margin-top: 9px;
+  color: #8f9cb0;
+  font-size: 11px;
+}
+
+.memory-entry-evidence summary {
+  cursor: pointer;
+}
+
+.memory-entry-source {
+  margin: 6px 0 0;
+  padding-left: 9px;
+  border-left: 2px solid #344054;
+  line-height: 1.5;
+}
+
+.memory-entry-actions {
+  display: flex;
+  gap: 7px;
+  margin-top: 11px;
+}
+
+.memory-entry-action {
+  width: auto;
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.memory-entry-action-primary {
+  border-color: #5871c8;
+  color: #f2f5ff;
+  background: #304681;
+}
+
+.memory-entry-action-danger {
+  margin-left: auto;
+  color: #eeb1ba;
+}
+
+.memory-import-note {
+  margin: -2px 0 9px;
+  color: #8f9cb0;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.memory-import-source {
+  display: grid;
+  min-height: 48px;
+  padding: 9px 11px;
+  border: 1px solid #303b4d;
+  border-radius: 9px;
+  background: #111822;
+}
+
+.memory-import-source strong,
+.memory-import-source span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-import-source strong {
+  color: #cdd6e4;
+  font-size: 12px;
+}
+
+.memory-import-source span {
+  margin-top: 3px;
+  color: #8290a5;
+  font-size: 11px;
+}
+
 .memory-source-list {
   display: grid;
   gap: 8px;

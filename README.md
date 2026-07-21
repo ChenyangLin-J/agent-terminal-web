@@ -41,12 +41,12 @@ The production route is reverse proxied by Caddy. Authentication is delegated to
 
 ## Memory
 
-Agent Web 使用 Codex 原生 Memories 作为自动提炼层，不另起向量数据库或知识图谱。入口包含四个视图：
+Agent Web 使用 Codex 原生 Memories 作为自动提炼层，并增加一个轻量的本地审核层；不使用向量数据库或知识图谱。入口包含四个视图：
 
 - `总览`：跨工作与生活的稳定背景、偏好和近期主题，接近 ChatGPT 的 Overview。
 - `当前项目`：按当前项目名称和路径筛选工程、过程与纠错记忆。
-- `待检查`：显示 Codex 自动抽取的原始记忆，便于早期发现误判；它不是逐条审批队列。
-- `来源`：查看记忆对应的会话摘要证据。
+- `待检查`：历史补录先变成逐条候选，可确认、修改或删除；未确认内容不会进入正式记忆。页面下方仍保留 Codex 原生候选作为只读参考。
+- `来源`：查看本轮扫描、排除的 Session，以及 Codex 原生会话摘要证据。
 
 App Server 的回答如果携带原生 `memoryCitation`，会在回答下显示“参考了 N 条记忆”，可展开查看来源与行号。
 
@@ -55,6 +55,14 @@ App Server 的回答如果携带原生 `memoryCitation`，会在回答下显示�
 ```text
 ~/.codex/memories/
 ```
+
+可审核的个人记忆保存在：
+
+```text
+~/.codex/personal-memories/store.json
+```
+
+这里按 `global` / `project` 和 `pending` / `confirmed` 保存结构化条目、置信度和来源 Session。它是用户可控的数据层，不直接改写 Codex 自动生成的文件。
 
 Memories 目前仍是实验功能。自动记忆适合召回背景与经验；必须执行的工程规则继续写在 `AGENTS.md`、Skill 或项目文档中。任务、截止时间和主动提醒继续由 Home 管理，不作为长期事实混进记忆。
 

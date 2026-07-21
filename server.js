@@ -3788,7 +3788,7 @@ async function listRecentAgentSessions(limit = 40) {
     .map((session) => {
       const liveSession = liveByCodexId.get(session.id) || null;
       const updatedAt = latestTimestamp(session.updatedAt, liveSession?.lastActivityAt);
-      const title = session.title || "Untitled session";
+      const title = cleanCustomTitle(liveSession?.title) || session.title || "Untitled session";
       const project = liveSession?.project || session.project || ".";
       const persisted = persistedByCodexId.get(session.id) || null;
       const preview = previews[session.id] || null;
@@ -4021,13 +4021,27 @@ function textFromContent(content) {
 }
 
 function cleanTitle(value) {
-  const text = String(value || "")
+  let text = String(value || "")
     .replace(/\s+/g, " ")
     .trim();
   if (!text) return "";
-  if (text.startsWith("# AGENTS.md instructions")) return "";
-  if (text.startsWith("<environment_context>")) return "";
+  const runtimeContextPrefixes = [
+    "# AGENTS.md instructions",
+    "<environment_context>",
+    "<permissions instructions>",
+    "<skills_instructions>",
+    "<multi_agent_mode>",
+    "<apps_instructions>",
+    "<plugins_instructions>",
+    "<recommended_plugins>",
+    "<collaboration_mode>",
+    "<personal-memory>",
+    "<skill>",
+  ];
+  if (runtimeContextPrefixes.some((prefix) => text.startsWith(prefix))) return "";
   if (text.startsWith("You are Codex,")) return "";
+  text = text.replace(/^\$[a-zA-Z][\w-]*(?:\s+|$)/, "").trim();
+  if (!text) return "";
   if (text.length > 500 && /<daily_monitoring_playbook>|<agent_rules>|<INSTRUCTIONS>/.test(text)) {
     return summarizeLongPrompt(text);
   }

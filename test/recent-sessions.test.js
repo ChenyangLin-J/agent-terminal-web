@@ -14,6 +14,8 @@ test("recent sessions expose resumable links to local Home callers", async (t) =
   const workspaceRoot = path.join(temporaryRoot, "workspace");
   const projectRoot = path.join(workspaceRoot, "personal-site");
   const sessionId = "01900000-0000-7000-8000-000000000001";
+  const generatedSessionId = "01900000-0000-7000-8000-000000000002";
+  const liveSessionId = "01900000-0000-7000-8000-000000000003";
   const sessionFile = path.join(codexHome, "sessions", "2026", "07", "15", `rollout-${sessionId}.jsonl`);
   await fs.mkdir(path.dirname(sessionFile), { recursive: true });
   await fs.mkdir(projectRoot, { recursive: true });
@@ -21,7 +23,58 @@ test("recent sessions expose resumable links to local Home callers", async (t) =
     sessionFile,
     `${JSON.stringify({ payload: { id: sessionId, cwd: projectRoot, timestamp: "2026-07-15T08:00:00.000Z" } })}\n`,
   );
+  for (const [id, prompt] of [
+    [generatedSessionId, "$thinking-partner 讨论一下自动标题"],
+    [liveSessionId, "JSONL 中的旧标题"],
+  ]) {
+    const file = path.join(codexHome, "sessions", "2026", "07", "15", `rollout-${id}.jsonl`);
+    const runtimeContexts = [
+      "# AGENTS.md instructions injected context",
+      "<environment_context> injected context",
+      "<permissions instructions> injected context",
+      "<skills_instructions> injected context",
+      "<multi_agent_mode> injected context",
+      "<apps_instructions> injected context",
+      "<plugins_instructions> injected context",
+      "<recommended_plugins> injected runtime context",
+      "<collaboration_mode> injected context",
+      "<personal-memory> injected context",
+      "<skill> injected context",
+      "You are Codex, injected context",
+    ];
+    await fs.writeFile(
+      file,
+      [
+        JSON.stringify({ payload: { id, cwd: projectRoot, timestamp: "2026-07-15T08:00:00.000Z" } }),
+        ...runtimeContexts.map((text) =>
+          JSON.stringify({
+            type: "response_item",
+            payload: { type: "message", role: "user", content: [{ type: "input_text", text }] },
+          }),
+        ),
+        JSON.stringify({
+          type: "response_item",
+          payload: { type: "message", role: "user", content: [{ type: "input_text", text: prompt }] },
+        }),
+      ].join("\n") + "\n",
+    );
+  }
   await fs.writeFile(path.join(codexHome, "session-titles.json"), `${JSON.stringify({ [sessionId]: "个人网站调整" })}\n`);
+  await fs.writeFile(
+    path.join(codexHome, "agent-web-sessions.json"),
+    `${JSON.stringify({
+      "web-session-live-title": {
+        id: "web-session-live-title",
+        cwd: projectRoot,
+        transport: "app-server",
+        access: "full",
+        sessionId: liveSessionId,
+        title: "Agent 当前展示标题",
+        lastActivityAt: "2026-07-15T10:00:00.000Z",
+        turnState: { active: false },
+      },
+    })}\n`,
+  );
   await fs.writeFile(
     path.join(codexHome, "agent-session-previews.json"),
     `${JSON.stringify({
@@ -60,14 +113,20 @@ test("recent sessions expose resumable links to local Home callers", async (t) =
   assert.equal(response.status, 200);
   const data = await response.json();
 
-  assert.equal(data.sessions.length, 1);
-  assert.equal(data.sessions[0].title, "个人网站调整");
-  assert.equal(data.sessions[0].project, "personal-site");
-  assert.equal(data.sessions[0].live, false);
-  assert.equal(data.sessions[0].id, sessionId);
-  assert.equal(data.sessions[0].webSessionId, "");
-  assert.equal(data.sessions[0].lastResult, "个人网站已经调整完成。");
-  assert.equal(data.sessions[0].lastCompletedAt, "2026-07-15T09:00:00.000Z");
+  assert.equal(data.sessions.length, 3);
+  const custom = data.sessions.find((session) => session.id === sessionId);
+  const generated = data.sessions.find((session) => session.id === generatedSessionId);
+  const live = data.sessions.find((session) => session.id === liveSessionId);
+  assert.equal(custom.title, "个人网站调整");
+  assert.equal(custom.project, "personal-site");
+  assert.equal(custom.live, false);
+  assert.equal(custom.webSessionId, "");
+  assert.equal(custom.lastResult, "个人网站已经调整完成。");
+  assert.equal(custom.lastCompletedAt, "2026-07-15T09:00:00.000Z");
+  assert.equal(generated.title, "讨论一下自动标题");
+  assert.equal(live.title, "Agent 当前展示标题");
+  assert.equal(live.live, true);
+  assert.equal(live.webSessionId, "web-session-live-title");
 
   const proxiedResponse = await fetch(`http://127.0.0.1:${port}/internal/recent-sessions`, {
     headers: { "x-forwarded-for": "127.0.0.1" },

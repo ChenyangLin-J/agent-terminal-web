@@ -36,7 +36,7 @@
       }
     </style>
     <link rel="stylesheet" href="/vendor/xterm-css/xterm.css?v=20260625-5" />
-    <link rel="stylesheet" href="/styles.css?v=20260721-restart-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260721-task-control-1" />
     <link rel="stylesheet" href="/session-focus-mode.css?v=20260720-app-toolbar-1" />
     <link rel="stylesheet" href="/thinking-session.css?v=20260716-1" />
     <link rel="stylesheet" href="/agent-memories.css?v=20260721-2" />
@@ -189,8 +189,12 @@
             aria-live="polite"
             disabled
           >
-            <span>任务状态</span>
-            <strong>连接中</strong>
+            <span class="task-control-caption">当前任务</span>
+            <strong>
+              <i class="task-state-indicator" aria-hidden="true"></i>
+              <span id="app-session-task-state">连接中</span>
+              <span id="app-session-task-stop" class="task-stop-action hidden">停止</span>
+            </strong>
           </button>
           <button id="app-session-permissions" type="button" title="修改当前 Session 的权限">
             <span>权限</span>
@@ -343,7 +347,7 @@
     <script src="/shared/voice-capture-widget.js?v=20260717-recovery-3"></script>
     <script src="/agent-upload.js?v=20260713-progress-1"></script>
     <script src="/agent-voice-input.js?v=20260717-recovery-2"></script>
-    <script src="/app.js?v=20260721-restart-1"></script>
+    <script src="/app.js?v=20260721-task-control-1"></script>
     <script src="/session-focus-mode.js?v=20260716-app-chrome-1"></script>
   </body>
 </html>

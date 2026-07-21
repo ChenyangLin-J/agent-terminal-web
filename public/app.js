@@ -38,6 +38,8 @@ const appSessionPermissionsButton = document.querySelector("#app-session-permiss
 const appSessionPermissionsValue = document.querySelector("#app-session-permissions-value");
 const appSessionMemoriesButton = document.querySelector("#app-session-memories");
 const appSessionTaskControl = document.querySelector("#app-session-task-control");
+const appSessionTaskState = document.querySelector("#app-session-task-state");
+const appSessionTaskStop = document.querySelector("#app-session-task-stop");
 const killSessionButton = document.querySelector("#kill-session");
 const attachFileButton = document.querySelector("#attach-file");
 const voiceInputButton = document.querySelector("#voice-input");
@@ -162,6 +164,7 @@ let latestTurnState = {
   interrupted: false,
   interruptedAt: "",
   turnId: "",
+  lastCompletedTurnId: "",
   lastStoppedTurnId: "",
   requirements: [],
   queuedTurns: [],
@@ -769,6 +772,7 @@ function openSocket(params, options = {}) {
       interrupted: false,
       interruptedAt: "",
       turnId: "",
+      lastCompletedTurnId: "",
       lastStoppedTurnId: "",
       requirements: [],
       queuedTurns: [],
@@ -1559,22 +1563,27 @@ function syncAppSessionToolbar() {
   const taskState = appSessionTaskStateValue();
   appSessionTaskControl.disabled = !canInterrupt;
   appSessionTaskControl.dataset.state = taskState.value;
-  appSessionTaskControl.querySelector("strong").textContent = taskState.label;
-  appSessionTaskControl.title = canInterrupt ? "正在处理，点击终止当前任务" : `当前任务：${taskState.label}`;
+  appSessionTaskState.textContent = taskState.label;
+  appSessionTaskStop.classList.toggle("hidden", !canInterrupt);
+  appSessionTaskControl.title = canInterrupt ? "正在处理，点击停止当前任务" : `当前任务：${taskState.label}`;
   appSessionTaskControl.setAttribute(
     "aria-label",
-    canInterrupt ? "任务处理中，点击终止当前任务" : `当前任务：${taskState.label}`,
+    canInterrupt ? "当前任务正在处理，点击停止" : `当前任务：${taskState.label}`,
   );
 }
 
 function appSessionTaskStateValue() {
   if (!activeSessionReady) return { value: "connecting", label: "连接中" };
   if (latestTurnState.interrupted) return { value: "interrupted", label: "已中断" };
-  if (latestTurnState.stopping || interruptRequestPending) return { value: "stopping", label: "终止中" };
-  if (latestTurnState.active) {
-    return { value: "working", label: activeTurnInterruptSupported ? "处理中 · 终止" : "处理中" };
+  if (latestTurnState.stopping || interruptRequestPending) return { value: "stopping", label: "正在停止" };
+  if (latestTurnState.active) return { value: "working", label: "正在处理" };
+  if (
+    latestTurnState.lastStoppedTurnId &&
+    latestTurnState.lastStoppedTurnId === latestTurnState.lastCompletedTurnId
+  ) {
+    return { value: "stopped", label: "已停止" };
   }
-  return { value: "idle", label: "空闲" };
+  return { value: "idle", label: "当前无任务" };
 }
 
 function interruptCurrentTurn() {
@@ -2140,6 +2149,7 @@ function renderTurnState(value = {}) {
     interruptedAt: String(value.interruptedAt || ""),
     stopping: Boolean(value.stopping),
     turnId: String(value.turnId || ""),
+    lastCompletedTurnId: String(value.lastCompletedTurnId || ""),
     lastStoppedTurnId: String(value.lastStoppedTurnId || ""),
     requirements: Array.isArray(value.requirements) ? value.requirements : [],
     queuedTurns: Array.isArray(value.queuedTurns) ? value.queuedTurns : [],

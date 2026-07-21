@@ -37,6 +37,8 @@ test("App Server exposes slash commands and structured Skill mentions", async ()
   assert.match(page, /id="app-session-tools"/);
   assert.match(page, /id="app-session-permissions"/);
   assert.match(page, /id="app-session-task-control"/);
+  assert.match(page, /id="app-session-task-state">连接中/);
+  assert.match(page, /id="app-session-task-stop" class="task-stop-action hidden">停止/);
   assert.match(app, /const APP_COMMANDS = \[/);
   for (const command of [
     "/status",
@@ -65,7 +67,10 @@ test("App Server exposes slash commands and structured Skill mentions", async ()
   assert.match(app, /appSessionPermissionsButton\.addEventListener\("click", \(\) => runAppCommand\("\/permissions"\)\)/);
   assert.match(app, /appSessionTaskControl\.addEventListener\("click", interruptCurrentTurn\)/);
   assert.match(app, /function appSessionTaskStateValue\(\)/);
-  assert.match(app, /label: activeTurnInterruptSupported \? "处理中 · 终止" : "处理中"/);
+  assert.match(app, /return \{ value: "working", label: "正在处理" \}/);
+  assert.match(app, /return \{ value: "stopped", label: "已停止" \}/);
+  assert.match(app, /return \{ value: "idle", label: "当前无任务" \}/);
+  assert.match(app, /appSessionTaskStop\.classList\.toggle\("hidden", !canInterrupt\)/);
   assert.match(app, /activeTurnInterruptSupported = Boolean\(status\.capabilities\?\.interruptTurn\)/);
   assert.match(app, /send\(\{ type: "interrupt-turn" \}\)/);
   assert.match(server, /interruptTurn: session\.transport === APP_SERVER_TRANSPORT/);

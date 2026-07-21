@@ -1362,13 +1362,24 @@ input {
   background: #151a23;
 }
 
-.app-session-tools button span {
+.app-session-tools button > span {
   color: #9ca6b8;
 }
 
 .app-session-tools button strong {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
   color: #eef2f8;
   font-size: 13px;
+}
+
+.task-state-indicator {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: #737c8c;
 }
 
 .app-session-task-control[data-state="working"] {
@@ -1380,15 +1391,37 @@ input {
   color: #82d9b7;
 }
 
+.app-session-task-control[data-state="working"] .task-state-indicator {
+  background: #62d5a8;
+  box-shadow: 0 0 0 3px rgb(98 213 168 / 14%);
+}
+
+.app-session-task-control .task-stop-action {
+  margin-left: 2px;
+  padding-left: 8px;
+  border-left: 1px solid #5d3941;
+  color: #ffb4bf;
+  font-weight: 700;
+}
+
 .app-session-task-control[data-state="stopping"],
-.app-session-task-control[data-state="interrupted"] {
+.app-session-task-control[data-state="stopped"] {
   border-color: #6c4d32;
   background: #21170d;
 }
 
 .app-session-task-control[data-state="stopping"] strong,
-.app-session-task-control[data-state="interrupted"] strong {
+.app-session-task-control[data-state="stopped"] strong {
   color: #efbd79;
+}
+
+.app-session-task-control[data-state="interrupted"] {
+  border-color: #713842;
+  background: #281419;
+}
+
+.app-session-task-control[data-state="interrupted"] strong {
+  color: #ffb4bf;
 }
 
 .app-session-task-control[data-state="idle"],
@@ -1420,7 +1453,7 @@ input {
     overflow: hidden;
   }
 
-  .app-session-task-control span,
+  .task-control-caption,
   #app-session-permissions span,
   #app-session-memories strong {
     display: none;

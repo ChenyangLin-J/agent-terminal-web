@@ -1330,48 +1330,48 @@ input {
   border-bottom: 1px solid #252a35;
 }
 
-.app-session-tools button,
-.app-session-task-state {
+.app-session-tools button {
   display: inline-flex;
   gap: 8px;
   align-items: center;
   min-height: 36px;
   padding: 7px 11px;
-  border: 1px solid #343945;
-  border-radius: 8px;
   white-space: nowrap;
   background: #151a23;
 }
 
-.app-session-tools button span,
-.app-session-task-state span {
+.app-session-tools button span {
   color: #9ca6b8;
 }
 
-.app-session-tools button strong,
-.app-session-task-state strong {
+.app-session-tools button strong {
   color: #eef2f8;
   font-size: 13px;
 }
 
-.app-session-task-state[data-state="working"] {
+.app-session-task-control[data-state="working"] {
   border-color: #355d50;
   background: #10221d;
 }
 
-.app-session-task-state[data-state="working"] strong {
+.app-session-task-control[data-state="working"] strong {
   color: #82d9b7;
 }
 
-.app-session-task-state[data-state="stopping"],
-.app-session-task-state[data-state="interrupted"] {
+.app-session-task-control[data-state="stopping"],
+.app-session-task-control[data-state="interrupted"] {
   border-color: #6c4d32;
   background: #21170d;
 }
 
-.app-session-task-state[data-state="stopping"] strong,
-.app-session-task-state[data-state="interrupted"] strong {
+.app-session-task-control[data-state="stopping"] strong,
+.app-session-task-control[data-state="interrupted"] strong {
   color: #efbd79;
+}
+
+.app-session-task-control[data-state="idle"],
+.app-session-task-control[data-state="connecting"] {
+  opacity: 1;
 }
 
 .app-session-tools button[data-access="full"] {
@@ -1383,45 +1383,28 @@ input {
   color: #ffbec7;
 }
 
-.app-session-tools #app-session-interrupt:not(:disabled) {
-  border-color: #77414b;
-  background: #27151a;
-}
-
-.app-session-tools #app-session-interrupt:not(:disabled) strong {
-  color: #ffb8c3;
-}
-
-.app-session-tools #app-session-interrupt[data-state="stopping"] {
-  border-color: #66505a;
-  background: #21181d;
-}
-
 @media (max-width: 520px) {
   .app-server-session .app-session-tools {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1.25fr) repeat(2, minmax(0, 1fr));
     gap: 6px;
     overflow-x: visible;
   }
 
-  .app-session-tools button,
-  .app-session-task-state {
+  .app-session-tools button {
     justify-content: center;
     min-width: 0;
     padding: 6px 7px;
     overflow: hidden;
   }
 
-  .app-session-task-state span,
-  #app-session-interrupt span,
+  .app-session-task-control span,
   #app-session-permissions span,
   #app-session-memories strong {
     display: none;
   }
 
-  .app-session-tools button strong,
-  .app-session-task-state strong {
+  .app-session-tools button strong {
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;

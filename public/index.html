@@ -36,7 +36,7 @@
       }
     </style>
     <link rel="stylesheet" href="/vendor/xterm-css/xterm.css?v=20260625-5" />
-    <link rel="stylesheet" href="/styles.css?v=20260721-interrupt-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260721-interrupt-3" />
     <link rel="stylesheet" href="/session-focus-mode.css?v=20260720-app-toolbar-1" />
     <link rel="stylesheet" href="/thinking-session.css?v=20260716-1" />
     <link rel="stylesheet" href="/agent-memories.css?v=20260721-1" />
@@ -165,13 +165,17 @@
         </section>
 
         <section id="app-session-tools" class="app-session-tools" aria-label="App Server session tools">
-          <div id="app-session-task-state" class="app-session-task-state" data-state="connecting" aria-live="polite">
+          <button
+            id="app-session-task-control"
+            class="app-session-task-control"
+            type="button"
+            data-state="connecting"
+            title="当前任务状态"
+            aria-live="polite"
+            disabled
+          >
             <span>任务状态</span>
             <strong>连接中</strong>
-          </div>
-          <button id="app-session-interrupt" class="danger" type="button" title="终止当前任务，保留 Session" disabled>
-            <span>当前任务</span>
-            <strong>终止</strong>
           </button>
           <button id="app-session-permissions" type="button" title="修改当前 Session 的权限">
             <span>权限</span>
@@ -318,7 +322,7 @@
     <script src="/shared/voice-capture-widget.js?v=20260717-recovery-3"></script>
     <script src="/agent-upload.js?v=20260713-progress-1"></script>
     <script src="/agent-voice-input.js?v=20260717-recovery-2"></script>
-    <script src="/app.js?v=20260721-interrupt-1"></script>
+    <script src="/app.js?v=20260721-interrupt-3"></script>
     <script src="/session-focus-mode.js?v=20260716-app-chrome-1"></script>
   </body>
 </html>

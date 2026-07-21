@@ -3161,6 +3161,7 @@ function publicSession(session) {
     outputRevision: session.outputRevision,
     capabilities: {
       startupQueue: session.transport === APP_SERVER_TRANSPORT,
+      interruptTurn: session.transport === APP_SERVER_TRANSPORT,
       appCommands: session.transport === APP_SERVER_TRANSPORT,
       skills: session.transport === APP_SERVER_TRANSPORT,
     },

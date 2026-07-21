@@ -35,8 +35,7 @@ const sendPermissionsButton = document.querySelector("#send-permissions");
 const appSessionPermissionsButton = document.querySelector("#app-session-permissions");
 const appSessionPermissionsValue = document.querySelector("#app-session-permissions-value");
 const appSessionMemoriesButton = document.querySelector("#app-session-memories");
-const appSessionInterruptButton = document.querySelector("#app-session-interrupt");
-const appSessionTaskState = document.querySelector("#app-session-task-state");
+const appSessionTaskControl = document.querySelector("#app-session-task-control");
 const killSessionButton = document.querySelector("#kill-session");
 const attachFileButton = document.querySelector("#attach-file");
 const voiceInputButton = document.querySelector("#voice-input");
@@ -170,6 +169,7 @@ let activeTransport = "terminal";
 let activeAccessMode = "safe";
 let activeSessionReady = true;
 let activeStartupQueueSupported = false;
+let activeTurnInterruptSupported = false;
 let pendingAgentRequest = null;
 let lastSubmittedPrompt = "";
 let pendingResumeSession = null;
@@ -237,7 +237,7 @@ sendStatusButton.addEventListener("click", () => command("/status"));
 sendPermissionsButton.addEventListener("click", () => command("/permissions"));
 appSessionPermissionsButton.addEventListener("click", () => runAppCommand("/permissions"));
 appSessionMemoriesButton.addEventListener("click", openMemoryManager);
-appSessionInterruptButton.addEventListener("click", interruptCurrentTurn);
+appSessionTaskControl.addEventListener("click", interruptCurrentTurn);
 killSessionButton.addEventListener("click", endSession);
 terminalSessionPreviewDismiss.addEventListener("click", hideTerminalSessionPreview);
 appCommandClose.addEventListener("click", () => appCommandDialog.close());
@@ -740,6 +740,7 @@ function openSocket(params, options = {}) {
   activeAccessMode = params.access === "full" ? "full" : params.access === "safe" ? "safe" : "";
   activeSessionReady = activeTransport !== "app-server";
   activeStartupQueueSupported = false;
+  activeTurnInterruptSupported = false;
   syncAppSessionToolbar();
   document.body.classList.toggle("app-server-session", activeTransport === "app-server");
   clearAgentRequest();
@@ -1489,26 +1490,41 @@ function syncAppSessionToolbar() {
   appSessionPermissionsValue.textContent = appAccessLabel(activeAccessMode);
   appSessionPermissionsButton.setAttribute("aria-label", `权限：${appAccessLabel(activeAccessMode)}`);
   const canInterrupt =
-    activeTransport === "app-server" && latestTurnState.active && !latestTurnState.stopping && !interruptRequestPending;
-  appSessionInterruptButton.disabled = !canInterrupt;
-  appSessionInterruptButton.dataset.state = latestTurnState.stopping || interruptRequestPending ? "stopping" : "idle";
-  appSessionInterruptButton.querySelector("strong").textContent =
-    latestTurnState.stopping || interruptRequestPending ? "终止中…" : "终止";
+    activeTransport === "app-server" &&
+    activeTurnInterruptSupported &&
+    latestTurnState.active &&
+    !latestTurnState.stopping &&
+    !interruptRequestPending;
   const taskState = appSessionTaskStateValue();
-  appSessionTaskState.dataset.state = taskState.value;
-  appSessionTaskState.querySelector("strong").textContent = taskState.label;
+  appSessionTaskControl.disabled = !canInterrupt;
+  appSessionTaskControl.dataset.state = taskState.value;
+  appSessionTaskControl.querySelector("strong").textContent = taskState.label;
+  appSessionTaskControl.title = canInterrupt ? "正在处理，点击终止当前任务" : `当前任务：${taskState.label}`;
+  appSessionTaskControl.setAttribute(
+    "aria-label",
+    canInterrupt ? "任务处理中，点击终止当前任务" : `当前任务：${taskState.label}`,
+  );
 }
 
 function appSessionTaskStateValue() {
   if (!activeSessionReady) return { value: "connecting", label: "连接中" };
   if (latestTurnState.interrupted) return { value: "interrupted", label: "已中断" };
   if (latestTurnState.stopping || interruptRequestPending) return { value: "stopping", label: "终止中" };
-  if (latestTurnState.active) return { value: "working", label: "处理中" };
+  if (latestTurnState.active) {
+    return { value: "working", label: activeTurnInterruptSupported ? "处理中 · 终止" : "处理中" };
+  }
   return { value: "idle", label: "空闲" };
 }
 
 function interruptCurrentTurn() {
-  if (activeTransport !== "app-server" || !latestTurnState.active || latestTurnState.stopping) return;
+  if (
+    activeTransport !== "app-server" ||
+    !activeTurnInterruptSupported ||
+    !latestTurnState.active ||
+    latestTurnState.stopping
+  ) {
+    return;
+  }
   interruptRequestPending = true;
   latestTurnState.stopping = true;
   syncAppSessionToolbar();
@@ -2032,9 +2048,10 @@ function renderStatus(status) {
   };
   activeTransport = status.transport === "app-server" ? "app-server" : "terminal";
   activeAccessMode = status.access === "full" ? "full" : "safe";
-  syncAppSessionToolbar();
   activeSessionReady = status.ready !== false;
   activeStartupQueueSupported = Boolean(status.capabilities?.startupQueue);
+  activeTurnInterruptSupported = Boolean(status.capabilities?.interruptTurn);
+  syncAppSessionToolbar();
   document.body.classList.toggle("app-server-session", activeTransport === "app-server");
   updateSessionViewLabels();
   currentSessionExited = Boolean(status.exited);

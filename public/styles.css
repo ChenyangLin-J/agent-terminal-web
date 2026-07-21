@@ -830,6 +830,12 @@ input {
   background: #0b111b;
 }
 
+.app-process-group.is-interrupted > summary {
+  border-left: 2px solid #d69b4f;
+  padding-left: 7px;
+  background: #171108;
+}
+
 .app-process-group > summary strong {
   color: #a4adbb;
   font-weight: 500;
@@ -838,6 +844,11 @@ input {
 
 .app-process-group.is-active > summary strong {
   color: #b9c9ff;
+}
+
+.app-process-group.is-interrupted > summary strong,
+.app-process-group.is-interrupted .app-activity-indicator {
+  color: #e7b86f;
 }
 
 .app-activity-indicator {
@@ -894,6 +905,52 @@ input {
 
 .app-process-content .app-transcript-item:last-child {
   border-bottom: 0;
+}
+
+.app-interrupted-turn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px;
+  padding: 10px 11px;
+  border: 1px solid #5a4426;
+  border-radius: 7px;
+  background: #171108;
+}
+
+.app-interrupted-turn > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.app-interrupted-turn strong {
+  color: #efc27e;
+  font-size: 13px;
+}
+
+.app-interrupted-turn span {
+  color: #a9977d;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.app-interrupted-turn button {
+  flex: 0 0 auto;
+  min-height: 38px;
+  padding: 7px 12px;
+}
+
+@media (max-width: 520px) {
+  .app-interrupted-turn {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .app-interrupted-turn button {
+    width: 100%;
+  }
 }
 
 @keyframes app-activity-wave {
@@ -1497,6 +1554,10 @@ input {
 
 .turn-ledger li[data-status="failed"] {
   color: #e49a9a;
+}
+
+.turn-ledger li[data-status="interrupted"] {
+  color: #e1b572;
 }
 
 .prompt-field {

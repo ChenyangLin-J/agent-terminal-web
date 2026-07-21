@@ -152,7 +152,15 @@ let terminalHistoryUiReady = false;
 let uploadStatusTimer = null;
 let liveSessionsByCodexId = new Map();
 let archivedSessionsExpanded = false;
-let latestTurnState = { active: false, turnId: "", requirements: [], queuedTurns: [] };
+let latestTurnState = {
+  active: false,
+  interrupted: false,
+  interruptedAt: "",
+  turnId: "",
+  requirements: [],
+  queuedTurns: [],
+};
+let resumeInterruptedPending = false;
 let activeTransport = "terminal";
 let activeAccessMode = "safe";
 let activeSessionReady = true;
@@ -688,6 +696,15 @@ function openSocket(params, options = {}) {
   });
   if (!isReconnect) {
     terminal?.reset();
+    latestTurnState = {
+      active: false,
+      interrupted: false,
+      interruptedAt: "",
+      turnId: "",
+      requirements: [],
+      queuedTurns: [],
+    };
+    resumeInterruptedPending = false;
     appTranscriptItems = [];
     restoredAppTurnCount = 0;
     restoredAppHistoryHasMore = false;
@@ -808,6 +825,10 @@ function openSocket(params, options = {}) {
       return;
     }
     if (message.type === "error") {
+      if (resumeInterruptedPending) {
+        resumeInterruptedPending = false;
+        renderAppTranscript({ follow: false });
+      }
       terminal?.writeln(`\r\n${message.payload.message}\r\n`);
       if (activeTransport === "app-server") setUploadStatus(message.payload.message);
       if (appCommandDialog.open && !message.payload.preservePrompt) {
@@ -880,6 +901,12 @@ function handleControlAck(payload = {}) {
   }
   if (payload.kind === "agent-response") {
     setUploadStatus("已提交给 Codex。", { clear: true });
+    return;
+  }
+  if (payload.kind === "resume-interrupted") {
+    resumeInterruptedPending = false;
+    if (payload.turnState) renderTurnState(payload.turnState);
+    setUploadStatus("已继续刚才中断的任务。", { clear: true });
     return;
   }
   if (payload.kind === "startup-submit") {
@@ -1983,28 +2010,40 @@ function renderStatus(status) {
 function renderTurnState(value = {}) {
   latestTurnState = {
     active: Boolean(value.active),
+    interrupted: Boolean(value.interrupted),
+    interruptedAt: String(value.interruptedAt || ""),
     turnId: String(value.turnId || ""),
     requirements: Array.isArray(value.requirements) ? value.requirements : [],
     queuedTurns: Array.isArray(value.queuedTurns) ? value.queuedTurns : [],
   };
+  if (!latestTurnState.interrupted || latestTurnState.active) resumeInterruptedPending = false;
   const items = [...latestTurnState.requirements, ...latestTurnState.queuedTurns];
   const hasFailedItem = items.some((item) => item.status === "failed");
-  const shouldShowLedger = items.length > 0 && (latestTurnState.active || hasFailedItem);
+  const shouldShowLedger = items.length > 0 && (latestTurnState.active || latestTurnState.interrupted || hasFailedItem);
   turnLedger.classList.toggle("hidden", !shouldShowLedger);
   if (!shouldShowLedger) turnLedger.open = false;
   const itemCount = items.length ? ` · ${items.length} 项` : "";
-  turnLedgerStatus.textContent = latestTurnState.active
-    ? latestTurnState.queuedTurns.length
-      ? `进行中 · ${latestTurnState.queuedTurns.length} 条待下一轮${itemCount}`
-      : `进行中${itemCount}`
-    : hasFailedItem
-      ? `有未完成${itemCount}`
-      : `已完成${itemCount}`;
+  turnLedgerStatus.textContent = latestTurnState.interrupted
+    ? `已中断${itemCount}`
+    : latestTurnState.active
+      ? latestTurnState.queuedTurns.length
+        ? `进行中 · ${latestTurnState.queuedTurns.length} 条待下一轮${itemCount}`
+        : `进行中${itemCount}`
+      : hasFailedItem
+        ? `有未完成${itemCount}`
+        : `已完成${itemCount}`;
   turnRequirements.replaceChildren(
     ...items.map((item) => {
       const row = document.createElement("li");
       row.dataset.status = item.status || "working";
-      const prefix = item.status === "queued" ? "下一轮：" : item.kind === "followup" ? "追加：" : "";
+      const prefix =
+        item.status === "interrupted"
+          ? "中断："
+          : item.status === "queued"
+            ? "下一轮："
+            : item.kind === "followup"
+              ? "追加："
+              : "";
       row.textContent = `${prefix}${item.text || ""}`;
       return row;
     }),
@@ -2723,6 +2762,8 @@ function renderAppTranscript({ follow = false } = {}) {
     }
   }
 
+  if (latestTurnState.interrupted) fragment.append(createInterruptedTurnNotice());
+
   appServerTranscript.replaceChildren(fragment);
   if (shouldFollow) followAppTranscriptIfNeeded(true);
 }
@@ -2823,6 +2864,41 @@ function appTurnHasFinalAnswer(turnId) {
   );
 }
 
+function appTurnIsInterrupted(turnId) {
+  return Boolean(latestTurnState.interrupted && turnId && latestTurnState.turnId === turnId);
+}
+
+function createInterruptedTurnNotice() {
+  const notice = document.createElement("section");
+  notice.className = "app-interrupted-turn";
+  notice.setAttribute("role", "status");
+
+  const copy = document.createElement("div");
+  const title = document.createElement("strong");
+  title.textContent = "本轮已中断";
+  const detail = document.createElement("span");
+  detail.textContent = "服务重启前没有生成最终回复。继续时会先核对现状，避免重复执行。";
+  copy.append(title, detail);
+
+  const action = document.createElement("button");
+  action.type = "button";
+  action.className = "primary";
+  action.textContent = resumeInterruptedPending ? "正在继续…" : "继续完成";
+  action.disabled = resumeInterruptedPending || !activeSessionReady;
+  action.addEventListener("click", () => {
+    resumeInterruptedPending = true;
+    renderAppTranscript({ follow: false });
+    if (!send({ type: "resume-interrupted" })) {
+      resumeInterruptedPending = false;
+      renderAppTranscript({ follow: false });
+      setUploadStatus("连接恢复中，请稍后再继续。", { clear: true });
+    }
+  });
+
+  notice.append(copy, action);
+  return notice;
+}
+
 function createAppProcessGroup(items) {
   const group = document.createElement("details");
   group.className = "app-process-group";
@@ -2830,8 +2906,9 @@ function createAppProcessGroup(items) {
   const groupId = `${turnId || "turn"}:${items[0]?.id || "process"}`;
   const activeItem = [...items].reverse().find(isRunningTranscriptItem);
   const hasFinalAnswer = appTurnHasFinalAnswer(turnId);
+  const isInterruptedTurn = !hasFinalAnswer && appTurnIsInterrupted(turnId);
   const isActiveTurn = latestTurnState.active && latestTurnState.turnId === turnId;
-  const isActive = !hasFinalAnswer && (Boolean(activeItem) || isActiveTurn);
+  const isActive = !isInterruptedTurn && !hasFinalAnswer && (Boolean(activeItem) || isActiveTurn);
   const autoExpanded = isActive && !openAppProcessGroups.has(groupId);
   group.open = autoExpanded || openAppProcessGroups.has(groupId);
   group.addEventListener("toggle", () => {
@@ -2842,21 +2919,24 @@ function createAppProcessGroup(items) {
   const summary = document.createElement("summary");
   const currentItem = activeItem || items.at(-1);
   group.classList.toggle("is-active", isActive);
+  group.classList.toggle("is-interrupted", isInterruptedTurn);
 
   const indicator = document.createElement("span");
   indicator.className = "app-activity-indicator";
   indicator.setAttribute("aria-hidden", "true");
   if (isActive) {
     indicator.append(document.createElement("i"), document.createElement("i"), document.createElement("i"));
+  } else if (isInterruptedTurn) {
+    indicator.textContent = "!";
   } else {
     indicator.textContent = "✓";
   }
 
   const label = document.createElement("strong");
-  label.textContent = isActive ? "正在" : "完成";
+  label.textContent = isActive ? "正在" : isInterruptedTurn ? "中断" : "完成";
   const message = document.createElement("span");
   message.className = "app-activity-message";
-  message.textContent = appActivityText(currentItem);
+  message.textContent = isInterruptedTurn ? "未生成最终回复" : appActivityText(currentItem);
   message.title = message.textContent;
   const count = document.createElement("span");
   count.className = "app-activity-count";

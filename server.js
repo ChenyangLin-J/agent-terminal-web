@@ -89,6 +89,7 @@ const MAX_APP_TRANSCRIPT_OUTPUT = 80_000;
 const WS_HEARTBEAT_MS = Number(process.env.WS_HEARTBEAT_MS || 25_000);
 const USE_TMUX_SESSIONS = process.env.AGENT_USE_TMUX === "1";
 const CODEX_NOTIFY_SCRIPT = path.join(__dirname, "scripts", "codex-notify.js");
+const CODEX_GUARD_BIN = path.join(__dirname, "scripts", "codex-guard-bin");
 const AGENT_NOTIFY_URL = process.env.AGENT_NOTIFY_URL || `http://${HOST}:${PORT}/internal/codex-notify`;
 const HOME_PUSH_URL = process.env.HOME_PUSH_URL || "http://127.0.0.1:3050/internal/push";
 const HOME_PUSH_SUBSCRIBE_URL = process.env.HOME_PUSH_SUBSCRIBE_URL || `${HOME_PUSH_URL}/subscriptions`;
@@ -97,6 +98,12 @@ const APP_SERVER_TRANSPORT = "app-server";
 const FULL_ACCESS_MODE = "full";
 const THINK_SESSION_PURPOSE = "think";
 const THINKING_SKILL_INVOCATION = "$thinking-partner";
+const AGENT_WEB_DEVELOPER_INSTRUCTIONS = [
+  "Agent Web service safety:",
+  "- Never stop, restart, kill, or otherwise terminate agent-terminal-web.service from this Codex session, including through systemctl or an absolute executable path.",
+  "- When Agent Web changes need deployment, finish verification, commit the changes, and tell the user that an external restart is required.",
+  "- Do not restart Agent Web before sending the final answer. A restart terminates this turn and every other active web session.",
+].join("\n");
 
 const app = express();
 const server = http.createServer(app);
@@ -762,6 +769,16 @@ function codexArgsForWeb(args) {
   return ["-c", `notify=${notify}`, ...args];
 }
 
+function codexEnvironmentForWeb(sessionId, extra = {}) {
+  return {
+    ...process.env,
+    ...extra,
+    PATH: [CODEX_GUARD_BIN, process.env.PATH].filter(Boolean).join(path.delimiter),
+    AGENT_WEB_SESSION_ID: sessionId,
+    AGENT_WEB_PROTECTED_SERVICE: "agent-terminal-web.service",
+  };
+}
+
 function cleanClientLogValue(value, maxLength) {
   return String(value || "")
     .replace(/[\r\n\t]/g, " ")
@@ -788,13 +805,11 @@ function createTerminalSession(cwd, launch, restored = {}) {
   const startedAt = new Date().toISOString();
   const shell = process.env.CODEX_COMMAND || "codex";
   const commandArgs = codexArgsForWeb(launch.args);
-  const env = {
-    ...process.env,
+  const env = codexEnvironmentForWeb(id, {
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
-    AGENT_WEB_SESSION_ID: id,
     AGENT_NOTIFY_URL,
-  };
+  });
   const tmuxName = restored.tmuxName || tmuxNameForWebSession(id);
 
   let terminal;
@@ -900,6 +915,7 @@ function createAppServerSession(cwd, launch, restored = {}) {
   const appServer = new CodexAppServerClient({
     cwd,
     command: process.env.CODEX_APP_SERVER_COMMAND || "codex",
+    env: codexEnvironmentForWeb(id),
   });
   const session = {
     id,
@@ -919,6 +935,7 @@ function createAppServerSession(cwd, launch, restored = {}) {
     tmuxName: "",
     terminal: null,
     appServer,
+    interruptedResumePending: false,
     pendingServerRequests: new Map(),
     pendingStartupPrompts: [],
     streamedItemIds: new Set(),
@@ -987,6 +1004,7 @@ async function initializeAppServerSession(session, launch) {
       cwd: session.cwd,
       sandbox: session.access === FULL_ACCESS_MODE ? "danger-full-access" : "workspace-write",
       approvalPolicy: session.access === FULL_ACCESS_MODE ? "never" : "on-request",
+      developerInstructions: AGENT_WEB_DEVELOPER_INSTRUCTIONS,
     };
     let thread;
     if (launch.sessionId) {
@@ -1079,7 +1097,7 @@ function restoreTmuxSession(id) {
         appModel: record.appModel,
         appReasoningEffort: record.appReasoningEffort,
         appServiceTier: record.appServiceTier,
-        turnState: { ...record.turnState, active: false },
+        turnState: interruptedTurnStateAfterProcessLoss(record.turnState, record.lastActivityAt),
       },
     );
   }
@@ -1111,7 +1129,7 @@ function restoreTmuxSession(id) {
         appModel: record.appModel,
         appReasoningEffort: record.appReasoningEffort,
         appServiceTier: record.appServiceTier,
-        turnState: { ...record.turnState, active: false },
+        turnState: interruptedTurnStateAfterProcessLoss(record.turnState, record.lastActivityAt),
       },
     );
   }
@@ -1331,6 +1349,38 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
       void loadEarlierAppServerHistory(session).catch((error) => {
         send(ws, "error", { message: `Earlier history was not loaded: ${error.message}` });
       });
+      return;
+    }
+
+    if (message.type === "resume-interrupted" && session.transport === APP_SERVER_TRANSPORT) {
+      if (session.interruptedResumePending) {
+        send(ws, "error", { message: "The interrupted turn is already being continued." });
+        return;
+      }
+      if (!session.turnState.interrupted || session.turnState.active) {
+        send(ws, "error", { message: "This session no longer has an interrupted turn to continue." });
+        return;
+      }
+      const continuation = interruptedContinuationPrompt(session.turnState);
+      session.interruptedResumePending = true;
+      void submitAppServerPrompt(session, continuation, "auto")
+        .then((submission) => {
+          session.lastActivityAt = new Date().toISOString();
+          persistRestorableWebSession(session);
+          broadcast(session, "status", publicSession(session));
+          send(ws, "control-ack", {
+            kind: "resume-interrupted",
+            receivedAt: Date.now(),
+            deliveryMode: submission.deliveryMode,
+            turnState: publicTurnState(session.turnState),
+          });
+        })
+        .catch((error) => {
+          send(ws, "error", { message: `Interrupted turn was not continued: ${error.message}` });
+        })
+        .finally(() => {
+          session.interruptedResumePending = false;
+        });
       return;
     }
 
@@ -2123,6 +2173,8 @@ async function submitAppServerPrompt(session, text, requestedMode, skillNames = 
   for (const requirement of state.requirements) requirement.status = "completed";
   state.sequence += 1;
   state.active = true;
+  state.interrupted = false;
+  state.interruptedAt = "";
   state.turnId = "";
   const requirement = turnRequirement(state, text, wantsQueue || lateSteer ? "queued" : "original", "working");
   state.requirements = [requirement];
@@ -2455,6 +2507,8 @@ function handleAppServerNotification(session, message) {
   if (method === "thread/tokenUsage/updated" && params.tokenUsage) session.appTokenUsage = params.tokenUsage;
   if (method === "turn/started") {
     session.turnState.active = true;
+    session.turnState.interrupted = false;
+    session.turnState.interruptedAt = "";
     session.turnState.turnId = params.turn?.id || "";
     appendSessionOutput(session, "\r\n\x1b[34m── Turn started ──\x1b[0m\r\n");
   } else if (method === "item/agentMessage/delta") {
@@ -2779,7 +2833,12 @@ function markAppServerExited(session, error) {
   session.exited = true;
   session.exitCode = 1;
   session.signal = null;
-  removePersistedWebSession(session.id);
+  if (session.sessionId) {
+    session.turnState = interruptedTurnStateAfterProcessLoss(session.turnState);
+    persistWebSession(session);
+  } else {
+    removePersistedWebSession(session.id);
+  }
   logAgentEvent("app-server-exit", {
     webSessionId: session.id,
     codexSessionId: session.sessionId,
@@ -2803,6 +2862,8 @@ function submitTrackedPrompt(session, text, requestedMode) {
   if (!state.active) {
     state.sequence += 1;
     state.active = true;
+    state.interrupted = false;
+    state.interruptedAt = "";
     state.turnId = "";
     state.requirements = [turnRequirement(state, text, "original", "working")];
     writeAndSubmit(session, text, { paste: true });
@@ -2842,6 +2903,8 @@ function completeTrackedTurn(session, turnId) {
   if (turnId && turnId === state.lastCompletedTurnId) return;
   state.lastCompletedTurnId = turnId || state.lastCompletedTurnId;
   state.turnId = turnId || state.turnId;
+  state.interrupted = false;
+  state.interruptedAt = "";
   for (const requirement of state.requirements) requirement.status = "completed";
 
   const next = state.queuedTurns.shift();
@@ -2899,6 +2962,8 @@ function restoreTurnState(value) {
   const input = value && typeof value === "object" ? value : {};
   return {
     active: Boolean(input.active),
+    interrupted: Boolean(input.interrupted),
+    interruptedAt: cleanClientLogValue(input.interruptedAt, 100),
     turnId: cleanClientLogValue(input.turnId, 100),
     lastCompletedTurnId: cleanClientLogValue(input.lastCompletedTurnId, 100),
     sequence: clampInteger(input.sequence, 0, 1_000_000, 0),
@@ -2914,13 +2979,50 @@ function restoreRequirements(items) {
     id: cleanClientLogValue(item?.id, 100) || `restored-requirement-${index + 1}`,
     text: String(item?.text || "").slice(0, 4_000),
     kind: ["original", "followup", "queued"].includes(item?.kind) ? item.kind : "followup",
-    status: ["working", "queued", "completed", "failed"].includes(item?.status) ? item.status : "working",
+    status: ["working", "queued", "completed", "failed", "interrupted"].includes(item?.status)
+      ? item.status
+      : "working",
   }));
+}
+
+function interruptedTurnStateAfterProcessLoss(value, fallbackTime = "") {
+  const state = restoreTurnState(value);
+  const hasUnfinishedRequirement = state.requirements.some((item) =>
+    ["working", "queued", "interrupted"].includes(item.status),
+  );
+  const incompleteTurn =
+    state.active ||
+    state.interrupted ||
+    Boolean(state.turnId && state.turnId !== state.lastCompletedTurnId && hasUnfinishedRequirement);
+  state.active = false;
+  if (!incompleteTurn) return state;
+
+  state.interrupted = true;
+  state.interruptedAt = state.interruptedAt || cleanClientLogValue(fallbackTime, 100) || new Date().toISOString();
+  for (const requirement of state.requirements) {
+    if (requirement.status === "working") requirement.status = "interrupted";
+  }
+  return state;
+}
+
+function interruptedContinuationPrompt(state) {
+  const requirements = (state.requirements || [])
+    .filter((item) => item.status === "interrupted")
+    .map((item) => `- ${item.text}`)
+    .join("\n");
+  return [
+    "刚才这一轮因 Agent Web 服务或 App Server 进程重启而中断，没有生成最终回复。",
+    requirements ? `原任务要求：\n${requirements}` : "请根据当前 Session 的最后一轮对话继续。",
+    "请先核对当前工作区、Git 提交和服务状态，避免重复已经完成的操作；完成剩余验证后给出最终总结。",
+    "不要停止或重启 agent-terminal-web.service。如确实需要部署，只说明需要外部重启并等待用户处理。",
+  ].join("\n\n");
 }
 
 function publicTurnState(state) {
   return {
     active: Boolean(state?.active),
+    interrupted: Boolean(state?.interrupted),
+    interruptedAt: state?.interruptedAt || "",
     turnId: state?.turnId || "",
     lastCompletedTurnId: state?.lastCompletedTurnId || "",
     requirements: state?.requirements || [],

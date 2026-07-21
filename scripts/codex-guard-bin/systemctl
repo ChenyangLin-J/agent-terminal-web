@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+real_systemctl="${AGENT_WEB_REAL_SYSTEMCTL:-/usr/bin/systemctl}"
+protected_service="${AGENT_WEB_PROTECTED_SERVICE:-agent-terminal-web.service}"
+action=""
+targets=()
+
+for argument in "$@"; do
+  if [[ -z "$action" && "$argument" != -* ]]; then
+    action="$argument"
+    continue
+  fi
+  if [[ -n "$action" && "$argument" != -* ]]; then
+    targets+=("$argument")
+  fi
+done
+
+case "$action" in
+  stop|restart|try-restart|reload-or-restart|reload-or-try-restart|kill)
+    for target in "${targets[@]}"; do
+      normalized_target="${target%.service}.service"
+      if [[ "$normalized_target" == "$protected_service" ]]; then
+        printf '%s\n' \
+          "Blocked by Agent Web: this Codex session cannot ${action} ${protected_service}." \
+          "Finish verification and the final reply, then ask for an external Agent Web restart." >&2
+        exit 64
+      fi
+    done
+    ;;
+esac
+
+exec "$real_systemctl" "$@"

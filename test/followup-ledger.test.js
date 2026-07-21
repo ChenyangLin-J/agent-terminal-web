@@ -35,6 +35,9 @@ test("App Server is optional and binds steer and queue to structured turns", () 
   assert.match(server, /item\.aggregatedOutput/);
   assert.match(server, /method === "turn\/plan\/updated"/);
   assert.match(server, /function appServerToolResultText\(item\)/);
-  assert.match(app, /const shouldShowLedger = items\.length > 0 && \(latestTurnState\.active \|\| hasFailedItem\)/);
+  assert.match(
+    app,
+    /const shouldShowLedger = items\.length > 0 && \(latestTurnState\.active \|\| latestTurnState\.interrupted \|\| hasFailedItem\)/,
+  );
   assert.match(app, /function refreshTerminalText\(\{ follow = false \} = \{\}\)/);
 });

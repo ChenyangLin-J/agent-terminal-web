@@ -144,6 +144,8 @@ systemctl --user status agent-terminal-web.service
 systemctl --user restart agent-terminal-web.service
 ```
 
+Codex processes launched from Agent Web cannot stop or restart this service themselves. They finish verification, commit, and report that an external restart is required, so one Session cannot interrupt every other active Session. If the service or an App Server process still exits during a turn, the restored conversation marks that turn as interrupted and offers a `继续完成` action.
+
 Private environment values live in:
 
 ```text

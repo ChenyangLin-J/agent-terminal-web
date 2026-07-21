@@ -451,7 +451,7 @@ function renderArchivedCodexSessions(sessions) {
 function openResumeEngineDialog(session) {
   pendingResumeSession = session;
   resumeSessionTitle.textContent = session.title || "Untitled session";
-  resumeAccessMode.value = "safe";
+  resumeAccessMode.value = session.access === "full" ? "full" : "safe";
   renderResumeAccessWarning();
   resumeEngineDialog.showModal();
 }
@@ -580,14 +580,16 @@ function empty(text) {
 }
 
 function startSession(overrides = {}) {
-  openSocket({
+  const params = {
     cwd: overrides.cwd || projectSelect.value,
     mode: overrides.mode || (overrides.sessionId ? "new" : launchModeSelect.value),
     sessionId: overrides.sessionId || sessionIdInput.value.trim(),
     transport: overrides.transport || transportSelect.value || "terminal",
-    access: overrides.access || accessModeSelect.value || "safe",
     purpose: overrides.purpose === "think" ? "think" : "",
-  });
+  };
+  const access = overrides.access || (!overrides.sessionId ? accessModeSelect.value || "safe" : "");
+  if (access) params.access = access;
+  openSocket(params);
 }
 
 function attachSession(id, extra = {}) {
@@ -601,40 +603,32 @@ function openInitialSessionFromUrl() {
   const title = params.get("title") || "";
   const startNew = params.get("new") === "1";
   const transport = params.get("transport") === "app-server" ? "app-server" : "terminal";
-  const access = params.get("access") === "full" ? "full" : "safe";
+  const access = params.has("access") ? (params.get("access") === "full" ? "full" : "safe") : "";
   const purpose = params.get("purpose") === "think" ? "think" : "";
+  const launch = {
+    cwd: params.get("cwd") || ".",
+    sessionId,
+    transport,
+    purpose,
+  };
+  if (access) launch.access = access;
 
   if (title) setDocumentTitle(title);
 
   if (attach) {
-    attachSession(attach, {
-      cwd: params.get("cwd") || ".",
-      sessionId,
-      transport,
-      access,
-      purpose,
-    });
+    attachSession(attach, launch);
     return true;
   }
 
   if (sessionId) {
-    startSession({
-      cwd: params.get("cwd") || ".",
-      sessionId,
-      transport,
-      access,
-      purpose,
-    });
+    startSession(launch);
     return true;
   }
 
   if (startNew) {
     startSession({
-      cwd: params.get("cwd") || ".",
+      ...launch,
       mode: "new",
-      transport,
-      access,
-      purpose,
     });
     return true;
   }
@@ -712,7 +706,7 @@ function openSocket(params, options = {}) {
   }
   historySyncPending = shouldReplay;
   historySyncStartedAt = shouldReplay ? Date.now() : 0;
-  activeAccessMode = params.access === "full" ? "full" : "safe";
+  activeAccessMode = params.access === "full" ? "full" : params.access === "safe" ? "safe" : "";
   syncAppSessionToolbar();
   activeSessionReady = activeTransport !== "app-server";
   activeStartupQueueSupported = false;
@@ -1427,7 +1421,9 @@ function extractSkillMentions(text) {
 }
 
 function appAccessLabel(access) {
-  return access === "full" ? "全部允许" : "按需确认";
+  if (access === "full") return "全部允许";
+  if (access === "safe") return "按需确认";
+  return "读取中";
 }
 
 function syncAppSessionToolbar() {
@@ -2015,7 +2011,7 @@ function setConnectedState(state) {
     exited: "已停止",
   };
   const transport = activeTransport === "app-server" ? "App Server · " : "Terminal · ";
-  const access = activeAccessMode === "full" ? " · 全部允许" : " · 按需确认";
+  const access = activeAccessMode ? ` · ${appAccessLabel(activeAccessMode)}` : "";
   const stateLabel = connectionStates[state] || state;
   statusEls.connection.textContent = `${transport}${stateLabel}${access}`;
   const terminalCanAcceptInput =

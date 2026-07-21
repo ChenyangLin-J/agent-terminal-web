@@ -11,6 +11,11 @@ import express from "express";
 import { WebSocketServer } from "ws";
 import { CodexAppServerClient } from "./lib/codex-app-server-client.js";
 import {
+  latestPersistedSessionsByCodexId,
+  normalizeAccessMode,
+  preferredAccessForCodexSession,
+} from "./lib/session-access.js";
+import {
   extractSessionConversationFromJsonl,
   extractSessionPreviewFromJsonl,
   extractSessionTokenUsageFromJsonl,
@@ -45,6 +50,7 @@ const CODEX_ARCHIVED_SESSIONS_ROOT = path.join(CODEX_HOME, "archived_sessions");
 const CODEX_SESSION_TITLES_FILE = path.join(CODEX_HOME, "session-titles.json");
 const CODEX_SESSION_ARCHIVE_FILE = path.join(CODEX_HOME, "session-archive.json");
 const AGENT_WEB_SESSIONS_FILE = path.join(CODEX_HOME, "agent-web-sessions.json");
+const AGENT_SESSION_SETTINGS_FILE = path.join(CODEX_HOME, "agent-session-settings.json");
 const CODEX_SESSION_PREVIEWS_FILE = path.join(CODEX_HOME, "agent-session-previews.json");
 const UPLOADS_ROOT = path.resolve(process.env.UPLOADS_ROOT || path.join(WORKSPACE_ROOT, "uploads"));
 const MAX_UPLOAD_FILES = Number(process.env.MAX_UPLOAD_FILES || 5);
@@ -113,7 +119,10 @@ app.post("/internal/codex-notify", async (req, res) => {
   }
 
   const threadId = String(event["thread-id"] || "");
-  if (isValidSessionId(threadId)) session.sessionId = threadId;
+  if (isValidSessionId(threadId)) {
+    session.sessionId = threadId;
+    rememberAgentSessionAccess(threadId, session.access);
+  }
   persistCompletedSessionPreview(session, event["last-assistant-message"]);
   completeTrackedTurn(session, String(event["turn-id"] || ""));
   session.lastActivityAt = new Date().toISOString();
@@ -708,6 +717,7 @@ function createTerminalSession(cwd, launch, restored = {}) {
     turnState: restoreTurnState(restored.turnState),
   };
   sessions.set(id, session);
+  rememberAgentSessionAccess(session.sessionId, session.access);
   persistRestorableWebSession(session);
   logAgentEvent("session-start", {
     webSessionId: session.id,
@@ -857,6 +867,7 @@ async function initializeAppServerSession(session, launch) {
       restoreAppServerTranscript(session, thread, { resumed: false });
     }
     session.sessionId = thread.id;
+    rememberAgentSessionAccess(session.sessionId, session.access);
     session.ready = true;
     session.lastActivityAt = new Date().toISOString();
     appendSessionOutput(session, "\r\n\x1b[36mApp Server ready. Follow-ups are bound to an exact turn.\x1b[0m\r\n");
@@ -1192,6 +1203,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
 
     if (message.type === "set-access" && session.transport === APP_SERVER_TRANSPORT) {
       session.access = normalizeAccessMode(message.access);
+      rememberAgentSessionAccess(session.sessionId, session.access);
       session.lastActivityAt = new Date().toISOString();
       persistRestorableWebSession(session);
       broadcast(session, "status", publicSession(session));
@@ -2276,7 +2288,10 @@ function handleAppServerNotification(session, message) {
   const { method, params = {} } = message;
   session.lastActivityAt = new Date().toISOString();
 
-  if (method === "thread/started" && params.thread?.id) session.sessionId = params.thread.id;
+  if (method === "thread/started" && params.thread?.id) {
+    session.sessionId = params.thread.id;
+    rememberAgentSessionAccess(session.sessionId, session.access);
+  }
   if (method === "thread/tokenUsage/updated" && params.tokenUsage) session.appTokenUsage = params.tokenUsage;
   if (method === "turn/started") {
     session.turnState.active = true;
@@ -2998,6 +3013,43 @@ function writePersistedWebSessions(records) {
   }
 }
 
+function readAgentSessionSettings() {
+  try {
+    const parsed = JSON.parse(fsSync.readFileSync(AGENT_SESSION_SETTINGS_FILE, "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+function rememberAgentSessionAccess(sessionId, access) {
+  if (!isValidSessionId(sessionId)) return;
+  const settings = readAgentSessionSettings();
+  settings[sessionId] = {
+    access: normalizeAccessMode(access),
+    updatedAt: new Date().toISOString(),
+  };
+
+  try {
+    fsSync.mkdirSync(path.dirname(AGENT_SESSION_SETTINGS_FILE), { recursive: true });
+    const cleaned = Object.fromEntries(
+      Object.entries(settings)
+        .filter(([id, setting]) => isValidSessionId(id) && ["safe", "full"].includes(setting?.access))
+        .sort(([a], [b]) => a.localeCompare(b)),
+    );
+    const tempFile = `${AGENT_SESSION_SETTINGS_FILE}.${process.pid}.tmp`;
+    fsSync.writeFileSync(tempFile, `${JSON.stringify(cleaned, null, 2)}\n`, { mode: 0o600 });
+    fsSync.renameSync(tempFile, AGENT_SESSION_SETTINGS_FILE);
+  } catch (error) {
+    console.error(`Failed to write agent session settings: ${error.message}`);
+  }
+}
+
+function savedAgentSessionAccess(sessionId, persistedRecords = readPersistedWebSessions()) {
+  return preferredAccessForCodexSession(readAgentSessionSettings(), persistedRecords, sessionId);
+}
+
 function isValidWebSessionId(value) {
   return /^[a-z0-9-]{8,80}$/i.test(String(value || ""));
 }
@@ -3016,10 +3068,6 @@ function resolveWorkspacePath(value) {
   return requested;
 }
 
-function normalizeAccessMode(value) {
-  return value === FULL_ACCESS_MODE ? FULL_ACCESS_MODE : "safe";
-}
-
 function normalizeSessionPurpose(value) {
   return value === THINK_SESSION_PURPOSE ? THINK_SESSION_PURPOSE : "";
 }
@@ -3034,10 +3082,12 @@ function terminalLaunchArgs(access, tail = []) {
 
 async function getLaunchConfig(searchParams) {
   const transport = searchParams.get("transport") === APP_SERVER_TRANSPORT ? APP_SERVER_TRANSPORT : "terminal";
-  const access = normalizeAccessMode(searchParams.get("access"));
   const purpose = normalizeSessionPurpose(searchParams.get("purpose"));
   const sessionId = String(searchParams.get("sessionId") || "").trim();
   if (sessionId && !/^[a-zA-Z0-9._:-]+$/.test(sessionId)) return null;
+  const access = searchParams.has("access")
+    ? normalizeAccessMode(searchParams.get("access"))
+    : savedAgentSessionAccess(sessionId) || "safe";
 
   if (sessionId) {
     return {
@@ -3127,12 +3177,18 @@ async function listCodexSessions({ archived }) {
   const files = [...activeFiles, ...archivedFiles];
   const customTitles = await readSessionTitles();
   const archivedSessions = await readSessionArchive();
+  const persistedRecords = readPersistedWebSessions();
+  const persistedByCodexId = latestPersistedSessionsByCodexId(persistedRecords);
+  const sessionSettings = readAgentSessionSettings();
   const items = [];
 
   for (const { file, fileArchived } of files) {
     if (!file.endsWith(".jsonl")) continue;
     const meta = await readCodexSessionMeta(file, customTitles, archivedSessions, fileArchived);
     if (!meta) continue;
+    meta.access = normalizeAccessMode(
+      sessionSettings[meta.id]?.access || persistedByCodexId.get(meta.id)?.access,
+    );
     if (Boolean(meta.archived) === archived) items.push(meta);
   }
 
@@ -3144,14 +3200,7 @@ async function listCodexSessions({ archived }) {
 async function listRecentAgentSessions(limit = 40) {
   const savedSessions = await listCodexSessions({ archived: false });
   const previews = readSessionPreviews(CODEX_SESSION_PREVIEWS_FILE);
-  const persistedByCodexId = new Map();
-  for (const record of Object.values(readPersistedWebSessions())) {
-    if (!record?.sessionId) continue;
-    const current = persistedByCodexId.get(record.sessionId);
-    if (!current || new Date(record.lastActivityAt || 0) > new Date(current.lastActivityAt || 0)) {
-      persistedByCodexId.set(record.sessionId, record);
-    }
-  }
+  const persistedByCodexId = latestPersistedSessionsByCodexId(readPersistedWebSessions());
   const liveSessions = [
     ...[...sessions.values()].filter((session) => !session.exited).map(publicSession),
     ...listDetachedSessions(),
@@ -3182,7 +3231,7 @@ async function listRecentAgentSessions(limit = 40) {
         live: Boolean(liveSession),
         webSessionId: liveSession?.id || "",
         transport: liveSession?.transport || "terminal",
-        access: normalizeAccessMode(liveSession?.access || persisted?.access),
+        access: normalizeAccessMode(liveSession?.access || session.access || persisted?.access),
         lastResult: preview?.result || "",
         lastCompletedAt: preview?.completedAt || "",
       };

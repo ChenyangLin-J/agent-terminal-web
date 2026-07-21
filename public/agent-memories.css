@@ -1,0 +1,237 @@
+.memory-dialog {
+  width: min(720px, calc(100vw - 28px));
+  max-height: min(820px, calc(100dvh - 28px));
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #353c4c;
+  border-radius: 16px;
+  color: #f4f6fb;
+  background: #11151d;
+  box-shadow: 0 24px 80px rgb(0 0 0 / 55%);
+}
+
+.memory-dialog::backdrop {
+  background: rgb(3 6 12 / 72%);
+  backdrop-filter: blur(4px);
+}
+
+.memory-dialog form {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  max-height: inherit;
+}
+
+.memory-dialog > form > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 18px 12px;
+}
+
+.memory-dialog header span {
+  color: #8994a8;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.memory-dialog h2 {
+  margin: 3px 0 0;
+  font-size: 21px;
+}
+
+.memory-header-actions {
+  display: flex;
+  gap: 7px;
+}
+
+.memory-header-actions button {
+  min-width: 38px;
+  min-height: 38px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+#memory-refresh {
+  min-width: 58px;
+}
+
+#memory-close {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.memory-summary-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 18px 12px;
+  color: #98a4b8;
+  font-size: 12px;
+}
+
+.memory-status {
+  padding: 4px 8px;
+  border: 1px solid #4f5d75;
+  border-radius: 999px;
+  color: #bcc9df;
+  background: #1a2130;
+}
+
+.memory-status[data-state="ready"] {
+  border-color: #315c49;
+  color: #a8e0c4;
+  background: #14251e;
+}
+
+.memory-status[data-state="working"] {
+  border-color: #67572f;
+  color: #e4cb8b;
+  background: #241f12;
+}
+
+.memory-status[data-state="off"],
+.memory-status[data-state="error"] {
+  border-color: #71434a;
+  color: #efb3bd;
+  background: #28171b;
+}
+
+.memory-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  padding: 0 18px 12px;
+  border-bottom: 1px solid #29313f;
+}
+
+.memory-tabs button {
+  min-width: 0;
+  min-height: 38px;
+  padding: 0 8px;
+  color: #aeb8ca;
+  font-size: 13px;
+}
+
+.memory-tabs button.active {
+  border-color: #5871c8;
+  color: #eef2ff;
+  background: #263765;
+}
+
+.memory-content {
+  min-height: 220px;
+  padding: 14px 18px 22px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.memory-note {
+  margin-bottom: 13px;
+  padding: 10px 11px;
+  border: 1px solid #344054;
+  border-radius: 10px;
+  color: #aeb9cc;
+  background: #151b25;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.memory-document {
+  color: #e0e5ee;
+  font-size: 14px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.memory-document > :first-child {
+  margin-top: 0;
+}
+
+.memory-message {
+  margin: 18px 0;
+  color: #9aa5b8;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.memory-message-error {
+  color: #efb3bd;
+}
+
+.memory-source-list {
+  display: grid;
+  gap: 8px;
+}
+
+.memory-source-list button {
+  display: grid;
+  height: auto;
+  min-height: 58px;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.memory-source-list strong,
+.memory-source-list span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-source-list span {
+  margin-top: 4px;
+  color: #8895aa;
+  font-size: 11px;
+}
+
+.memory-source-back {
+  min-height: 36px;
+  margin-bottom: 10px;
+  padding: 0 10px;
+}
+
+.memory-source-title {
+  margin: 0 0 14px;
+  color: #d8dfeb;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.memory-citation {
+  border-color: rgb(99 125 185 / 35%);
+}
+
+.memory-citation summary {
+  color: #91a9dd;
+}
+
+@media (max-width: 520px) {
+  .memory-dialog {
+    inset: auto 10px 10px;
+    width: auto;
+    max-height: calc(100dvh - 20px);
+    margin: 0;
+    border-radius: 16px 16px 12px 12px;
+  }
+
+  .memory-dialog > form > header {
+    padding-inline: 14px;
+  }
+
+  .memory-summary-bar,
+  .memory-tabs {
+    padding-inline: 14px;
+  }
+
+  .memory-content {
+    padding-inline: 14px;
+  }
+
+  .memory-tabs button {
+    padding: 0 5px;
+    font-size: 12px;
+  }
+}

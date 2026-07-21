@@ -37,6 +37,26 @@ The production route is reverse proxied by Caddy. Authentication is delegated to
 - 顶部有 `Terminal` / `Text` tab；`Text` 会把终端 buffer 转成手机上容易选择的普通文本。
 - Terminal 模式下，`Codex /status`、`/permissions` 等按钮会直接把对应 slash command 发给 Codex CLI。
 - App Server 模式下，命令或文件操作需要确认时会显示允许一次、本次会话允许、拒绝三个快捷操作。
+- Start 页和 App Server 会话工具栏提供“记忆”入口；也可输入 `/memories`。
+
+## Memory
+
+Agent Web 使用 Codex 原生 Memories 作为自动提炼层，不另起向量数据库或知识图谱。入口包含四个视图：
+
+- `总览`：跨工作与生活的稳定背景、偏好和近期主题，接近 ChatGPT 的 Overview。
+- `当前项目`：按当前项目名称和路径筛选工程、过程与纠错记忆。
+- `待检查`：显示 Codex 自动抽取的原始记忆，便于早期发现误判；它不是逐条审批队列。
+- `来源`：查看记忆对应的会话摘要证据。
+
+App Server 的回答如果携带原生 `memoryCitation`，会在回答下显示“参考了 N 条记忆”，可展开查看来源与行号。
+
+原生记忆文件保存在：
+
+```text
+~/.codex/memories/
+```
+
+Memories 目前仍是实验功能。自动记忆适合召回背景与经验；必须执行的工程规则继续写在 `AGENTS.md`、Skill 或项目文档中。任务、截止时间和主动提醒继续由 Home 管理，不作为长期事实混进记忆。
 
 ## Mobile Flow
 

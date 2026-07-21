@@ -39,6 +39,7 @@
     <link rel="stylesheet" href="/styles.css?v=20260721-markdown-1" />
     <link rel="stylesheet" href="/session-focus-mode.css?v=20260720-app-toolbar-1" />
     <link rel="stylesheet" href="/thinking-session.css?v=20260716-1" />
+    <link rel="stylesheet" href="/agent-memories.css?v=20260721-1" />
   </head>
   <body>
     <main class="app">
@@ -94,6 +95,7 @@
         <div class="start-actions">
           <button id="connect" class="primary" type="button">Start</button>
           <button id="start-think" type="button">Think</button>
+          <button id="open-memories" class="hidden" type="button">记忆</button>
           <button id="refresh-sessions" type="button">Refresh</button>
         </div>
 
@@ -166,6 +168,10 @@
           <button id="app-session-permissions" type="button" title="修改当前 Session 的权限">
             <span>权限</span>
             <strong id="app-session-permissions-value">按需确认</strong>
+          </button>
+          <button id="app-session-memories" class="hidden" type="button" title="查看 Codex 的全局与项目记忆">
+            <span>记忆</span>
+            <strong>查看与追溯</strong>
           </button>
         </section>
 
@@ -269,10 +275,37 @@
       </form>
     </dialog>
 
+    <dialog id="memory-dialog" class="memory-dialog" aria-labelledby="memory-title">
+      <form method="dialog">
+        <header>
+          <div>
+            <span>Codex Memories · Experimental</span>
+            <h2 id="memory-title">我的记忆</h2>
+          </div>
+          <div class="memory-header-actions">
+            <button id="memory-refresh" type="button">刷新</button>
+            <button id="memory-close" type="button" aria-label="关闭">×</button>
+          </div>
+        </header>
+        <div class="memory-summary-bar">
+          <span id="memory-context">全局范围</span>
+          <strong id="memory-status" class="memory-status">正在读取</strong>
+        </div>
+        <nav class="memory-tabs" role="tablist" aria-label="记忆视图">
+          <button class="active" type="button" role="tab" aria-selected="true" data-memory-view="overview">总览</button>
+          <button type="button" role="tab" aria-selected="false" data-memory-view="detail">当前项目</button>
+          <button type="button" role="tab" aria-selected="false" data-memory-view="pending">待检查</button>
+          <button type="button" role="tab" aria-selected="false" data-memory-view="sources">来源</button>
+        </nav>
+        <section id="memory-content" class="memory-content" aria-live="polite"></section>
+      </form>
+    </dialog>
+
     <script src="/vendor/xterm/xterm.js?v=20260625-5"></script>
     <script src="/vendor/xterm-fit/addon-fit.js?v=20260625-5"></script>
     <script src="/vendor/markdown-it/markdown-it.min.js?v=14.3.0"></script>
     <script src="/app-markdown.js?v=20260721-local-links-1"></script>
+    <script src="/agent-memories.js?v=20260721-1"></script>
     <script src="/shared/voice-recovery-store.js?v=20260717-2"></script>
     <script src="/shared/voice-capture-widget.js?v=20260717-recovery-3"></script>
     <script src="/agent-upload.js?v=20260713-progress-1"></script>

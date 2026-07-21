@@ -59,6 +59,10 @@ test("App Server resume restores structured history and keeps raw text available
   assert.match(app, /if \(autoExpanded && group\.open\) return/);
   assert.match(app, /latestTurnState\.active && latestTurnState\.turnId === turnId/);
   assert.match(app, /card\.classList\.add\("app-transcript-commentary"\)/);
+  assert.match(server, /memoryCitation: normalizeMemoryCitation\(item\.memoryCitation\)/);
+  assert.match(server, /memoryCitation: item\.memoryCitation \|\| null/);
+  assert.match(app, /参考了 \$\{count\} 条记忆/);
+  assert.match(app, /formatMemoryCitation\(item\.memoryCitation\)/);
   assert.match(app, /message\.textContent = appActivityText\(currentItem\)/);
   assert.match(app, /indicator\.append\(document\.createElement\("i"\)/);
   assert.match(page, /id="disconnect"[\s\S]*>离开<\/button>/);

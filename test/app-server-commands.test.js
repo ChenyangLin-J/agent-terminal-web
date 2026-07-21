@@ -44,6 +44,7 @@ test("App Server exposes slash commands and structured Skill mentions", async ()
     "/rename",
     "/compact",
     "/copy",
+    "/memories",
     "/diff",
     "/review",
     "/mcp",

@@ -7,6 +7,7 @@ const accessModeSelect = document.querySelector("#access-mode");
 const sessionIdInput = document.querySelector("#session-id");
 const connectButton = document.querySelector("#connect");
 const startThinkButton = document.querySelector("#start-think");
+const openMemoriesButton = document.querySelector("#open-memories");
 const refreshSessionsButton = document.querySelector("#refresh-sessions");
 const logoutButton = document.querySelector("#logout");
 const sessionsList = document.querySelector("#sessions-list");
@@ -33,6 +34,7 @@ const sendStatusButton = document.querySelector("#send-status");
 const sendPermissionsButton = document.querySelector("#send-permissions");
 const appSessionPermissionsButton = document.querySelector("#app-session-permissions");
 const appSessionPermissionsValue = document.querySelector("#app-session-permissions-value");
+const appSessionMemoriesButton = document.querySelector("#app-session-memories");
 const killSessionButton = document.querySelector("#kill-session");
 const attachFileButton = document.querySelector("#attach-file");
 const voiceInputButton = document.querySelector("#voice-input");
@@ -106,6 +108,7 @@ const APP_COMMANDS = [
   { name: "/rename", description: "重命名当前 Session", requiresArgument: true },
   { name: "/compact", description: "压缩上下文，释放容量" },
   { name: "/copy", description: "复制最近一次完整回答", clientOnly: true },
+  { name: "/memories", description: "查看全局、项目、待检查与来源记忆", clientOnly: true },
   { name: "/diff", description: "查看工作区未提交修改" },
   { name: "/review", description: "Review 当前未提交修改" },
   { name: "/mcp", description: "查看已连接的 MCP Server" },
@@ -191,6 +194,7 @@ window.addEventListener("resize", () => fitTerminal({ delay: 120 }));
 logoutButton.addEventListener("click", logout);
 connectButton.addEventListener("click", () => startSession());
 startThinkButton.addEventListener("click", () => startSession({ cwd: ".", mode: "new", purpose: "think" }));
+openMemoriesButton.addEventListener("click", openMemoryManager);
 refreshSessionsButton.addEventListener("click", refreshLists);
 resumeAccessMode.addEventListener("change", renderResumeAccessWarning);
 resumeWithTerminal.addEventListener("click", () => resumePendingSession("terminal"));
@@ -219,6 +223,7 @@ keyEscButton.addEventListener("click", () => sendTerminalKey("\x1b"));
 sendStatusButton.addEventListener("click", () => command("/status"));
 sendPermissionsButton.addEventListener("click", () => command("/permissions"));
 appSessionPermissionsButton.addEventListener("click", () => runAppCommand("/permissions"));
+appSessionMemoriesButton.addEventListener("click", openMemoryManager);
 killSessionButton.addEventListener("click", endSession);
 terminalSessionPreviewDismiss.addEventListener("click", hideTerminalSessionPreview);
 appCommandClose.addEventListener("click", () => appCommandDialog.close());
@@ -973,6 +978,10 @@ function runAppCommand(value) {
     void copyLatestAppAnswer();
     return;
   }
+  if (commandName === "/memories") {
+    openMemoryManager();
+    return;
+  }
   if (commandName === "/status") {
     showAppCommandDialog({ title: "Session status", content: "正在读取真实 App Server 状态…" });
   } else if (commandName === "/usage") {
@@ -988,6 +997,10 @@ function runAppCommand(value) {
   if (!send({ type: "command", data: commandText })) {
     setUploadStatus("连接恢复中，命令尚未发送。");
   }
+}
+
+function openMemoryManager() {
+  globalThis.AgentMemories?.open({ project: activeSessionParams.cwd || projectSelect.value });
 }
 
 function renderAppCommandResult(payload = {}) {
@@ -2562,7 +2575,26 @@ function normalizeClientTranscriptItem(item = {}) {
     exitCode: Number.isFinite(item.exitCode) ? item.exitCode : null,
     turnId: String(item.turnId || ""),
     turnStartedAt: Number.isFinite(item.turnStartedAt) ? item.turnStartedAt : null,
+    memoryCitation: normalizeClientMemoryCitation(item.memoryCitation),
   };
+}
+
+function normalizeClientMemoryCitation(citation) {
+  if (!citation || typeof citation !== "object") return null;
+  const entries = (Array.isArray(citation.entries) ? citation.entries : [])
+    .map((entry) => ({
+      path: String(entry?.path || "").slice(0, 2_000),
+      lineStart: Number.isFinite(entry?.lineStart) ? entry.lineStart : null,
+      lineEnd: Number.isFinite(entry?.lineEnd) ? entry.lineEnd : null,
+      note: String(entry?.note || "").slice(0, 4_000),
+    }))
+    .filter((entry) => entry.path || entry.note)
+    .slice(0, 30);
+  const threadIds = (Array.isArray(citation.threadIds) ? citation.threadIds : [])
+    .map((threadId) => String(threadId || "").slice(0, 200))
+    .filter(Boolean)
+    .slice(0, 30);
+  return entries.length || threadIds.length ? { entries, threadIds } : null;
 }
 
 function trimClientTranscriptValue(value) {
@@ -2911,12 +2943,17 @@ function createAppTranscriptCard(item) {
     const lines = item.output.split("\n").length;
     card.append(createTranscriptDetails(`查看输出 · ${lines} 行`, item.output, false));
   }
+  if (item.memoryCitation) {
+    const count = item.memoryCitation.entries.length || item.memoryCitation.threadIds.length;
+    card.append(createTranscriptDetails(`参考了 ${count} 条记忆`, formatMemoryCitation(item.memoryCitation), false, "memory-citation"));
+  }
   return card;
 }
 
-function createTranscriptDetails(summaryText, content, open = false) {
+function createTranscriptDetails(summaryText, content, open = false, className = "") {
   const details = document.createElement("details");
   details.className = "app-transcript-details";
+  if (className) details.classList.add(className);
   details.open = open;
   const summary = document.createElement("summary");
   summary.textContent = summaryText;
@@ -2924,6 +2961,19 @@ function createTranscriptDetails(summaryText, content, open = false) {
   pre.textContent = content;
   details.append(summary, pre);
   return details;
+}
+
+function formatMemoryCitation(citation) {
+  const entries = citation.entries.map((entry, index) => {
+    const lineRange = entry.lineStart
+      ? `:${entry.lineStart}${entry.lineEnd && entry.lineEnd !== entry.lineStart ? `-${entry.lineEnd}` : ""}`
+      : "";
+    return [`${index + 1}. ${entry.note || "记忆来源"}`, entry.path ? `   ${entry.path}${lineRange}` : ""]
+      .filter(Boolean)
+      .join("\n");
+  });
+  if (citation.threadIds.length) entries.push(`关联 Session：\n${citation.threadIds.join("\n")}`);
+  return entries.join("\n\n");
 }
 
 function replaceAppTranscriptCard(item) {

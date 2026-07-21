@@ -10,6 +10,7 @@ import busboy from "busboy";
 import express from "express";
 import { WebSocketServer } from "ws";
 import { CodexAppServerClient } from "./lib/codex-app-server-client.js";
+import { readCodexMemoryStatus, readCodexMemoryView } from "./lib/codex-memories.js";
 import { gardenLinkForLocalMarkdown } from "./lib/local-file-link.js";
 import {
   latestPersistedSessionsByCodexId,
@@ -230,6 +231,30 @@ app.get("/api/projects", async (_req, res) => {
     workspaceRoot: WORKSPACE_ROOT,
     projects,
   });
+});
+
+app.get("/api/memories/status", async (_req, res) => {
+  try {
+    res.json(await readCodexMemoryStatus(CODEX_HOME));
+  } catch (error) {
+    console.error(`Failed to read Codex memory status: ${error.message}`);
+    res.status(500).json({ error: "Codex memory status is unavailable." });
+  }
+});
+
+app.get("/api/memories", async (req, res) => {
+  try {
+    res.json(
+      await readCodexMemoryView(CODEX_HOME, {
+        view: req.query.view,
+        project: req.query.project,
+        source: req.query.source,
+      }),
+    );
+  } catch (error) {
+    console.error(`Failed to read Codex memories: ${error.message}`);
+    res.status(500).json({ error: "Codex memories are unavailable." });
+  }
 });
 
 app.get("/api/push/config", (_req, res) => {
@@ -2184,7 +2209,26 @@ function normalizeAppTranscriptItem(item) {
     turnId: String(item.turnId || ""),
     turnStartedAt: Number.isFinite(item.turnStartedAt) ? item.turnStartedAt : null,
     turnStatus: String(item.turnStatus || ""),
+    memoryCitation: normalizeMemoryCitation(item.memoryCitation),
   };
+}
+
+function normalizeMemoryCitation(citation) {
+  if (!citation || typeof citation !== "object") return null;
+  const entries = (Array.isArray(citation.entries) ? citation.entries : [])
+    .slice(0, 30)
+    .map((entry) => ({
+      path: trimAppTranscriptValue(entry?.path, 2_000),
+      lineStart: Number.isFinite(entry?.lineStart) ? entry.lineStart : null,
+      lineEnd: Number.isFinite(entry?.lineEnd) ? entry.lineEnd : null,
+      note: trimAppTranscriptValue(entry?.note, 4_000),
+    }))
+    .filter((entry) => entry.path || entry.note);
+  const threadIds = (Array.isArray(citation.threadIds) ? citation.threadIds : [])
+    .map((threadId) => String(threadId || "").slice(0, 200))
+    .filter(Boolean)
+    .slice(0, 30);
+  return entries.length || threadIds.length ? { entries, threadIds } : null;
 }
 
 function appTranscriptFromThreadItem(session, item, context = {}) {
@@ -2200,6 +2244,7 @@ function appTranscriptFromThreadItem(session, item, context = {}) {
       label: "Codex",
       text: item.text || "",
       phase: item.phase || "",
+      memoryCitation: item.memoryCitation || null,
     };
   }
   if (item.type === "plan") {

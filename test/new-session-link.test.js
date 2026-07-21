@@ -10,5 +10,5 @@ test("URL shortcut starts a new workspace session explicitly", () => {
   assert.match(appSource, /if \(startNew\) \{\s+startSession\(\{\s+\.\.\.launch,\s+mode: "new"/);
   assert.match(appSource, /mode: overrides\.mode \|\| \(overrides\.sessionId \? "new" : launchModeSelect\.value\)/);
   assert.match(appSource, /!overrides\.sessionId \? accessModeSelect\.value \|\| "safe" : ""/);
-  assert.match(pageSource, /app\.js\?v=20260721-task-control-1/);
+  assert.match(pageSource, /app\.js\?v=20260721-project-routing-1/);
 });

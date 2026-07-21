@@ -5,11 +5,20 @@
   const statusElement = document.querySelector("#memory-status");
   const contextElement = document.querySelector("#memory-context");
   const contentElement = document.querySelector("#memory-content");
+  const projectRoutingElement = document.querySelector("#memory-project-routing");
+  const projectRoutingNote = document.querySelector("#memory-project-routing-note");
+  const projectAutoButton = document.querySelector("#memory-project-auto");
+  const projectOptionsElement = document.querySelector("#memory-project-options");
   const tabs = [...document.querySelectorAll("[data-memory-view]")];
   const triggerButtons = [...document.querySelectorAll(".memory-trigger")];
   const renderer = global.AgentMarkdown?.createRenderer() || null;
   let activeView = "overview";
-  let activeProject = "";
+  let activeProjects = [];
+  let routingMode = "auto";
+  let routingSource = "global";
+  let routingEnabled = false;
+  let projectChangeHandler = null;
+  let projectCatalog = [];
   let requestSequence = 0;
 
   if (!dialog) {
@@ -19,6 +28,12 @@
 
   closeButton?.addEventListener("click", () => dialog.close());
   refreshButton?.addEventListener("click", () => void loadView());
+  projectAutoButton?.addEventListener("click", () => {
+    routingMode = "auto";
+    routingSource = activeProjects.length ? "retained" : "global";
+    renderProjectRouting();
+    projectChangeHandler?.({ mode: routingMode, projects: activeProjects });
+  });
   dialog.addEventListener("click", (event) => {
     if (event.target === dialog) dialog.close();
   });
@@ -32,9 +47,17 @@
   void refreshStatus();
 
   function open(options = {}) {
-    activeProject = normalizeProject(options.project);
+    activeProjects = Object.hasOwn(options, "projects")
+      ? normalizeProjects(options.projects)
+      : normalizeProjects([options.project]);
+    routingMode = options.mode === "manual" ? "manual" : "auto";
+    routingSource = normalizeRoutingSource(options.source);
+    routingEnabled = typeof options.onProjectChange === "function";
+    projectChangeHandler = routingEnabled ? options.onProjectChange : null;
+    projectRoutingElement?.classList.toggle("hidden", !routingEnabled);
     activeView = options.view || "overview";
     syncTabs();
+    renderProjectRouting();
     renderContext();
     if (!dialog.open) dialog.showModal();
     void loadView();
@@ -46,12 +69,17 @@
     refreshButton.disabled = true;
     try {
       const query = new URLSearchParams({ view: activeView });
-      if (activeView === "detail" && activeProject) query.set("project", activeProject);
+      if (activeView === "detail" && activeProjects.length) {
+        query.set("project", activeProjects[0]);
+        query.set("projects", JSON.stringify(activeProjects));
+      }
       if (source) query.set("source", source);
       const response = await fetch(`/api/memories?${query}`);
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "读取失败");
       if (sequence !== requestSequence) return;
+      projectCatalog = Array.isArray(data.personal?.projectCatalog) ? data.personal.projectCatalog : [];
+      renderProjectRouting();
       renderStatus({ ...(data.status || {}), personal: data.personal });
       if (activeView === "sources") renderSources(data);
       else renderDocument(data);
@@ -109,15 +137,73 @@
             : { key: "off", text: "未启动", title: "个人记忆后台尚未启动" };
     for (const button of triggerButtons) {
       button.dataset.memoryState = state.key;
-      button.title = state.title;
       const value = button.querySelector("[data-memory-trigger-status]");
-      if (value) value.textContent = state.text;
+      if (value) {
+        value.textContent = state.text;
+        button.title = state.title;
+      } else {
+        button.dataset.memoryRuntimeTitle = state.title;
+      }
     }
   }
 
   function renderContext() {
-    const projectLabel = activeProject ? activeProject.split("/").filter(Boolean).at(-1) : "workspace";
+    const projectLabel = activeProjects.length ? activeProjects.map(shortProjectName).join(" + ") : "仅全局记忆";
     contextElement.textContent = activeView === "detail" ? `项目范围：${projectLabel}` : "全局范围";
+  }
+
+  function renderProjectRouting() {
+    if (!routingEnabled || !projectRoutingElement) return;
+    const sourceLabels = {
+      manual: "手动选择；从下一条消息生效，后续不会自动切换",
+      prompt: "自动：由当前消息识别",
+      retained: "自动：沿用本 Session 上一轮",
+      cwd: "自动：由具体项目目录识别",
+      title: "自动：由 Session 标题识别",
+      global: "自动：暂未识别项目，只读取全局记忆",
+    };
+    projectRoutingNote.textContent = `${sourceLabels[routingMode === "manual" ? "manual" : routingSource] || sourceLabels.global}；workspace 只负责文件范围`;
+    projectAutoButton.disabled = routingMode === "auto";
+    projectOptionsElement.replaceChildren();
+    if (!projectCatalog.length) {
+      projectOptionsElement.append(message("还没有可选的项目记忆。", "empty"));
+      return;
+    }
+    const selected = new Set(activeProjects);
+    for (const item of projectCatalog) {
+      const project = normalizeProject(item.project);
+      if (!project) continue;
+      const label = documentElement("label", "memory-project-option");
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = selected.has(project);
+      input.addEventListener("change", () => {
+        const next = new Set(activeProjects);
+        if (input.checked) next.add(project);
+        else next.delete(project);
+        activeProjects = [...next];
+        routingMode = "manual";
+        routingSource = "manual";
+        renderContext();
+        renderProjectRouting();
+        projectChangeHandler?.({ mode: routingMode, projects: activeProjects });
+        if (activeView === "detail") void loadView();
+      });
+      const text = document.createElement("span");
+      text.textContent = `${shortProjectName(project)} · ${Number(item.count || 0)}`;
+      text.title = project;
+      label.append(input, text);
+      projectOptionsElement.append(label);
+    }
+  }
+
+  function updateSessionRouting(options = {}) {
+    if (!routingEnabled) return;
+    activeProjects = normalizeProjects(options.projects);
+    routingMode = options.mode === "manual" ? "manual" : "auto";
+    routingSource = normalizeRoutingSource(options.source);
+    renderContext();
+    renderProjectRouting();
   }
 
   function syncTabs() {
@@ -355,8 +441,8 @@
     const copy = {
       overview: "类似 ChatGPT Overview：这里汇总跨工作与生活的稳定背景、偏好和近期主题。",
       detail: document.filtered
-        ? "只显示能匹配当前项目名称或路径的工程与过程记忆；未匹配内容不会混入。"
-        : "选择具体项目后，会按项目名称和路径筛选工程记忆。",
+        ? "只显示当前选择的一个或多个项目记忆；未选择的项目不会混入。"
+        : "选择一个或多个项目后，会同时读取这些项目的工程与过程记忆。",
       pending: "只有不确定、敏感、冲突或重要替换建议会来到这里；明确且稳定的信息会自动确认。下方的 Codex 原生候选仍是只读参考。",
       sources: `这里列出已处理的 Session，以及 Codex 原生生成的 ${status.sourceCount || 0} 份摘要。`,
     };
@@ -385,6 +471,18 @@
     return project === "." ? "" : project;
   }
 
+  function normalizeProjects(value) {
+    return [...new Set((Array.isArray(value) ? value : []).map(normalizeProject).filter(Boolean))];
+  }
+
+  function normalizeRoutingSource(value) {
+    return ["manual", "prompt", "retained", "cwd", "title", "global"].includes(value) ? value : "global";
+  }
+
+  function shortProjectName(value) {
+    return normalizeProject(value).split("/").filter(Boolean).at(-1) || "项目";
+  }
+
   function formatDate(value) {
     const date = new Date(value);
     return Number.isNaN(date.getTime())
@@ -404,5 +502,5 @@
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(bytes >= 10_240 ? 0 : 1)} KB` : `${bytes} B`;
   }
 
-  global.AgentMemories = Object.freeze({ open, refreshStatus });
+  global.AgentMemories = Object.freeze({ open, refreshStatus, updateSessionRouting });
 })(globalThis);

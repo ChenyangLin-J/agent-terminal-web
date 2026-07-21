@@ -24,6 +24,7 @@ import {
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
 const CODEX_HOME = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+const AGENT_SESSION_SETTINGS_FILE = path.join(CODEX_HOME, "agent-session-settings.json");
 const SCHEMA_FILE = path.join(REPO_ROOT, "config", "personal-memory-output.schema.json");
 const HOME_PUSH_URL = process.env.HOME_PUSH_URL || "http://127.0.0.1:3050/internal/push";
 const IDLE_MS = Math.max(60_000, Number(process.env.PERSONAL_MEMORY_IDLE_MS) || 10 * 60_000);
@@ -195,6 +196,7 @@ async function run() {
 
 function listEligibleThreads() {
   const database = latestStateDatabase();
+  const sessionSettings = readAgentSessionSettings();
   const db = new DatabaseSync(database, { readOnly: true });
   try {
     return db
@@ -208,9 +210,28 @@ function listEligibleThreads() {
         ORDER BY COALESCE(updated_at_ms, updated_at * 1000) ASC
       `)
       .all()
-      .map((row) => ({ ...row, updatedAtMs: Number(row.updatedAtMs) || 0 }));
+      .map((row) => {
+        const routing = sessionSettings[row.id] || {};
+        return {
+          ...row,
+          updatedAtMs: Number(row.updatedAtMs) || 0,
+          memoryProjectMode: routing.memoryProjectMode === "manual" ? "manual" : "auto",
+          memoryProjects: Array.isArray(routing.memoryProjects)
+            ? routing.memoryProjects.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 20)
+            : [],
+        };
+      });
   } finally {
     db.close();
+  }
+}
+
+function readAgentSessionSettings() {
+  try {
+    const parsed = JSON.parse(process.getBuiltinModule("node:fs").readFileSync(AGENT_SESSION_SETTINGS_FILE, "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
   }
 }
 

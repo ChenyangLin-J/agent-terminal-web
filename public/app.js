@@ -37,6 +37,7 @@ const sendPermissionsButton = document.querySelector("#send-permissions");
 const appSessionPermissionsButton = document.querySelector("#app-session-permissions");
 const appSessionPermissionsValue = document.querySelector("#app-session-permissions-value");
 const appSessionMemoriesButton = document.querySelector("#app-session-memories");
+const appSessionMemoryProjects = document.querySelector("#app-session-memory-projects");
 const appSessionTaskControl = document.querySelector("#app-session-task-control");
 const appSessionTaskState = document.querySelector("#app-session-task-state");
 const appSessionTaskStop = document.querySelector("#app-session-task-stop");
@@ -173,6 +174,9 @@ let resumeInterruptedPending = false;
 let interruptRequestPending = false;
 let activeTransport = "terminal";
 let activeAccessMode = "safe";
+let activeMemoryProjectMode = "auto";
+let activeMemoryProjects = [];
+let activeMemoryProjectSource = "global";
 let activeSessionReady = true;
 let activeStartupQueueSupported = false;
 let activeTurnInterruptSupported = false;
@@ -787,6 +791,9 @@ function openSocket(params, options = {}) {
     cachedSessionPreview = null;
     appSkills = [];
     appSkillsRequested = false;
+    activeMemoryProjectMode = "auto";
+    activeMemoryProjects = [];
+    activeMemoryProjectSource = "global";
     hideComposerSuggestions();
     hideTerminalSessionPreview();
     terminalPreviewAllowed = activeTransport === "terminal" && !hasSnapshot && resumesTerminalHistory;
@@ -979,6 +986,13 @@ function handleControlAck(payload = {}) {
     setUploadStatus(`已切换为${appAccessLabel(payload.access)}。`, { clear: true });
     return;
   }
+  if (payload.kind === "memory-projects") {
+    activeMemoryProjectMode = payload.mode === "manual" ? "manual" : "auto";
+    activeMemoryProjects = normalizeSessionMemoryProjects(payload.projects);
+    syncMemoryProjectLabel();
+    setUploadStatus("当前 Session 的项目记忆已更新。", { clear: true });
+    return;
+  }
   if (payload.kind === "agent-response") {
     setUploadStatus("已提交给 Codex。", { clear: true });
     return;
@@ -1110,8 +1124,34 @@ function runAppCommand(value) {
   }
 }
 
-function openMemoryManager() {
-  globalThis.AgentMemories?.open({ project: activeSessionParams.cwd || projectSelect.value });
+function openMemoryManager(event) {
+  const sessionRouting =
+    activeTransport === "app-server" &&
+    activeSessionId &&
+    (!sessionScreen.classList.contains("hidden") || event?.currentTarget === appSessionMemoriesButton);
+  globalThis.AgentMemories?.open({
+    project: activeSessionParams.cwd || projectSelect.value,
+    ...(sessionRouting
+      ? {
+          projects: activeMemoryProjects,
+          mode: activeMemoryProjectMode,
+          source: activeMemoryProjectSource,
+          onProjectChange: updateMemoryProjectSelection,
+        }
+      : {}),
+  });
+}
+
+function updateMemoryProjectSelection(selection = {}) {
+  const mode = selection.mode === "manual" ? "manual" : "auto";
+  const projects = normalizeSessionMemoryProjects(selection.projects);
+  activeMemoryProjectMode = mode;
+  activeMemoryProjects = projects;
+  activeMemoryProjectSource = mode === "manual" ? "manual" : projects.length ? "retained" : "global";
+  syncMemoryProjectLabel();
+  if (!send({ type: "set-memory-projects", mode, projects })) {
+    setUploadStatus("连接恢复中，记忆项目尚未修改。", { clear: true });
+  }
 }
 
 function renderAppCommandResult(payload = {}) {
@@ -1554,6 +1594,7 @@ function syncAppSessionToolbar() {
   appSessionPermissionsButton.dataset.access = activeAccessMode;
   appSessionPermissionsValue.textContent = appAccessLabel(activeAccessMode);
   appSessionPermissionsButton.setAttribute("aria-label", `权限：${appAccessLabel(activeAccessMode)}`);
+  syncMemoryProjectLabel();
   const canInterrupt =
     activeTransport === "app-server" &&
     activeTurnInterruptSupported &&
@@ -1570,6 +1611,26 @@ function syncAppSessionToolbar() {
     "aria-label",
     canInterrupt ? "当前任务正在处理，点击停止" : `当前任务：${taskState.label}`,
   );
+}
+
+function syncMemoryProjectLabel() {
+  const scope = activeMemoryProjects.length
+    ? activeMemoryProjects.map(shortSessionMemoryProject).join(" + ")
+    : "全局";
+  const mode = activeMemoryProjectMode === "manual" ? "手动" : "自动";
+  appSessionMemoryProjects.textContent = `${mode} · ${scope}`;
+  const runtime = appSessionMemoriesButton.dataset.memoryRuntimeTitle || "个人记忆自动运行中";
+  const fullProjects = activeMemoryProjects.length ? activeMemoryProjects.join("、") : "仅全局记忆";
+  appSessionMemoriesButton.title = `${runtime}；${mode}使用：${fullProjects}`;
+  appSessionMemoriesButton.setAttribute("aria-label", `记忆：${mode}使用 ${fullProjects}`);
+}
+
+function normalizeSessionMemoryProjects(value) {
+  return [...new Set((Array.isArray(value) ? value : []).map((item) => String(item || "").trim()).filter(Boolean))].slice(0, 20);
+}
+
+function shortSessionMemoryProject(value) {
+  return String(value || "").split("/").filter(Boolean).at(-1) || "项目";
 }
 
 function appSessionTaskStateValue() {
@@ -2118,10 +2179,20 @@ function renderStatus(status) {
   };
   activeTransport = status.transport === "app-server" ? "app-server" : "terminal";
   activeAccessMode = status.access === "full" ? "full" : "safe";
+  activeMemoryProjectMode = status.memoryProjectMode === "manual" ? "manual" : "auto";
+  activeMemoryProjects = normalizeSessionMemoryProjects(status.memoryProjects);
+  activeMemoryProjectSource = ["manual", "prompt", "retained", "cwd", "title", "global"].includes(status.memoryProjectSource)
+    ? status.memoryProjectSource
+    : "global";
   activeSessionReady = status.ready !== false;
   activeStartupQueueSupported = Boolean(status.capabilities?.startupQueue);
   activeTurnInterruptSupported = Boolean(status.capabilities?.interruptTurn);
   syncAppSessionToolbar();
+  globalThis.AgentMemories?.updateSessionRouting({
+    mode: activeMemoryProjectMode,
+    projects: activeMemoryProjects,
+    source: activeMemoryProjectSource,
+  });
   document.body.classList.toggle("app-server-session", activeTransport === "app-server");
   updateSessionViewLabels();
   currentSessionExited = Boolean(status.exited);

@@ -314,9 +314,15 @@ app.get("/api/memories/status", async (_req, res) => {
       readCodexMemoryStatus(CODEX_HOME),
       readPersonalMemoryView(CODEX_HOME, { view: "overview" }),
     ]);
+    personal.projectCatalog = mergeMemoryProjectCatalog(personal.projectCatalog, workspaceMemoryProjectNames());
     res.json({
       ...status,
-      personal: { counts: personal.counts, importScope: personal.importScope, runtime: personal.runtime },
+      personal: {
+        counts: personal.counts,
+        importScope: personal.importScope,
+        runtime: personal.runtime,
+        projectCatalog: personal.projectCatalog,
+      },
     });
   } catch (error) {
     console.error(`Failed to read Codex memory status: ${error.message}`);
@@ -327,14 +333,16 @@ app.get("/api/memories/status", async (_req, res) => {
 app.get("/api/memories", async (req, res) => {
   try {
     const options = {
-        view: req.query.view,
-        project: req.query.project,
-        source: req.query.source,
+      view: req.query.view,
+      project: req.query.project,
+      projects: req.query.projects,
+      source: req.query.source,
     };
     const [native, personal] = await Promise.all([
       readCodexMemoryView(CODEX_HOME, options),
       readPersonalMemoryView(CODEX_HOME, options),
     ]);
+    personal.projectCatalog = mergeMemoryProjectCatalog(personal.projectCatalog, workspaceMemoryProjectNames());
     res.json({ ...native, personal });
   } catch (error) {
     console.error(`Failed to read Codex memories: ${error.message}`);
@@ -820,10 +828,14 @@ function createTerminalSession(cwd, launch, restored = {}) {
   const id = restored.id || cryptoRandomId();
   const startedAt = new Date().toISOString();
   const shell = process.env.CODEX_COMMAND || "codex";
+  const initialMemoryRouting = initialSessionMemoryRouting(launch.sessionId, restored);
   const memoryContext = personalMemoryContextForPromptSync(CODEX_HOME, {
     cwd,
     title: launch.title,
     workspaceRoot: WORKSPACE_ROOT,
+    memoryProjectMode: initialMemoryRouting.mode,
+    memoryProjects: initialMemoryRouting.projects,
+    knownProjects: workspaceMemoryProjectNames(),
   });
   const commandArgs = codexArgsForWeb(launch.args, memoryContext.value);
   const env = codexEnvironmentForWeb(id, {
@@ -874,6 +886,9 @@ function createTerminalSession(cwd, launch, restored = {}) {
     mode: launch.mode,
     sessionId: launch.sessionId,
     title: launch.title || "",
+    memoryProjectMode: memoryContext.projectMode,
+    memoryProjects: memoryContext.projects,
+    memoryProjectSource: memoryContext.projectSource,
     tmuxName,
     terminal,
     clients: new Set(),
@@ -894,6 +909,7 @@ function createTerminalSession(cwd, launch, restored = {}) {
   };
   sessions.set(id, session);
   rememberAgentSessionAccess(session.sessionId, session.access);
+  rememberAgentSessionMemoryRouting(session);
   persistRestorableWebSession(session);
   logAgentEvent("session-start", {
     webSessionId: session.id,
@@ -933,6 +949,7 @@ function createTerminalSession(cwd, launch, restored = {}) {
 function createAppServerSession(cwd, launch, restored = {}) {
   const id = restored.id || cryptoRandomId();
   const startedAt = new Date().toISOString();
+  const initialMemoryRouting = initialSessionMemoryRouting(launch.sessionId, restored);
   const appServer = new CodexAppServerClient({
     cwd,
     command: process.env.CODEX_APP_SERVER_COMMAND || "codex",
@@ -953,6 +970,9 @@ function createAppServerSession(cwd, launch, restored = {}) {
     mode: launch.mode,
     sessionId: launch.sessionId,
     title: launch.title || "",
+    memoryProjectMode: initialMemoryRouting.mode,
+    memoryProjects: initialMemoryRouting.projects,
+    memoryProjectSource: initialMemoryRouting.source,
     tmuxName: "",
     terminal: null,
     appServer,
@@ -1050,6 +1070,7 @@ async function initializeAppServerSession(session, launch) {
     }
     session.sessionId = thread.id;
     rememberAgentSessionAccess(session.sessionId, session.access);
+    rememberAgentSessionMemoryRouting(session);
     session.ready = true;
     session.lastActivityAt = new Date().toISOString();
     appendSessionOutput(session, "\r\n\x1b[36mApp Server ready. Follow-ups are bound to an exact turn.\x1b[0m\r\n");
@@ -1121,6 +1142,9 @@ function restoreTmuxSession(id) {
         appModel: record.appModel,
         appReasoningEffort: record.appReasoningEffort,
         appServiceTier: record.appServiceTier,
+        memoryProjectMode: record.memoryProjectMode,
+        memoryProjects: record.memoryProjects,
+        memoryProjectSource: record.memoryProjectSource,
         turnState: interruptedTurnStateAfterProcessLoss(record.turnState, record.lastActivityAt),
       },
     );
@@ -1153,6 +1177,9 @@ function restoreTmuxSession(id) {
         appModel: record.appModel,
         appReasoningEffort: record.appReasoningEffort,
         appServiceTier: record.appServiceTier,
+        memoryProjectMode: record.memoryProjectMode,
+        memoryProjects: record.memoryProjects,
+        memoryProjectSource: record.memoryProjectSource,
         turnState: interruptedTurnStateAfterProcessLoss(record.turnState, record.lastActivityAt),
       },
     );
@@ -1183,6 +1210,9 @@ function restoreTmuxSession(id) {
     notificationDeviceId: record.notificationDeviceId,
     purpose: normalizeSessionPurpose(record.purpose),
     thinkSkillActivated: Boolean(record.thinkSkillActivated),
+    memoryProjectMode: record.memoryProjectMode,
+    memoryProjects: record.memoryProjects,
+    memoryProjectSource: record.memoryProjectSource,
     turnState: record.turnState,
   });
 }
@@ -1215,6 +1245,9 @@ function listDetachedSessions() {
       ready: false,
       mode: record.mode || "new",
       sessionId: record.sessionId || "",
+      memoryProjectMode: record.memoryProjectMode === "manual" ? "manual" : "auto",
+      memoryProjects: normalizeMemoryProjectNames(record.memoryProjects),
+      memoryProjectSource: normalizeMemoryProjectSource(record.memoryProjectSource),
       startedAt: record.startedAt || new Date().toISOString(),
       lastActivityAt: record.lastActivityAt || record.startedAt || new Date().toISOString(),
       cols: 100,
@@ -1455,6 +1488,26 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
         access: session.access,
         receivedAt: Date.now(),
       });
+      return;
+    }
+
+    if (message.type === "set-memory-projects" && session.transport === APP_SERVER_TRANSPORT) {
+      void updateSessionMemoryRouting(session, {
+        mode: message.mode,
+        projects: message.projects,
+      })
+        .then(() => {
+          session.lastActivityAt = new Date().toISOString();
+          persistRestorableWebSession(session);
+          broadcast(session, "status", publicSession(session));
+          send(ws, "control-ack", {
+            kind: "memory-projects",
+            mode: session.memoryProjectMode,
+            projects: session.memoryProjects,
+            receivedAt: Date.now(),
+          });
+        })
+        .catch((error) => send(ws, "error", { message: `记忆项目没有修改：${error.message}` }));
       return;
     }
 
@@ -2179,7 +2232,14 @@ async function appServerPersonalMemory(session, prompt) {
       title: session.title,
       prompt,
       workspaceRoot: WORKSPACE_ROOT,
+      memoryProjectMode: session.memoryProjectMode,
+      memoryProjects: session.memoryProjects,
+      knownProjects: workspaceMemoryProjectNames(),
     });
+    session.memoryProjectMode = memory.projectMode;
+    session.memoryProjects = memory.projects;
+    session.memoryProjectSource = memory.projectSource;
+    rememberAgentSessionMemoryRouting(session);
     return {
       additionalContext: memory.value
         ? { "personal-memory": { kind: "application", value: memory.value } }
@@ -2190,6 +2250,24 @@ async function appServerPersonalMemory(session, prompt) {
     console.error(`Failed to load personal memory context: ${error.message}`);
     return { additionalContext: undefined, citation: null };
   }
+}
+
+async function updateSessionMemoryRouting(session, options = {}) {
+  const mode = options.mode === "manual" ? "manual" : "auto";
+  const projects = Object.hasOwn(options, "projects") ? options.projects : session.memoryProjects;
+  const memory = await personalMemoryContextForPrompt(CODEX_HOME, {
+    cwd: session.cwd,
+    title: session.title,
+    workspaceRoot: WORKSPACE_ROOT,
+    memoryProjectMode: mode,
+    memoryProjects: projects,
+    knownProjects: workspaceMemoryProjectNames(),
+  });
+  session.memoryProjectMode = memory.projectMode;
+  session.memoryProjects = memory.projects;
+  session.memoryProjectSource = memory.projectSource;
+  rememberAgentSessionMemoryRouting(session);
+  return memory;
 }
 
 function queuePersonalMemoryCitation(session, requirementId, citation) {
@@ -3246,6 +3324,9 @@ function publicSession(session) {
     ready: session.ready !== false,
     mode: session.mode,
     sessionId: session.sessionId,
+    memoryProjectMode: session.memoryProjectMode === "manual" ? "manual" : "auto",
+    memoryProjects: normalizeMemoryProjectNames(session.memoryProjects),
+    memoryProjectSource: normalizeMemoryProjectSource(session.memoryProjectSource),
     startedAt: session.startedAt,
     lastActivityAt: session.lastActivityAt,
     cols: session.cols,
@@ -3377,6 +3458,9 @@ function persistWebSession(session) {
     appModel: String(session.appModel || ""),
     appReasoningEffort: String(session.appReasoningEffort || ""),
     appServiceTier: ["priority", "default"].includes(session.appServiceTier) ? session.appServiceTier : null,
+    memoryProjectMode: session.memoryProjectMode === "manual" ? "manual" : "auto",
+    memoryProjects: normalizeMemoryProjectNames(session.memoryProjects),
+    memoryProjectSource: normalizeMemoryProjectSource(session.memoryProjectSource),
     mode: session.mode,
     sessionId: session.sessionId,
     title: session.title,
@@ -3437,15 +3521,44 @@ function rememberAgentSessionAccess(sessionId, access) {
   if (!isValidSessionId(sessionId)) return;
   const settings = readAgentSessionSettings();
   settings[sessionId] = {
+    ...(settings[sessionId] || {}),
     access: normalizeAccessMode(access),
     updatedAt: new Date().toISOString(),
   };
 
+  writeAgentSessionSettings(settings);
+}
+
+function rememberAgentSessionMemoryRouting(session) {
+  if (!isValidSessionId(session?.sessionId)) return;
+  const settings = readAgentSessionSettings();
+  settings[session.sessionId] = {
+    ...(settings[session.sessionId] || {}),
+    access: normalizeAccessMode(session.access),
+    memoryProjectMode: session.memoryProjectMode === "manual" ? "manual" : "auto",
+    memoryProjects: normalizeMemoryProjectNames(session.memoryProjects),
+    memoryProjectSource: normalizeMemoryProjectSource(session.memoryProjectSource),
+    updatedAt: new Date().toISOString(),
+  };
+  writeAgentSessionSettings(settings);
+}
+
+function writeAgentSessionSettings(settings) {
   try {
     fsSync.mkdirSync(path.dirname(AGENT_SESSION_SETTINGS_FILE), { recursive: true });
     const cleaned = Object.fromEntries(
       Object.entries(settings)
         .filter(([id, setting]) => isValidSessionId(id) && ["safe", "full"].includes(setting?.access))
+        .map(([id, setting]) => [
+          id,
+          {
+            ...setting,
+            access: normalizeAccessMode(setting.access),
+            memoryProjectMode: setting.memoryProjectMode === "manual" ? "manual" : "auto",
+            memoryProjects: normalizeMemoryProjectNames(setting.memoryProjects),
+            memoryProjectSource: normalizeMemoryProjectSource(setting.memoryProjectSource),
+          },
+        ])
         .sort(([a], [b]) => a.localeCompare(b)),
     );
     const tempFile = `${AGENT_SESSION_SETTINGS_FILE}.${process.pid}.tmp`;
@@ -3454,6 +3567,52 @@ function rememberAgentSessionAccess(sessionId, access) {
   } catch (error) {
     console.error(`Failed to write agent session settings: ${error.message}`);
   }
+}
+
+function initialSessionMemoryRouting(sessionId, restored = {}) {
+  const saved = isValidSessionId(sessionId) ? readAgentSessionSettings()[sessionId] || {} : {};
+  const modeValue = restored.memoryProjectMode !== undefined ? restored.memoryProjectMode : saved.memoryProjectMode;
+  const projectValue = restored.memoryProjects !== undefined ? restored.memoryProjects : saved.memoryProjects;
+  const sourceValue = restored.memoryProjectSource !== undefined ? restored.memoryProjectSource : saved.memoryProjectSource;
+  return {
+    mode: modeValue === "manual" ? "manual" : "auto",
+    projects: normalizeMemoryProjectNames(projectValue),
+    source: normalizeMemoryProjectSource(sourceValue),
+  };
+}
+
+function normalizeMemoryProjectNames(value) {
+  return [...new Set((Array.isArray(value) ? value : []).map((item) => String(item || "").trim().slice(0, 300)).filter((item) => item && item !== "."))].slice(0, 20);
+}
+
+function normalizeMemoryProjectSource(value) {
+  return ["manual", "prompt", "retained", "cwd", "title", "global"].includes(value) ? value : "global";
+}
+
+function workspaceMemoryProjectNames() {
+  try {
+    return fsSync
+      .readdirSync(WORKSPACE_ROOT, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "uploads")
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+}
+
+function mergeMemoryProjectCatalog(catalog, knownProjects) {
+  const projects = new Map();
+  for (const item of Array.isArray(catalog) ? catalog : []) {
+    const project = String(item?.project || "").trim();
+    if (!project || project.toLowerCase() === "workspace") continue;
+    projects.set(project.toLowerCase(), { project, count: Math.max(0, Number(item.count) || 0) });
+  }
+  for (const raw of Array.isArray(knownProjects) ? knownProjects : []) {
+    const project = String(raw || "").trim();
+    if (!project || project.toLowerCase() === "workspace" || projects.has(project.toLowerCase())) continue;
+    projects.set(project.toLowerCase(), { project, count: 0 });
+  }
+  return [...projects.values()].sort((a, b) => a.project.localeCompare(b.project));
 }
 
 function savedAgentSessionAccess(sessionId, persistedRecords = readPersistedWebSessions()) {

@@ -39,7 +39,7 @@
     <link rel="stylesheet" href="/styles.css?v=20260721-task-control-1" />
     <link rel="stylesheet" href="/session-focus-mode.css?v=20260720-app-toolbar-1" />
     <link rel="stylesheet" href="/thinking-session.css?v=20260716-1" />
-    <link rel="stylesheet" href="/agent-memories.css?v=20260721-2" />
+    <link rel="stylesheet" href="/agent-memories.css?v=20260721-project-routing-1" />
   </head>
   <body>
     <main class="app">
@@ -208,7 +208,7 @@
             title="管理个人记忆"
           >
             <span>记忆</span>
-            <strong data-memory-trigger-status>检查中</strong>
+            <strong id="app-session-memory-projects" data-memory-project-label>自动 · 全局</strong>
           </button>
         </section>
 
@@ -328,6 +328,16 @@
           <span id="memory-context">全局范围</span>
           <strong id="memory-status" class="memory-status">正在读取</strong>
         </div>
+        <section id="memory-project-routing" class="memory-project-routing hidden" aria-label="当前 Session 的项目记忆">
+          <div class="memory-project-routing-header">
+            <div>
+              <strong>本 Session 使用的项目记忆</strong>
+              <span id="memory-project-routing-note">自动按对话识别，workspace 只负责文件范围</span>
+            </div>
+            <button id="memory-project-auto" type="button">恢复自动</button>
+          </div>
+          <div id="memory-project-options" class="memory-project-options"></div>
+        </section>
         <nav class="memory-tabs" role="tablist" aria-label="记忆视图">
           <button class="active" type="button" role="tab" aria-selected="true" data-memory-view="overview">总览</button>
           <button type="button" role="tab" aria-selected="false" data-memory-view="detail">当前项目</button>
@@ -342,12 +352,12 @@
     <script src="/vendor/xterm-fit/addon-fit.js?v=20260625-5"></script>
     <script src="/vendor/markdown-it/markdown-it.min.js?v=14.3.0"></script>
     <script src="/app-markdown.js?v=20260721-local-files-1"></script>
-    <script src="/agent-memories.js?v=20260721-5"></script>
+    <script src="/agent-memories.js?v=20260721-project-routing-1"></script>
     <script src="/shared/voice-recovery-store.js?v=20260717-2"></script>
     <script src="/shared/voice-capture-widget.js?v=20260717-recovery-3"></script>
     <script src="/agent-upload.js?v=20260713-progress-1"></script>
     <script src="/agent-voice-input.js?v=20260717-recovery-2"></script>
-    <script src="/app.js?v=20260721-task-control-1"></script>
+    <script src="/app.js?v=20260721-project-routing-1"></script>
     <script src="/session-focus-mode.js?v=20260716-app-chrome-1"></script>
   </body>
 </html>

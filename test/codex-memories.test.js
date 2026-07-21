@@ -134,6 +134,40 @@ test("project memory view keeps matching project sections separate", async (t) =
   });
   assert.match(result.document.content, /audio segmentation/);
   assert.doesNotMatch(result.document.content, /Thoughts are published/);
+
+  const combined = await readCodexMemoryView(codexHome, {
+    view: "detail",
+    projects: JSON.stringify(["tibetan-learning-tool", "personal-site"]),
+  });
+  assert.match(combined.document.content, /audio segmentation/);
+  assert.match(combined.document.content, /Thoughts are published/);
+  assert.deepEqual(combined.document.projects, ["tibetan-learning-tool", "personal-site"]);
+});
+
+test("personal project memory view accepts multiple semantic projects", async (t) => {
+  const codexHome = await temporaryCodexHome(t);
+  await fs.mkdir(path.join(codexHome, "personal-memories"), { recursive: true });
+  await fs.writeFile(
+    path.join(codexHome, "personal-memories", "store.json"),
+    `${JSON.stringify({
+      version: 2,
+      entries: [
+        { id: "project-agent-one", status: "confirmed", scope: "project", project: "agent-terminal-web", category: "目标", text: "Agent 目标。" },
+        { id: "project-home-one", status: "confirmed", scope: "project", project: "home-portal", category: "目标", text: "Home 目标。" },
+        { id: "project-site-one", status: "confirmed", scope: "project", project: "personal-site", category: "目标", text: "Site 目标。" },
+      ],
+      sources: [],
+      tombstones: [],
+    })}\n`,
+  );
+
+  const view = await readPersonalMemoryView(codexHome, {
+    view: "detail",
+    projects: JSON.stringify(["agent-terminal-web", "home-portal"]),
+  });
+  assert.deepEqual(view.selectedProjects, ["agent-terminal-web", "home-portal"]);
+  assert.deepEqual(view.entries.map((entry) => entry.id), ["project-agent-one", "project-home-one"]);
+  assert.deepEqual(view.projectCatalog.map((item) => item.project), ["agent-terminal-web", "home-portal", "personal-site"]);
 });
 
 test("memory source reads are restricted to generated Markdown summaries", async (t) => {
@@ -170,6 +204,7 @@ test("Agent Web exposes memory review views and authenticated APIs", async () =>
   assert.match(server, /app\.delete\("\/api\/memories\/:id"/);
   assert.match(page, /id="open-memories"/);
   assert.match(page, /id="app-session-memories"/);
+  assert.match(page, /id="memory-project-routing"/);
   assert.doesNotMatch(page, /id="open-memories" class="hidden"/);
   assert.match(page, /Personal Memory · 自动运行/);
   assert.match(page, /data-memory-trigger-status/);
@@ -183,8 +218,10 @@ test("Agent Web exposes memory review views and authenticated APIs", async () =>
   assert.match(memoryUi, /renderPersonalEntries/);
   assert.match(memoryUi, /refreshStatus/);
   assert.match(memoryUi, /待确认 \$\{pendingCount\}/);
+  assert.match(memoryUi, /onProjectChange/);
   assert.match(app, /name: "\/memories"/);
   assert.match(app, /AgentMemories\?\.open/);
+  assert.match(app, /type: "set-memory-projects"/);
   assert.match(styles, /\.memory-dialog/);
 });
 

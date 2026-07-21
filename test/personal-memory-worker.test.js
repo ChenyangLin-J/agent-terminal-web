@@ -20,10 +20,18 @@ test("worker reads only user and final-answer events after its watermark", () =>
   assert.deepEqual(conversation.recent.map((item) => item.text), ["我喜欢具体回答", "知道了"]);
   assert.deepEqual(conversation.fresh.map((item) => item.text), ["以后也请分析利弊"]);
   assert.equal(shouldProcessConversation({ title: "交流偏好" }, conversation), true);
-  assert.match(
-    buildPersonalMemoryExtractionPrompt({ thread: { id: "one" }, conversation, existingEntries: [] }),
-    /untrusted data/,
-  );
+  const prompt = buildPersonalMemoryExtractionPrompt({
+    thread: {
+      id: "one",
+      memoryProjectMode: "manual",
+      memoryProjects: ["agent-terminal-web", "home-portal"],
+    },
+    conversation,
+    existingEntries: [],
+  });
+  assert.match(prompt, /untrusted data/);
+  assert.match(prompt, /"memoryProjectMode":"manual"/);
+  assert.match(prompt, /"activeMemoryProjects":\["agent-terminal-web","home-portal"\]/);
 });
 
 test("worker ignores synthetic probes and records usage without imposing a cap", () => {

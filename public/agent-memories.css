@@ -17,7 +17,7 @@
 
 .memory-dialog form {
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
   max-height: inherit;
 }
 
@@ -145,6 +145,85 @@
 
 .app-session-tools .memory-trigger strong {
   color: var(--memory-state-color);
+}
+
+.memory-project-routing {
+  margin: 0 18px 12px;
+  padding: 12px;
+  border: 1px solid #30394a;
+  border-radius: 12px;
+  background: #151b25;
+}
+
+.memory-project-routing-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.memory-project-routing-header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.memory-project-routing-header strong {
+  color: #dce4f2;
+  font-size: 13px;
+}
+
+.memory-project-routing-header span {
+  color: #8895aa;
+  font-size: 11px;
+  line-height: 1.45;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+#memory-project-auto {
+  min-height: 32px;
+  padding: 0 9px;
+  color: #b9c7e2;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+#memory-project-auto:disabled {
+  opacity: 0.45;
+}
+
+.memory-project-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.memory-project-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid #3a4558;
+  border-radius: 999px;
+  color: #abb7ca;
+  background: #111722;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.memory-project-option:has(input:checked) {
+  border-color: #5871c8;
+  color: #e6ebff;
+  background: #24345e;
+}
+
+.memory-project-option input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: #7692ed;
 }
 
 .memory-tabs {
@@ -435,13 +514,26 @@
     padding-inline: 14px;
   }
 
+  .memory-project-routing {
+    margin-inline: 14px;
+  }
+
   .memory-summary-bar,
   .memory-tabs {
+    margin-inline: 0;
     padding-inline: 14px;
   }
 
   .memory-content {
+    min-height: 160px;
     padding-inline: 14px;
+  }
+
+  .memory-project-options {
+    max-height: 180px;
+    padding-right: 3px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   .memory-tabs button {

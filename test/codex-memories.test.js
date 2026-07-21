@@ -80,11 +80,13 @@ test("Agent Web exposes memory review views and authenticated APIs", async () =>
   assert.match(server, /app\.get\("\/api\/memories"/);
   assert.match(page, /id="open-memories"/);
   assert.match(page, /id="app-session-memories"/);
+  assert.doesNotMatch(page, /id="open-memories" class="hidden"/);
   assert.match(page, /data-memory-view="overview"/);
   assert.match(page, /data-memory-view="detail"/);
   assert.match(page, /data-memory-view="pending"/);
   assert.match(page, /data-memory-view="sources"/);
   assert.match(page, /agent-memories\.js\?v=/);
+  assert.match(await fs.readFile(new URL("../public/agent-memories.js", import.meta.url), "utf8"), /查看已抽取内容/);
   assert.match(app, /name: "\/memories"/);
   assert.match(app, /AgentMemories\?\.open/);
   assert.match(styles, /\.memory-dialog/);

@@ -6,7 +6,6 @@
   const contextElement = document.querySelector("#memory-context");
   const contentElement = document.querySelector("#memory-content");
   const tabs = [...document.querySelectorAll("[data-memory-view]")];
-  const entryButtons = [document.querySelector("#open-memories"), document.querySelector("#app-session-memories")].filter(Boolean);
   const renderer = global.AgentMarkdown?.createRenderer() || null;
   let activeView = "overview";
   let activeProject = "";
@@ -29,7 +28,6 @@
       void loadView();
     });
   });
-  void revealWhenServerIsReady();
 
   function open(options = {}) {
     activeProject = normalizeProject(options.project);
@@ -38,14 +36,6 @@
     renderContext();
     if (!dialog.open) dialog.showModal();
     void loadView();
-  }
-
-  async function revealWhenServerIsReady() {
-    try {
-      const response = await fetch("/api/memories/status");
-      if (!response.ok) return;
-      entryButtons.forEach((button) => button.classList.remove("hidden"));
-    } catch {}
   }
 
   async function loadView(source = "") {
@@ -101,14 +91,29 @@
     const fragment = documentFragment();
     fragment.append(viewNote(activeView, data.status || {}, memoryDocument));
     if (!memoryDocument.content) {
+      const pendingAvailable = activeView === "overview" && data.status?.documents?.pending?.available;
       fragment.append(
         message(
-          data.status?.enabled
-            ? "还没有生成这部分记忆。Codex 会在符合条件的历史会话完成并闲置后，后台逐步整理。"
+          pendingAvailable
+            ? "原始候选已经生成，最终总览仍在合并。你可以先检查已抽取的内容。"
+            : data.status?.enabled
+              ? "还没有生成这部分记忆。Codex 会在符合条件的历史会话完成并闲置后，后台逐步整理。"
             : "Codex Memories 尚未启用。",
           "empty",
         ),
       );
+      if (pendingAvailable) {
+        const review = document.createElement("button");
+        review.type = "button";
+        review.className = "memory-review-action";
+        review.textContent = "查看已抽取内容";
+        review.addEventListener("click", () => {
+          activeView = "pending";
+          syncTabs();
+          void loadView();
+        });
+        fragment.append(review);
+      }
     } else {
       const article = document.createElement("article");
       article.className = "memory-document app-transcript-markdown";

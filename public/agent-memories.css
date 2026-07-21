@@ -161,6 +161,14 @@
   color: #efb3bd;
 }
 
+.memory-review-action {
+  min-height: 38px;
+  margin-bottom: 12px;
+  border-color: #5871c8;
+  color: #eef2ff;
+  background: #263765;
+}
+
 .memory-source-list {
   display: grid;
   gap: 8px;

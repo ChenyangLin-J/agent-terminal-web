@@ -1,6 +1,6 @@
 # Personal memory
 
-The personal memory system is the primary, editable memory source for Agent Web. Codex's native memory generator remains enabled as a secondary observation source, but native memory injection is disabled after this system passes its integration checks.
+The personal memory system is the primary, editable memory source for Agent Web. Codex's native memory generator remains enabled as a secondary observation source. The Agent Web systemd drop-in disables native memory injection immediately before the updated server starts, avoiding a deployment window with neither memory source active.
 
 ## Files
 

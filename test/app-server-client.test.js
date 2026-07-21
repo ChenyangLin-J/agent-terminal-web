@@ -51,6 +51,20 @@ test("app-server client rejects a steer when there is no active turn", async (t)
   await assert.rejects(() => client.steerTurn("Too late"), /no active turn/i);
 });
 
+test("app-server client interrupts only the active turn", async (t) => {
+  const fake = createFakeAppServer();
+  const client = new CodexAppServerClient({ spawnImpl: () => fake.child, requestTimeoutMs: 1_000 });
+  t.after(() => client.close());
+
+  await client.start();
+  await client.startThread();
+  await client.startTurn("Long-running request");
+  await client.interruptTurn();
+
+  const interrupt = fake.received.find((message) => message.method === "turn/interrupt");
+  assert.deepEqual(interrupt.params, { threadId: "thread-1", turnId: "turn-1" });
+});
+
 test("app-server client resumes metadata first and requests only recent turns", async (t) => {
   const fake = createFakeAppServer();
   const client = new CodexAppServerClient({ spawnImpl: () => fake.child, requestTimeoutMs: 1_000 });
@@ -280,6 +294,10 @@ function createFakeAppServer({ completeTurnImmediately = false } = {}) {
     }
     if (message.method === "turn/steer") {
       send({ id: message.id, result: { turnId: message.params.expectedTurnId } });
+      return;
+    }
+    if (message.method === "turn/interrupt") {
+      send({ id: message.id, result: {} });
     }
   }
 

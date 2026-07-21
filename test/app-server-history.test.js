@@ -63,7 +63,7 @@ test("App Server resume restores structured history and keeps raw text available
   assert.match(server, /memoryCitation: item\.memoryCitation \|\| null/);
   assert.match(app, /参考了 \$\{count\} 条记忆/);
   assert.match(app, /formatMemoryCitation\(item\.memoryCitation\)/);
-  assert.match(app, /message\.textContent = isInterruptedTurn \? "未生成最终回复" : appActivityText\(currentItem\)/);
+  assert.match(app, /isStoppedTurn[\s\S]*"已由你终止，Session 仍可继续"/);
   assert.match(app, /indicator\.append\(document\.createElement\("i"\)/);
   assert.match(page, /id="disconnect"[\s\S]*>离开<\/button>/);
   assert.doesNotMatch(styles, /\.app-server-session #disconnect/);

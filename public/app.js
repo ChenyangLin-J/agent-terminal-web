@@ -35,6 +35,8 @@ const sendPermissionsButton = document.querySelector("#send-permissions");
 const appSessionPermissionsButton = document.querySelector("#app-session-permissions");
 const appSessionPermissionsValue = document.querySelector("#app-session-permissions-value");
 const appSessionMemoriesButton = document.querySelector("#app-session-memories");
+const appSessionInterruptButton = document.querySelector("#app-session-interrupt");
+const appSessionTaskState = document.querySelector("#app-session-task-state");
 const killSessionButton = document.querySelector("#kill-session");
 const attachFileButton = document.querySelector("#attach-file");
 const voiceInputButton = document.querySelector("#voice-input");
@@ -154,13 +156,16 @@ let liveSessionsByCodexId = new Map();
 let archivedSessionsExpanded = false;
 let latestTurnState = {
   active: false,
+  stopping: false,
   interrupted: false,
   interruptedAt: "",
   turnId: "",
+  lastStoppedTurnId: "",
   requirements: [],
   queuedTurns: [],
 };
 let resumeInterruptedPending = false;
+let interruptRequestPending = false;
 let activeTransport = "terminal";
 let activeAccessMode = "safe";
 let activeSessionReady = true;
@@ -232,6 +237,7 @@ sendStatusButton.addEventListener("click", () => command("/status"));
 sendPermissionsButton.addEventListener("click", () => command("/permissions"));
 appSessionPermissionsButton.addEventListener("click", () => runAppCommand("/permissions"));
 appSessionMemoriesButton.addEventListener("click", openMemoryManager);
+appSessionInterruptButton.addEventListener("click", interruptCurrentTurn);
 killSessionButton.addEventListener("click", endSession);
 terminalSessionPreviewDismiss.addEventListener("click", hideTerminalSessionPreview);
 appCommandClose.addEventListener("click", () => appCommandDialog.close());
@@ -698,13 +704,16 @@ function openSocket(params, options = {}) {
     terminal?.reset();
     latestTurnState = {
       active: false,
+      stopping: false,
       interrupted: false,
       interruptedAt: "",
       turnId: "",
+      lastStoppedTurnId: "",
       requirements: [],
       queuedTurns: [],
     };
     resumeInterruptedPending = false;
+    interruptRequestPending = false;
     appTranscriptItems = [];
     restoredAppTurnCount = 0;
     restoredAppHistoryHasMore = false;
@@ -729,9 +738,9 @@ function openSocket(params, options = {}) {
   historySyncPending = shouldReplay;
   historySyncStartedAt = shouldReplay ? Date.now() : 0;
   activeAccessMode = params.access === "full" ? "full" : params.access === "safe" ? "safe" : "";
-  syncAppSessionToolbar();
   activeSessionReady = activeTransport !== "app-server";
   activeStartupQueueSupported = false;
+  syncAppSessionToolbar();
   document.body.classList.toggle("app-server-session", activeTransport === "app-server");
   clearAgentRequest();
   activeSessionId = params.attach || "";
@@ -829,6 +838,11 @@ function openSocket(params, options = {}) {
         resumeInterruptedPending = false;
         renderAppTranscript({ follow: false });
       }
+      if (interruptRequestPending) {
+        interruptRequestPending = false;
+        latestTurnState.stopping = false;
+        syncAppSessionToolbar();
+      }
       terminal?.writeln(`\r\n${message.payload.message}\r\n`);
       if (activeTransport === "app-server") setUploadStatus(message.payload.message);
       if (appCommandDialog.open && !message.payload.preservePrompt) {
@@ -907,6 +921,10 @@ function handleControlAck(payload = {}) {
     resumeInterruptedPending = false;
     if (payload.turnState) renderTurnState(payload.turnState);
     setUploadStatus("已继续刚才中断的任务。", { clear: true });
+    return;
+  }
+  if (payload.kind === "interrupt-turn") {
+    setUploadStatus("正在终止当前任务…", { clear: true });
     return;
   }
   if (payload.kind === "startup-submit") {
@@ -1470,6 +1488,36 @@ function syncAppSessionToolbar() {
   appSessionPermissionsButton.dataset.access = activeAccessMode;
   appSessionPermissionsValue.textContent = appAccessLabel(activeAccessMode);
   appSessionPermissionsButton.setAttribute("aria-label", `权限：${appAccessLabel(activeAccessMode)}`);
+  const canInterrupt =
+    activeTransport === "app-server" && latestTurnState.active && !latestTurnState.stopping && !interruptRequestPending;
+  appSessionInterruptButton.disabled = !canInterrupt;
+  appSessionInterruptButton.dataset.state = latestTurnState.stopping || interruptRequestPending ? "stopping" : "idle";
+  appSessionInterruptButton.querySelector("strong").textContent =
+    latestTurnState.stopping || interruptRequestPending ? "终止中…" : "终止";
+  const taskState = appSessionTaskStateValue();
+  appSessionTaskState.dataset.state = taskState.value;
+  appSessionTaskState.querySelector("strong").textContent = taskState.label;
+}
+
+function appSessionTaskStateValue() {
+  if (!activeSessionReady) return { value: "connecting", label: "连接中" };
+  if (latestTurnState.interrupted) return { value: "interrupted", label: "已中断" };
+  if (latestTurnState.stopping || interruptRequestPending) return { value: "stopping", label: "终止中" };
+  if (latestTurnState.active) return { value: "working", label: "处理中" };
+  return { value: "idle", label: "空闲" };
+}
+
+function interruptCurrentTurn() {
+  if (activeTransport !== "app-server" || !latestTurnState.active || latestTurnState.stopping) return;
+  interruptRequestPending = true;
+  latestTurnState.stopping = true;
+  syncAppSessionToolbar();
+  if (!send({ type: "interrupt-turn" })) {
+    interruptRequestPending = false;
+    latestTurnState.stopping = false;
+    syncAppSessionToolbar();
+    setUploadStatus("连接恢复中，尚未终止任务。", { clear: true });
+  }
 }
 
 function formatCount(value) {
@@ -2012,10 +2060,13 @@ function renderTurnState(value = {}) {
     active: Boolean(value.active),
     interrupted: Boolean(value.interrupted),
     interruptedAt: String(value.interruptedAt || ""),
+    stopping: Boolean(value.stopping),
     turnId: String(value.turnId || ""),
+    lastStoppedTurnId: String(value.lastStoppedTurnId || ""),
     requirements: Array.isArray(value.requirements) ? value.requirements : [],
     queuedTurns: Array.isArray(value.queuedTurns) ? value.queuedTurns : [],
   };
+  if (!latestTurnState.active || !latestTurnState.stopping) interruptRequestPending = false;
   if (!latestTurnState.interrupted || latestTurnState.active) resumeInterruptedPending = false;
   const items = [...latestTurnState.requirements, ...latestTurnState.queuedTurns];
   const hasFailedItem = items.some((item) => item.status === "failed");
@@ -2050,6 +2101,7 @@ function renderTurnState(value = {}) {
   );
   sendPromptButton.textContent = latestTurnState.active ? "追加当前" : "新任务";
   queuePromptButton.classList.toggle("hidden", !latestTurnState.active);
+  syncAppSessionToolbar();
 }
 
 function setConnectedState(state) {
@@ -2868,6 +2920,10 @@ function appTurnIsInterrupted(turnId) {
   return Boolean(latestTurnState.interrupted && turnId && latestTurnState.turnId === turnId);
 }
 
+function appTurnWasStopped(turnId) {
+  return Boolean(turnId && latestTurnState.lastStoppedTurnId === turnId);
+}
+
 function createInterruptedTurnNotice() {
   const notice = document.createElement("section");
   notice.className = "app-interrupted-turn";
@@ -2907,8 +2963,9 @@ function createAppProcessGroup(items) {
   const activeItem = [...items].reverse().find(isRunningTranscriptItem);
   const hasFinalAnswer = appTurnHasFinalAnswer(turnId);
   const isInterruptedTurn = !hasFinalAnswer && appTurnIsInterrupted(turnId);
+  const isStoppedTurn = !hasFinalAnswer && appTurnWasStopped(turnId);
   const isActiveTurn = latestTurnState.active && latestTurnState.turnId === turnId;
-  const isActive = !isInterruptedTurn && !hasFinalAnswer && (Boolean(activeItem) || isActiveTurn);
+  const isActive = !isInterruptedTurn && !isStoppedTurn && !hasFinalAnswer && (Boolean(activeItem) || isActiveTurn);
   const autoExpanded = isActive && !openAppProcessGroups.has(groupId);
   group.open = autoExpanded || openAppProcessGroups.has(groupId);
   group.addEventListener("toggle", () => {
@@ -2920,6 +2977,7 @@ function createAppProcessGroup(items) {
   const currentItem = activeItem || items.at(-1);
   group.classList.toggle("is-active", isActive);
   group.classList.toggle("is-interrupted", isInterruptedTurn);
+  group.classList.toggle("is-stopped", isStoppedTurn);
 
   const indicator = document.createElement("span");
   indicator.className = "app-activity-indicator";
@@ -2928,15 +2986,21 @@ function createAppProcessGroup(items) {
     indicator.append(document.createElement("i"), document.createElement("i"), document.createElement("i"));
   } else if (isInterruptedTurn) {
     indicator.textContent = "!";
+  } else if (isStoppedTurn) {
+    indicator.textContent = "■";
   } else {
     indicator.textContent = "✓";
   }
 
   const label = document.createElement("strong");
-  label.textContent = isActive ? "正在" : isInterruptedTurn ? "中断" : "完成";
+  label.textContent = isActive ? "正在" : isInterruptedTurn ? "中断" : isStoppedTurn ? "已终止" : "完成";
   const message = document.createElement("span");
   message.className = "app-activity-message";
-  message.textContent = isInterruptedTurn ? "未生成最终回复" : appActivityText(currentItem);
+  message.textContent = isInterruptedTurn
+    ? "未生成最终回复"
+    : isStoppedTurn
+      ? "已由你终止，Session 仍可继续"
+      : appActivityText(currentItem);
   message.title = message.textContent;
   const count = document.createElement("span");
   count.className = "app-activity-count";

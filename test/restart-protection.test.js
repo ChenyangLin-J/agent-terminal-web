@@ -50,7 +50,7 @@ test("interrupted App Server turns remain visible and can be continued", async (
   assert.match(app, /function createInterruptedTurnNotice\(\)/);
   assert.match(app, /action\.textContent = resumeInterruptedPending \? "正在继续…" : "继续完成"/);
   assert.match(app, /send\(\{ type: "resume-interrupted" \}\)/);
-  assert.match(app, /isInterruptedTurn \? "中断" : "完成"/);
+  assert.match(app, /isInterruptedTurn \? "中断" : isStoppedTurn \? "已终止" : "完成"/);
   assert.match(styles, /\.app-interrupted-turn/);
   assert.match(styles, /\.app-process-group\.is-interrupted/);
 });

@@ -936,6 +936,7 @@ function createAppServerSession(cwd, launch, restored = {}) {
     terminal: null,
     appServer,
     interruptedResumePending: false,
+    turnInterruptPending: false,
     pendingServerRequests: new Map(),
     pendingStartupPrompts: [],
     streamedItemIds: new Set(),
@@ -1380,6 +1381,35 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
         })
         .finally(() => {
           session.interruptedResumePending = false;
+        });
+      return;
+    }
+
+    if (message.type === "interrupt-turn" && session.transport === APP_SERVER_TRANSPORT) {
+      if (session.turnInterruptPending || session.turnState.stopping) {
+        send(ws, "control-ack", { kind: "interrupt-turn", receivedAt: Date.now() });
+        return;
+      }
+      const turnId = session.appServer.activeTurnId || session.turnState.turnId;
+      if (!session.turnState.active || !turnId) {
+        send(ws, "error", { message: "There is no active task to interrupt." });
+        return;
+      }
+      session.turnInterruptPending = true;
+      session.turnState.stopping = true;
+      persistRestorableWebSession(session);
+      broadcast(session, "status", publicSession(session));
+      void session.appServer
+        .interruptTurn()
+        .then(() => {
+          send(ws, "control-ack", { kind: "interrupt-turn", receivedAt: Date.now(), turnId });
+        })
+        .catch((error) => {
+          session.turnInterruptPending = false;
+          session.turnState.stopping = false;
+          persistRestorableWebSession(session);
+          broadcast(session, "status", publicSession(session));
+          send(ws, "error", { message: `Current task was not interrupted: ${error.message}` });
         });
       return;
     }
@@ -2173,6 +2203,7 @@ async function submitAppServerPrompt(session, text, requestedMode, skillNames = 
   for (const requirement of state.requirements) requirement.status = "completed";
   state.sequence += 1;
   state.active = true;
+  state.stopping = false;
   state.interrupted = false;
   state.interruptedAt = "";
   state.turnId = "";
@@ -2506,7 +2537,9 @@ function handleAppServerNotification(session, message) {
   }
   if (method === "thread/tokenUsage/updated" && params.tokenUsage) session.appTokenUsage = params.tokenUsage;
   if (method === "turn/started") {
+    session.turnInterruptPending = false;
     session.turnState.active = true;
+    session.turnState.stopping = false;
     session.turnState.interrupted = false;
     session.turnState.interruptedAt = "";
     session.turnState.turnId = params.turn?.id || "";
@@ -2586,12 +2619,21 @@ function handleAppServerNotification(session, message) {
     renderAppServerItemCompleted(session, params.item);
   } else if (method === "turn/completed") {
     const turnId = params.turn?.id || "";
-    persistCompletedSessionPreview(session, session.lastAssistantMessage);
-    completeTrackedTurn(session, turnId);
-    appendSessionOutput(session, "\r\n\x1b[32m✓ Turn completed\x1b[0m\r\n");
+    const turnStatus = String(params.turn?.status || "").toLowerCase();
+    const stopped = Boolean(
+      ["interrupted", "cancelled", "canceled"].includes(turnStatus) ||
+        (session.turnState.stopping && (!turnId || !session.turnState.turnId || turnId === session.turnState.turnId)),
+    );
+    if (!stopped) persistCompletedSessionPreview(session, session.lastAssistantMessage);
+    completeTrackedTurn(session, turnId, { stopped });
+    session.turnInterruptPending = false;
+    appendSessionOutput(
+      session,
+      stopped ? "\r\n\x1b[33m■ Turn stopped\x1b[0m\r\n" : "\r\n\x1b[32m✓ Turn completed\x1b[0m\r\n",
+    );
     persistRestorableWebSession(session);
     broadcast(session, "status", publicSession(session));
-    void sendAppServerTurnNotification(session, turnId);
+    if (!stopped) void sendAppServerTurnNotification(session, turnId);
   } else if (method === "error") {
     const errorMessage = params.error?.message || params.message || "App Server error";
     appendAppTranscriptNotice(session, errorMessage, "error");
@@ -2862,6 +2904,7 @@ function submitTrackedPrompt(session, text, requestedMode) {
   if (!state.active) {
     state.sequence += 1;
     state.active = true;
+    state.stopping = false;
     state.interrupted = false;
     state.interruptedAt = "";
     state.turnId = "";
@@ -2897,15 +2940,17 @@ function prepareSessionPrompt(session, text) {
   };
 }
 
-function completeTrackedTurn(session, turnId) {
+function completeTrackedTurn(session, turnId, { stopped = false } = {}) {
   const state = session.turnState;
   if (!state) return;
   if (turnId && turnId === state.lastCompletedTurnId) return;
   state.lastCompletedTurnId = turnId || state.lastCompletedTurnId;
   state.turnId = turnId || state.turnId;
+  state.stopping = false;
+  if (stopped) state.lastStoppedTurnId = turnId || state.turnId;
   state.interrupted = false;
   state.interruptedAt = "";
-  for (const requirement of state.requirements) requirement.status = "completed";
+  for (const requirement of state.requirements) requirement.status = stopped ? "cancelled" : "completed";
 
   const next = state.queuedTurns.shift();
   if (next) {
@@ -2962,10 +3007,12 @@ function restoreTurnState(value) {
   const input = value && typeof value === "object" ? value : {};
   return {
     active: Boolean(input.active),
+    stopping: false,
     interrupted: Boolean(input.interrupted),
     interruptedAt: cleanClientLogValue(input.interruptedAt, 100),
     turnId: cleanClientLogValue(input.turnId, 100),
     lastCompletedTurnId: cleanClientLogValue(input.lastCompletedTurnId, 100),
+    lastStoppedTurnId: cleanClientLogValue(input.lastStoppedTurnId, 100),
     sequence: clampInteger(input.sequence, 0, 1_000_000, 0),
     requirementSequence: clampInteger(input.requirementSequence, 0, 1_000_000, 0),
     requirements: restoreRequirements(input.requirements),
@@ -2979,7 +3026,7 @@ function restoreRequirements(items) {
     id: cleanClientLogValue(item?.id, 100) || `restored-requirement-${index + 1}`,
     text: String(item?.text || "").slice(0, 4_000),
     kind: ["original", "followup", "queued"].includes(item?.kind) ? item.kind : "followup",
-    status: ["working", "queued", "completed", "failed", "interrupted"].includes(item?.status)
+    status: ["working", "queued", "completed", "failed", "interrupted", "cancelled"].includes(item?.status)
       ? item.status
       : "working",
   }));
@@ -3021,10 +3068,12 @@ function interruptedContinuationPrompt(state) {
 function publicTurnState(state) {
   return {
     active: Boolean(state?.active),
+    stopping: Boolean(state?.stopping),
     interrupted: Boolean(state?.interrupted),
     interruptedAt: state?.interruptedAt || "",
     turnId: state?.turnId || "",
     lastCompletedTurnId: state?.lastCompletedTurnId || "",
+    lastStoppedTurnId: state?.lastStoppedTurnId || "",
     requirements: state?.requirements || [],
     queuedTurns: state?.queuedTurns || [],
   };

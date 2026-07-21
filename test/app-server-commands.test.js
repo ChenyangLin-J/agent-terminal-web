@@ -21,6 +21,10 @@ test("App Server exposes slash commands and structured Skill mentions", async ()
   assert.match(server, /async function appServerHookInventory\(session\)/);
   assert.match(server, /message\.type === "skills-list"/);
   assert.match(server, /message\.type === "set-access"/);
+  assert.match(server, /message\.type === "interrupt-turn"/);
+  assert.match(server, /session\.appServer[\s\S]*\.interruptTurn\(\)/);
+  assert.match(server, /if \(!stopped\) persistCompletedSessionPreview/);
+  assert.match(server, /if \(!stopped\) void sendAppServerTurnNotification/);
   assert.match(server, /type: "skill", name: skill\.name, path: skill\.path/);
   assert.match(server, /\.\.\.appServerTurnAccess\(session\)/);
   assert.match(server, /\? \{ type: "dangerFullAccess" \}/);
@@ -32,6 +36,8 @@ test("App Server exposes slash commands and structured Skill mentions", async ()
   assert.match(page, /id="app-command-dialog"/);
   assert.match(page, /id="app-session-tools"/);
   assert.match(page, /id="app-session-permissions"/);
+  assert.match(page, /id="app-session-task-state"/);
+  assert.match(page, /id="app-session-interrupt"/);
   assert.match(app, /const APP_COMMANDS = \[/);
   for (const command of [
     "/status",
@@ -58,11 +64,16 @@ test("App Server exposes slash commands and structured Skill mentions", async ()
   assert.match(app, /function renderAppCommandResult\(payload = \{\}\)/);
   assert.match(app, /function syncAppSessionToolbar\(\)/);
   assert.match(app, /appSessionPermissionsButton\.addEventListener\("click", \(\) => runAppCommand\("\/permissions"\)\)/);
+  assert.match(app, /appSessionInterruptButton\.addEventListener\("click", interruptCurrentTurn\)/);
+  assert.match(app, /function appSessionTaskStateValue\(\)/);
+  assert.match(app, /if \(latestTurnState\.active\) return \{ value: "working", label: "处理中" \}/);
+  assert.match(app, /send\(\{ type: "interrupt-turn" \}\)/);
   assert.match(app, /skills: activeTransport === "app-server" \? extractSkillMentions\(prompt\) : \[\]/);
   assert.match(styles, /\.composer-suggestions/);
   assert.match(styles, /\.app-command-dialog/);
   assert.match(styles, /\.app-command-meters/);
   assert.match(styles, /\.app-server-session \.app-session-tools/);
+  assert.match(styles, /\.app-session-task-state\[data-state="working"\]/);
 });
 
 test("process output details are collapsed by default", async () => {

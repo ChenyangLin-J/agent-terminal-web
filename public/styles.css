@@ -804,9 +804,12 @@ input {
 
 .app-server-transcript {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   align-content: start;
   gap: 0;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   min-height: 100%;
   margin: 0 auto;
   padding: 8px;
@@ -824,6 +827,8 @@ input {
 }
 
 .app-process-group {
+  min-width: 0;
+  max-width: 100%;
   border-bottom: 1px solid #20252e;
   background: #090b10;
 }
@@ -933,6 +938,8 @@ input {
 }
 
 .app-process-content {
+  min-width: 0;
+  max-width: 100%;
   border-top: 1px solid #191e26;
 }
 
@@ -1072,7 +1079,10 @@ input {
 
 .app-transcript-item {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 7px;
+  min-width: 0;
+  max-width: 100%;
   padding: 11px 10px 12px;
   border: 0;
   border-bottom: 1px solid #20252e;
@@ -1163,6 +1173,8 @@ input {
 }
 
 .app-transcript-copy {
+  min-width: 0;
+  max-width: 100%;
   color: #e8ebf0;
   font-size: 13px;
   line-height: 1.55;
@@ -1171,6 +1183,8 @@ input {
 }
 
 .app-transcript-markdown {
+  min-width: 0;
+  max-width: 100%;
   white-space: normal;
 }
 
@@ -1188,6 +1202,28 @@ input {
 .app-transcript-markdown pre,
 .app-transcript-markdown blockquote {
   margin: 0 0 0.7em;
+}
+
+.app-transcript-markdown table {
+  width: 100%;
+  max-width: 100%;
+  margin: 0 0 0.7em;
+  border-collapse: collapse;
+}
+
+.app-transcript-markdown th,
+.app-transcript-markdown td {
+  padding: 6px 7px;
+  border: 1px solid #29313e;
+  overflow-wrap: anywhere;
+  text-align: left;
+  vertical-align: top;
+}
+
+.app-transcript-markdown img {
+  display: block;
+  max-width: 100%;
+  height: auto;
 }
 
 .app-transcript-markdown ul,
@@ -1718,6 +1754,17 @@ input {
 
   .app-transcript-copy {
     font-size: 13px;
+  }
+
+  .app-transcript-markdown pre {
+    overflow-x: hidden;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .app-transcript-markdown table {
+    table-layout: fixed;
   }
 
   #prompt {

@@ -4,6 +4,11 @@
     const renderer = global.markdownit({ html: false, linkify: true, breaks: true, typographer: false });
     const defaultLinkOpen = renderer.renderer.rules.link_open;
     renderer.renderer.rules.link_open = (tokens, index, options, environment, self) => {
+      const href = tokens[index].attrGet("href");
+      if (isVaultLocalHref(href)) {
+        tokens[index].attrSet("href", `/open/local?path=${encodeURIComponent(href)}`);
+        tokens[index].attrSet("title", "在 Garden 打开");
+      }
       tokens[index].attrSet("target", "_blank");
       tokens[index].attrSet("rel", "noopener noreferrer");
       return defaultLinkOpen
@@ -11,6 +16,15 @@
         : self.renderToken(tokens, index, options);
     };
     return renderer;
+  }
+
+  function isVaultLocalHref(href) {
+    if (!href) return false;
+    try {
+      return decodeURIComponent(href).startsWith("/home/ubuntu/workspace/obsidian/MainVault/");
+    } catch {
+      return href.startsWith("/home/ubuntu/workspace/obsidian/MainVault/");
+    }
   }
 
   function render(container, text, renderer) {

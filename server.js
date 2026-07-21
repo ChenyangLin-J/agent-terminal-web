@@ -10,6 +10,7 @@ import busboy from "busboy";
 import express from "express";
 import { WebSocketServer } from "ws";
 import { CodexAppServerClient } from "./lib/codex-app-server-client.js";
+import { gardenLinkForLocalMarkdown } from "./lib/local-file-link.js";
 import {
   latestPersistedSessionsByCodexId,
   normalizeAccessMode,
@@ -53,6 +54,10 @@ const AGENT_WEB_SESSIONS_FILE = path.join(CODEX_HOME, "agent-web-sessions.json")
 const AGENT_SESSION_SETTINGS_FILE = path.join(CODEX_HOME, "agent-session-settings.json");
 const CODEX_SESSION_PREVIEWS_FILE = path.join(CODEX_HOME, "agent-session-previews.json");
 const UPLOADS_ROOT = path.resolve(process.env.UPLOADS_ROOT || path.join(WORKSPACE_ROOT, "uploads"));
+const OBSIDIAN_VAULT_ROOT = path.resolve(
+  process.env.OBSIDIAN_VAULT_PATH || path.join(WORKSPACE_ROOT, "obsidian", "MainVault"),
+);
+const GARDEN_BASE_URL = process.env.GARDEN_BASE_URL || "https://garden.chenyanglin.com";
 const MAX_UPLOAD_FILES = Number(process.env.MAX_UPLOAD_FILES || 5);
 const MAX_UPLOAD_FILE_BYTES = Number(process.env.MAX_UPLOAD_FILE_BYTES || 50 * 1024 * 1024);
 const MAX_RAW_BUFFER = 1024 * 1024;
@@ -185,6 +190,31 @@ app.get("/login", (req, res) => {
 
 app.get("/logout", (req, res) => {
   res.redirect(logoutUrl(req));
+});
+
+app.get("/open/local", async (req, res) => {
+  if (!(await isAuthenticated(req))) {
+    const next = new URL(req.originalUrl, getOrigin(req)).href;
+    res.redirect(loginUrlForNext(req, next));
+    return;
+  }
+
+  const link = gardenLinkForLocalMarkdown(req.query.path, {
+    vaultRoot: OBSIDIAN_VAULT_ROOT,
+    gardenBaseUrl: GARDEN_BASE_URL,
+  });
+  if (!link) {
+    res.status(404).send("This local file cannot be opened in Agent.");
+    return;
+  }
+
+  try {
+    const stat = await fs.stat(link.filePath);
+    if (!stat.isFile()) throw new Error("Not a file");
+    res.redirect(link.href);
+  } catch {
+    res.status(404).send("This local file no longer exists.");
+  }
 });
 
 app.use("/api", requireAuth);

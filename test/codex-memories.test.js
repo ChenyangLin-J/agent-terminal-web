@@ -9,6 +9,7 @@ import {
   readCodexMemoryView,
 } from "../lib/codex-memories.js";
 import {
+  applyPersonalMemoryProposals,
   deletePersonalMemoryEntry,
   readPersonalMemoryView,
   updatePersonalMemoryEntry,
@@ -29,6 +30,88 @@ test("Codex memory status reflects config and generated files", async (t) => {
   assert.equal(status.ready, true);
   assert.equal(status.documents.overview.available, true);
   assert.equal(status.documents.detail.available, false);
+});
+
+test("automatic memory proposals confirm safe facts and keep uncertain updates reviewable", async (t) => {
+  const codexHome = await temporaryCodexHome(t);
+  await fs.mkdir(path.join(codexHome, "personal-memories"), { recursive: true });
+  await fs.writeFile(
+    path.join(codexHome, "personal-memories", "store.json"),
+    `${JSON.stringify({
+      version: 2,
+      entries: [
+        {
+          id: "global-answer-style",
+          status: "confirmed",
+          scope: "global",
+          category: "交流偏好",
+          text: "喜欢具体的回答。",
+          confidence: "high",
+        },
+      ],
+      sources: [],
+      tombstones: [],
+    })}\n`,
+  );
+
+  const source = { threadId: "thread-automatic-memory", title: "记忆偏好", source: "vscode" };
+  const created = await applyPersonalMemoryProposals(
+    codexHome,
+    [
+      {
+        action: "create",
+        scope: "global",
+        category: "学习偏好",
+        text: "学习新语言时不希望设置 KPI。",
+        confidence: 0.92,
+        explicit: true,
+        conflict: false,
+        sensitive: false,
+        evidenceQuote: "我不希望设置 KPI",
+      },
+      {
+        action: "create",
+        scope: "global",
+        category: "健康与护理",
+        text: "正在服用处方药。",
+        confidence: 0.95,
+        explicit: true,
+        conflict: false,
+        sensitive: true,
+        evidenceQuote: "正在服用处方药",
+      },
+    ],
+    source,
+  );
+  assert.deepEqual(created.map((item) => item.status), ["confirmed", "pending"]);
+
+  const [pendingUpdate] = await applyPersonalMemoryProposals(
+    codexHome,
+    [
+      {
+        action: "update",
+        targetId: "global-answer-style",
+        scope: "global",
+        category: "交流偏好",
+        text: "喜欢具体、有依据并分析利弊的回答。",
+        confidence: 0.8,
+        explicit: true,
+        conflict: true,
+        sensitive: false,
+        evidenceQuote: "希望分析利弊",
+      },
+    ],
+    source,
+  );
+  assert.equal(pendingUpdate.action, "pending-update");
+
+  await updatePersonalMemoryEntry(codexHome, pendingUpdate.id, { status: "confirmed" });
+  const view = await readPersonalMemoryView(codexHome, { view: "overview" });
+  assert.match(view.entries.find((entry) => entry.id === "global-answer-style").text, /分析利弊/);
+  assert.equal(view.counts.pending, 1);
+
+  const audit = await fs.readFile(path.join(codexHome, "personal-memories", "history.jsonl"), "utf8");
+  assert.match(audit, /approve-update/);
 });
 
 test("project memory view keeps matching project sections separate", async (t) => {

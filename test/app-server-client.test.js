@@ -115,6 +115,9 @@ test("app-server client submits structured skills and reads command data", async
     {
       sandboxPolicy: { type: "workspaceWrite", writableRoots: ["/workspace"], networkAccess: false },
       approvalPolicy: "on-request",
+      additionalContext: {
+        "personal-memory": { kind: "application", value: "User-approved memory" },
+      },
     },
   );
   const turn = fake.received.find((message) => message.method === "turn/start");
@@ -124,6 +127,9 @@ test("app-server client submits structured skills and reads command data", async
     type: "workspaceWrite",
     writableRoots: ["/workspace"],
     networkAccess: false,
+  });
+  assert.deepEqual(turn.params.additionalContext, {
+    "personal-memory": { kind: "application", value: "User-approved memory" },
   });
 
   const [skills, config, rateLimits, thread, account, usage, models, mcp, plugins, hooks] = await Promise.all([

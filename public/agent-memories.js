@@ -65,18 +65,21 @@
 
   function renderStatus(status) {
     const pendingCount = Number(status.personal?.counts?.pending || 0);
+    const runtime = status.personal?.runtime || {};
     const state = pendingCount
       ? `待确认 ${pendingCount}`
-      : !status.enabled
-        ? "未启用"
-        : status.ready
-          ? "已生成"
-          : "后台整理中";
+      : runtime.status === "error"
+        ? "自动整理异常"
+        : runtime.status === "running"
+          ? "正在自动整理"
+          : runtime.initializedAt
+            ? "自动运行中"
+            : "尚未启动";
     statusElement.textContent = state;
-    statusElement.dataset.state = pendingCount ? "working" : !status.enabled ? "off" : status.ready ? "ready" : "working";
-    statusElement.title = status.updatedAt
-      ? `最近更新：${formatDate(status.updatedAt)}`
-      : "完成并闲置一段时间的会话会被自动整理";
+    statusElement.dataset.state = pendingCount || runtime.status === "running" ? "working" : runtime.status === "error" ? "error" : runtime.initializedAt ? "ready" : "off";
+    statusElement.title = runtime.lastRunAt
+      ? `最近检查：${formatDate(runtime.lastRunAt)}`
+      : "Session 闲置后会被自动整理";
   }
 
   function renderContext() {
@@ -97,6 +100,7 @@
     const memoryDocument = data.document || {};
     const fragment = documentFragment();
     fragment.append(viewNote(activeView, data.status || {}, memoryDocument));
+    if (data.personal?.runtime) fragment.append(renderAutomationStatus(data.personal.runtime));
     const personalEntries = data.personal?.entries || [];
     if (personalEntries.length) fragment.append(renderPersonalEntries(personalEntries));
     if (!memoryDocument.content && !personalEntries.length) {
@@ -190,6 +194,11 @@
       const scope = documentElement("span", "memory-entry-scope");
       scope.textContent = entry.scope === "project" ? `项目 · ${entry.project}` : "全局";
       header.append(category, scope);
+      if (entry.proposalAction) {
+        const proposal = documentElement("span", "memory-entry-proposal");
+        proposal.textContent = entry.proposalAction === "retire" ? "建议停用旧记忆" : "建议更新旧记忆";
+        header.append(proposal);
+      }
       if (entry.sensitive) {
         const sensitive = documentElement("span", "memory-entry-sensitive");
         sensitive.textContent = "敏感信息";
@@ -207,10 +216,13 @@
         evidence.append(row);
       }
       const actions = documentElement("div", "memory-entry-actions");
-      if (entry.status === "pending") actions.append(actionButton("确认", "primary", () => mutateEntry(entry.id, { status: "confirmed" })));
+      if (entry.status === "pending") {
+        const confirmation = entry.proposalAction === "retire" ? "确认停用" : entry.proposalAction === "update" ? "确认更新" : "确认";
+        actions.append(actionButton(confirmation, "primary", () => mutateEntry(entry.id, { status: "confirmed" })));
+      }
       else actions.append(actionButton("退回待检查", "secondary", () => mutateEntry(entry.id, { status: "pending" })));
       actions.append(actionButton("修改", "secondary", () => editEntry(entry)));
-      actions.append(actionButton("删除", "danger", () => removeEntry(entry)));
+      actions.append(actionButton(entry.proposalAction ? "忽略建议" : "删除", "danger", () => removeEntry(entry)));
       card.append(header, content, evidence, actions);
       section.append(card);
     }
@@ -222,7 +234,7 @@
     const heading = documentElement("h3", "memory-section-title");
     const included = sources.filter((source) => source.decision === "included").length;
     const excluded = sources.length - included;
-    heading.textContent = `本轮未归档 Session：读取 ${included} · 排除 ${excluded}`;
+    heading.textContent = `已处理 Session：读取 ${included} · 排除 ${excluded}`;
     const note = documentElement("p", "memory-import-note");
     note.textContent = importScope?.note || "这批来源只用于生成候选记忆。";
     const list = documentElement("div", "memory-source-list");
@@ -236,6 +248,30 @@
       list.append(row);
     }
     section.append(heading, note, list);
+    return section;
+  }
+
+  function renderAutomationStatus(runtime) {
+    const section = documentElement("aside", "memory-automation-status");
+    const today = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+    const usage = runtime.usage?.days?.[today] || {};
+    const totalTokens = Number(usage.inputTokens || 0) + Number(usage.outputTokens || 0);
+    const state = documentElement("strong", "memory-automation-title");
+    state.textContent = runtime.status === "running" ? "后台正在整理" : runtime.status === "error" ? "后台整理遇到问题，会自动重试" : "后台整理每 10 分钟检查一次";
+    const detail = documentElement("span", "memory-automation-detail");
+    const lastRun = runtime.lastRun || {};
+    detail.textContent = `最近检查 ${runtime.lastRunAt ? formatDate(runtime.lastRunAt) : "尚未运行"} · 今天 ${Number(usage.runs || 0)} 次 / ${formatTokenCount(totalTokens)} · 上次处理 ${Number(lastRun.processed || 0)} 个 Session`;
+    section.append(state, detail);
+    if (runtime.lastError) {
+      const error = documentElement("span", "memory-automation-error");
+      error.textContent = runtime.lastError;
+      section.append(error);
+    }
     return section;
   }
 
@@ -288,8 +324,8 @@
       detail: document.filtered
         ? "只显示能匹配当前项目名称或路径的工程与过程记忆；未匹配内容不会混入。"
         : "选择具体项目后，会按项目名称和路径筛选工程记忆。",
-      pending: "历史补录先进入逐条审核；只有点击“确认”后，才会进入正式记忆。下方的 Codex 原生候选仍是只读参考。",
-      sources: `这里列出本轮历史补录范围，以及 Codex 原生生成的 ${status.sourceCount || 0} 份摘要。`,
+      pending: "只有不确定、敏感、冲突或重要替换建议会来到这里；明确且稳定的信息会自动确认。下方的 Codex 原生候选仍是只读参考。",
+      sources: `这里列出已处理的 Session，以及 Codex 原生生成的 ${status.sourceCount || 0} 份摘要。`,
     };
     note.textContent = copy[view] || status.scope || "";
     return note;
@@ -321,6 +357,13 @@
     return Number.isNaN(date.getTime())
       ? "时间未知"
       : new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(date);
+  }
+
+  function formatTokenCount(value) {
+    const count = Number(value || 0);
+    if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M tokens`;
+    if (count >= 1_000) return `${Math.round(count / 1_000)}K tokens`;
+    return `${count} tokens`;
   }
 
   function formatBytes(value) {

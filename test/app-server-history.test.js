@@ -60,7 +60,8 @@ test("App Server resume restores structured history and keeps raw text available
   assert.match(app, /latestTurnState\.active && latestTurnState\.turnId === turnId/);
   assert.match(app, /card\.classList\.add\("app-transcript-commentary"\)/);
   assert.match(server, /memoryCitation: normalizeMemoryCitation\(item\.memoryCitation\)/);
-  assert.match(server, /memoryCitation: item\.memoryCitation \|\| null/);
+  assert.match(server, /memoryCitation: mergeMemoryCitations\(/);
+  assert.match(server, /additionalContext: personalMemory\.additionalContext/);
   assert.match(app, /参考了 \$\{count\} 条记忆/);
   assert.match(app, /formatMemoryCitation\(item\.memoryCitation\)/);
   assert.match(app, /isStoppedTurn[\s\S]*"已由你终止，Session 仍可继续"/);

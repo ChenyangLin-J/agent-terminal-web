@@ -17,6 +17,10 @@ import {
   updatePersonalMemoryEntry,
 } from "./lib/personal-memories.js";
 import {
+  personalMemoryContextForPrompt,
+  personalMemoryContextForPromptSync,
+} from "./lib/personal-memory-context.js";
+import {
   gardenLinkForLocalMarkdown,
   isPathInside,
   workspaceFileForLocalHref,
@@ -304,7 +308,10 @@ app.get("/api/memories/status", async (_req, res) => {
       readCodexMemoryStatus(CODEX_HOME),
       readPersonalMemoryView(CODEX_HOME, { view: "overview" }),
     ]);
-    res.json({ ...status, personal: { counts: personal.counts, importScope: personal.importScope } });
+    res.json({
+      ...status,
+      personal: { counts: personal.counts, importScope: personal.importScope, runtime: personal.runtime },
+    });
   } catch (error) {
     console.error(`Failed to read Codex memory status: ${error.message}`);
     res.status(500).json({ error: "Codex memory status is unavailable." });
@@ -764,9 +771,12 @@ function cleanClientEventName(value) {
   return event || "";
 }
 
-function codexArgsForWeb(args) {
+function codexArgsForWeb(args, personalMemoryContext = "") {
   const notify = JSON.stringify([process.execPath, CODEX_NOTIFY_SCRIPT]);
-  return ["-c", `notify=${notify}`, ...args];
+  const memoryArgs = personalMemoryContext
+    ? ["-c", `developer_instructions=${JSON.stringify(personalMemoryContext)}`]
+    : [];
+  return ["-c", `notify=${notify}`, ...memoryArgs, ...args];
 }
 
 function codexEnvironmentForWeb(sessionId, extra = {}) {
@@ -804,7 +814,12 @@ function createTerminalSession(cwd, launch, restored = {}) {
   const id = restored.id || cryptoRandomId();
   const startedAt = new Date().toISOString();
   const shell = process.env.CODEX_COMMAND || "codex";
-  const commandArgs = codexArgsForWeb(launch.args);
+  const memoryContext = personalMemoryContextForPromptSync(CODEX_HOME, {
+    cwd,
+    title: launch.title,
+    workspaceRoot: WORKSPACE_ROOT,
+  });
+  const commandArgs = codexArgsForWeb(launch.args, memoryContext.value);
   const env = codexEnvironmentForWeb(id, {
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
@@ -939,6 +954,8 @@ function createAppServerSession(cwd, launch, restored = {}) {
     turnInterruptPending: false,
     pendingServerRequests: new Map(),
     pendingStartupPrompts: [],
+    pendingPersonalMemoryCitations: [],
+    personalMemoryCitationsByTurn: new Map(),
     streamedItemIds: new Set(),
     lastAssistantMessage: "",
     appTranscript: [],
@@ -2149,6 +2166,55 @@ function appServerTurnAccess(session) {
   return settings;
 }
 
+async function appServerPersonalMemory(session, prompt) {
+  try {
+    const memory = await personalMemoryContextForPrompt(CODEX_HOME, {
+      cwd: session.cwd,
+      title: session.title,
+      prompt,
+      workspaceRoot: WORKSPACE_ROOT,
+    });
+    return {
+      additionalContext: memory.value
+        ? { "personal-memory": { kind: "application", value: memory.value } }
+        : undefined,
+      citation: memory.citation,
+    };
+  } catch (error) {
+    console.error(`Failed to load personal memory context: ${error.message}`);
+    return { additionalContext: undefined, citation: null };
+  }
+}
+
+function queuePersonalMemoryCitation(session, requirementId, citation) {
+  session.pendingPersonalMemoryCitations.push({ requirementId, citation: normalizeMemoryCitation(citation) });
+}
+
+function removeQueuedPersonalMemoryCitation(session, requirementId) {
+  session.pendingPersonalMemoryCitations = session.pendingPersonalMemoryCitations.filter(
+    (item) => item.requirementId !== requirementId,
+  );
+}
+
+function mergeMemoryCitations(...citations) {
+  const normalized = citations.map(normalizeMemoryCitation).filter(Boolean);
+  if (!normalized.length) return null;
+  const entries = [];
+  const entryKeys = new Set();
+  for (const citation of normalized) {
+    for (const entry of citation.entries || []) {
+      const key = `${entry.path}|${entry.lineStart}|${entry.lineEnd}|${entry.note}`;
+      if (entryKeys.has(key)) continue;
+      entryKeys.add(key);
+      entries.push(entry);
+    }
+  }
+  return {
+    entries: entries.slice(0, 30),
+    threadIds: [...new Set(normalized.flatMap((citation) => citation.threadIds || []))].slice(0, 30),
+  };
+}
+
 async function submitAppServerPrompt(session, text, requestedMode, skillNames = []) {
   if (!session.ready || session.exited) throw new Error("App Server is still starting or has exited.");
   const state = session.turnState;
@@ -2157,18 +2223,22 @@ async function submitAppServerPrompt(session, text, requestedMode, skillNames = 
   const skills = await resolveAppServerSkills(session, skillNames);
   const activeSkills = skills.map((skill) => skill.name);
   const input = (value) => appServerPromptInput(value, skills);
+  const personalMemory = await appServerPersonalMemory(session, text);
   let lateSteer = false;
 
   if (wantsQueue && appServer.activeTurnId) {
     const requirement = turnRequirement(state, text, "queued", "queued");
     state.queuedTurns.push(requirement);
     trimTrackedRequirements(state);
+    queuePersonalMemoryCitation(session, requirement.id, personalMemory.citation);
     void appServer
       .queueTurn(input(queuePromptText(text)), {
         ...appServerTurnAccess(session),
+        additionalContext: personalMemory.additionalContext,
         clientUserMessageId: requirement.id,
       })
       .catch((error) => {
+        removeQueuedPersonalMemoryCitation(session, requirement.id);
         requirement.status = "failed";
         if (!appServer.activeTurnId) state.active = false;
         appendSessionOutput(session, `\r\n\x1b[31mQueued prompt failed: ${error.message}\x1b[0m\r\n`);
@@ -2186,10 +2256,15 @@ async function submitAppServerPrompt(session, text, requestedMode, skillNames = 
     trimTrackedRequirements(state);
     try {
       const result = await appServer.steerTurn(input(steerPromptText(text, state.requirements.length)), {
+        additionalContext: personalMemory.additionalContext,
         clientUserMessageId: requirement.id,
       });
       state.active = true;
       state.turnId = result.turnId;
+      session.personalMemoryCitationsByTurn.set(
+        result.turnId,
+        mergeMemoryCitations(session.personalMemoryCitationsByTurn.get(result.turnId), personalMemory.citation),
+      );
       persistRestorableWebSession(session);
       broadcast(session, "status", publicSession(session));
       return { deliveryMode: "steer", skills: activeSkills };
@@ -2210,10 +2285,18 @@ async function submitAppServerPrompt(session, text, requestedMode, skillNames = 
   const requirement = turnRequirement(state, text, wantsQueue || lateSteer ? "queued" : "original", "working");
   state.requirements = [requirement];
   session.lastAssistantMessage = "";
-  const turn = await appServer.startTurn(input(lateSteer ? lateFollowupPromptText(text) : text), {
-    ...appServerTurnAccess(session),
-    clientUserMessageId: requirement.id,
-  });
+  queuePersonalMemoryCitation(session, requirement.id, personalMemory.citation);
+  let turn;
+  try {
+    turn = await appServer.startTurn(input(lateSteer ? lateFollowupPromptText(text) : text), {
+      ...appServerTurnAccess(session),
+      additionalContext: personalMemory.additionalContext,
+      clientUserMessageId: requirement.id,
+    });
+  } catch (error) {
+    removeQueuedPersonalMemoryCitation(session, requirement.id);
+    throw error;
+  }
   state.turnId = appServer.activeTurnId ? turn.id : state.turnId;
   state.active = Boolean(appServer.activeTurnId);
   persistRestorableWebSession(session);
@@ -2406,13 +2489,17 @@ function appTranscriptFromThreadItem(session, item, context = {}) {
     return { ...base, type: "user", label: "你", text: appServerUserMessageText(item.content) };
   }
   if (item.type === "agentMessage") {
+    const turnId = String(context.turnId || session.turnState.turnId || "");
     return {
       ...base,
       type: "assistant",
       label: "Codex",
       text: item.text || "",
       phase: item.phase || "",
-      memoryCitation: item.memoryCitation || null,
+      memoryCitation: mergeMemoryCitations(
+        item.memoryCitation,
+        session.personalMemoryCitationsByTurn?.get(turnId),
+      ),
     };
   }
   if (item.type === "plan") {
@@ -2543,6 +2630,10 @@ function handleAppServerNotification(session, message) {
     session.turnState.interrupted = false;
     session.turnState.interruptedAt = "";
     session.turnState.turnId = params.turn?.id || "";
+    const pendingMemory = session.pendingPersonalMemoryCitations.shift();
+    if (pendingMemory?.citation && session.turnState.turnId) {
+      session.personalMemoryCitationsByTurn.set(session.turnState.turnId, pendingMemory.citation);
+    }
     appendSessionOutput(session, "\r\n\x1b[34m── Turn started ──\x1b[0m\r\n");
   } else if (method === "item/agentMessage/delta") {
     if (params.itemId) session.streamedItemIds.add(params.itemId);
@@ -2626,6 +2717,7 @@ function handleAppServerNotification(session, message) {
     );
     if (!stopped) persistCompletedSessionPreview(session, session.lastAssistantMessage);
     completeTrackedTurn(session, turnId, { stopped });
+    if (turnId) session.personalMemoryCitationsByTurn.delete(turnId);
     session.turnInterruptPending = false;
     appendSessionOutput(
       session,

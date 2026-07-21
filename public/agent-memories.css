@@ -201,7 +201,8 @@
 }
 
 .memory-entry-scope,
-.memory-entry-sensitive {
+.memory-entry-sensitive,
+.memory-entry-proposal {
   padding: 2px 6px;
   border-radius: 999px;
   color: #9fb0c9;
@@ -211,6 +212,36 @@
 .memory-entry-sensitive {
   color: #f3c1c8;
   background: #45252d;
+}
+
+.memory-entry-proposal {
+  color: #d8c7ff;
+  background: #382d57;
+}
+
+.memory-automation-status {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid #2c3c50;
+  border-radius: 10px;
+  color: #9fb0c9;
+  background: #0d151f;
+}
+
+.memory-automation-title {
+  color: #dce5f4;
+  font-size: 12px;
+}
+
+.memory-automation-detail,
+.memory-automation-error {
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.memory-automation-error {
+  color: #efadb7;
 }
 
 .memory-entry-text {

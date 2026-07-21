@@ -1,0 +1,11 @@
+[Unit]
+Description=Check idle Codex sessions for durable personal memory
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=10min
+Persistent=true
+Unit=personal-memory-worker.service
+
+[Install]
+WantedBy=timers.target

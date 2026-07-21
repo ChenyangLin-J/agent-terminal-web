@@ -6,6 +6,7 @@
   const contextElement = document.querySelector("#memory-context");
   const contentElement = document.querySelector("#memory-content");
   const tabs = [...document.querySelectorAll("[data-memory-view]")];
+  const triggerButtons = [...document.querySelectorAll(".memory-trigger")];
   const renderer = global.AgentMarkdown?.createRenderer() || null;
   let activeView = "overview";
   let activeProject = "";
@@ -28,6 +29,7 @@
       void loadView();
     });
   });
+  void refreshStatus();
 
   function open(options = {}) {
     activeProject = normalizeProject(options.project);
@@ -40,7 +42,7 @@
 
   async function loadView(source = "") {
     const sequence = ++requestSequence;
-    contentElement.replaceChildren(message("正在读取 Codex 的本地记忆…", "loading"));
+    contentElement.replaceChildren(message("正在读取个人记忆…", "loading"));
     refreshButton.disabled = true;
     try {
       const query = new URLSearchParams({ view: activeView });
@@ -57,7 +59,8 @@
       if (sequence !== requestSequence) return;
       statusElement.textContent = "读取失败";
       statusElement.dataset.state = "error";
-      contentElement.replaceChildren(message(error.message || "Codex 记忆暂时不可用。", "error"));
+      renderTriggerStatus({ error: true });
+      contentElement.replaceChildren(message(error.message || "个人记忆暂时不可用。", "error"));
     } finally {
       if (sequence === requestSequence) refreshButton.disabled = false;
     }
@@ -80,6 +83,36 @@
     statusElement.title = runtime.lastRunAt
       ? `最近检查：${formatDate(runtime.lastRunAt)}`
       : "Session 闲置后会被自动整理";
+    renderTriggerStatus({ status, pendingCount, runtime });
+  }
+
+  async function refreshStatus() {
+    try {
+      const response = await fetch("/api/memories/status");
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "读取失败");
+      renderTriggerStatus({ status: data, pendingCount: Number(data.personal?.counts?.pending || 0), runtime: data.personal?.runtime || {} });
+    } catch {
+      renderTriggerStatus({ error: true });
+    }
+  }
+
+  function renderTriggerStatus({ pendingCount = 0, runtime = {}, error = false } = {}) {
+    const state = error || runtime.status === "error"
+      ? { key: "error", text: "异常", title: "个人记忆自动整理异常；点击查看详情" }
+      : pendingCount
+        ? { key: "working", text: `待确认 ${pendingCount}`, title: `有 ${pendingCount} 条个人记忆需要确认` }
+        : runtime.status === "running"
+          ? { key: "working", text: "整理中", title: "个人记忆正在后台自动整理" }
+          : runtime.initializedAt
+            ? { key: "ready", text: "自动运行", title: "个人记忆自动运行中；点击管理和追溯" }
+            : { key: "off", text: "未启动", title: "个人记忆后台尚未启动" };
+    for (const button of triggerButtons) {
+      button.dataset.memoryState = state.key;
+      button.title = state.title;
+      const value = button.querySelector("[data-memory-trigger-status]");
+      if (value) value.textContent = state.text;
+    }
   }
 
   function renderContext() {
@@ -111,7 +144,7 @@
             ? "原始候选已经生成，最终总览仍在合并。你可以先检查已抽取的内容。"
             : data.status?.enabled
               ? "还没有生成这部分记忆。Codex 会在符合条件的历史会话完成并闲置后，后台逐步整理。"
-            : "Codex Memories 尚未启用。",
+            : "个人记忆后台尚未启动。",
           "empty",
         ),
       );
@@ -130,7 +163,7 @@
     } else if (memoryDocument.content) {
       if (personalEntries.length) {
         const heading = documentElement("h3", "memory-section-title");
-        heading.textContent = activeView === "pending" ? "Codex 原生候选" : "Codex 原生记忆";
+        heading.textContent = activeView === "pending" ? "Codex 原生候选（参考）" : "Codex 原生记忆（只读参考）";
         fragment.append(heading);
       }
       const article = document.createElement("article");
@@ -163,7 +196,7 @@
       fragment.append(back, heading, article);
     } else if (data.sources?.length) {
       const heading = documentElement("h3", "memory-section-title");
-      heading.textContent = "Codex 原生会话摘要";
+      heading.textContent = "Codex 原生会话摘要（参考）";
       const list = document.createElement("div");
       list.className = "memory-source-list";
       for (const source of data.sources) {
@@ -371,5 +404,5 @@
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(bytes >= 10_240 ? 0 : 1)} KB` : `${bytes} B`;
   }
 
-  global.AgentMemories = Object.freeze({ open });
+  global.AgentMemories = Object.freeze({ open, refreshStatus });
 })(globalThis);

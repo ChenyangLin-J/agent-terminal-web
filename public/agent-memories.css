@@ -99,6 +99,54 @@
   background: #28171b;
 }
 
+.memory-trigger {
+  --memory-state-color: #8490a3;
+  --memory-state-bg: #1a202b;
+  --memory-state-border: #3c4656;
+  border-color: var(--memory-state-border);
+}
+
+#open-memories.memory-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.memory-trigger-status {
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: var(--memory-state-color);
+  background: var(--memory-state-bg);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.memory-trigger[data-memory-state="ready"] {
+  --memory-state-color: #9de0bd;
+  --memory-state-bg: #14251e;
+  --memory-state-border: #315c49;
+}
+
+.memory-trigger[data-memory-state="working"],
+.memory-trigger[data-memory-state="loading"] {
+  --memory-state-color: #e4cb8b;
+  --memory-state-bg: #241f12;
+  --memory-state-border: #67572f;
+}
+
+.memory-trigger[data-memory-state="error"],
+.memory-trigger[data-memory-state="off"] {
+  --memory-state-color: #efb3bd;
+  --memory-state-bg: #28171b;
+  --memory-state-border: #71434a;
+}
+
+.app-session-tools .memory-trigger strong {
+  color: var(--memory-state-color);
+}
+
 .memory-tabs {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

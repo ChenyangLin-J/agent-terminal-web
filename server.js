@@ -113,6 +113,7 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/terminal" });
 const sessions = new Map();
+const agentInstanceId = cryptoRandomId();
 
 wss.on("error", (error) => {
   logAgentEvent("ws-server-error", {
@@ -122,6 +123,11 @@ wss.on("error", (error) => {
 });
 
 app.use(express.json());
+app.get("/healthz", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Agent-Instance", agentInstanceId);
+  res.type("text/plain").send("ok");
+});
 app.use("/shared", express.static(path.join(WORKSPACE_ROOT, "shared-web")));
 app.use("/", express.static(path.join(__dirname, "public")));
 app.use("/vendor/xterm", express.static(path.join(__dirname, "node_modules", "@xterm", "xterm", "lib")));

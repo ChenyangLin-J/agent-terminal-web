@@ -9,6 +9,8 @@ const connectButton = document.querySelector("#connect");
 const startThinkButton = document.querySelector("#start-think");
 const openMemoriesButton = document.querySelector("#open-memories");
 const refreshSessionsButton = document.querySelector("#refresh-sessions");
+const restartAgentButton = document.querySelector("#restart-agent");
+const restartAgentLabel = document.querySelector("#restart-agent-label");
 const logoutButton = document.querySelector("#logout");
 const sessionsList = document.querySelector("#sessions-list");
 const codexSessionsList = document.querySelector("#codex-sessions-list");
@@ -83,6 +85,7 @@ const PAGE_SCROLL_MIN_OVERLAP = 3;
 const PAGE_SCROLL_MAX_OVERLAP = 8;
 const PAGE_DOWN_LONG_PRESS_MS = 450;
 const DEFAULT_DOCUMENT_TITLE = "Agent Terminal Web";
+const AGENT_RESTART_ENDPOINT = "https://home.chenyanglin.com/api/system/agent/restart";
 const AGENT_TIME_ZONE = "Asia/Shanghai";
 const ARCHIVED_SESSIONS_PREVIEW_COUNT = 5;
 const CLIENT_HEARTBEAT_MS = 15_000;
@@ -205,6 +208,7 @@ let pushRegistrationPromise = null;
 window.addEventListener("resize", () => fitTerminal({ delay: 120 }));
 
 logoutButton.addEventListener("click", logout);
+restartAgentButton.addEventListener("click", restartAgentWeb);
 connectButton.addEventListener("click", () => startSession());
 startThinkButton.addEventListener("click", () => startSession({ cwd: ".", mode: "new", purpose: "think" }));
 openMemoriesButton.addEventListener("click", openMemoryManager);
@@ -301,6 +305,63 @@ async function logout() {
   const response = await fetch("/api/logout", { method: "POST" });
   const data = await response.json();
   window.location.href = data.logoutUrl || "https://auth.chenyanglin.com/logout";
+}
+
+async function restartAgentWeb() {
+  const confirmed = window.confirm("重启 Agent Web？所有页面会短暂断连，正在运行的任务可能中断。");
+  if (!confirmed) return;
+
+  restartAgentButton.disabled = true;
+  restartAgentLabel.textContent = "准备重启";
+  try {
+    const previousInstance = await readAgentInstance();
+    const response = await fetch(AGENT_RESTART_ENDPOINT, {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+    });
+    if (!response.ok) throw new Error(`restart request failed (${response.status})`);
+
+    restartAgentLabel.textContent = "正在重启";
+    const recovered = await waitForAgentRestart(previousInstance);
+    if (!recovered) throw new Error("Agent did not return in time");
+    window.location.reload();
+  } catch (error) {
+    restartAgentButton.disabled = false;
+    restartAgentLabel.textContent = "重启";
+    window.alert(`重启失败：${error.message}`);
+  }
+}
+
+async function readAgentInstance() {
+  try {
+    const response = await fetch(`/healthz?time=${Date.now()}`, { cache: "no-store" });
+    return response.ok ? response.headers.get("X-Agent-Instance") || "" : "";
+  } catch {
+    return "";
+  }
+}
+
+async function waitForAgentRestart(previousInstance) {
+  const deadline = Date.now() + 30_000;
+  let unavailable = false;
+  await wait(500);
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`/healthz?time=${Date.now()}`, { cache: "no-store" });
+      const currentInstance = response.headers.get("X-Agent-Instance") || "";
+      if (response.ok && (unavailable || (currentInstance && currentInstance !== previousInstance))) return true;
+    } catch {
+      unavailable = true;
+    }
+    await wait(250);
+  }
+  return false;
+}
+
+function wait(milliseconds) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
 async function loadProjects() {

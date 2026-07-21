@@ -8,7 +8,7 @@ test("composer buttons fill the prompt height without reserving a hidden queue r
     readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
   ]);
 
-  assert.match(page, /styles\.css\?v=20260721-interrupt-3/);
+  assert.match(page, /styles\.css\?v=20260721-restart-1/);
   assert.match(styles, /grid-template-areas:[\s\S]*"header"[\s\S]*"content"[\s\S]*"composer"/);
   assert.match(styles, /\.app-server-view \{[\s\S]*grid-area: content/);
   assert.match(styles, /\.composer \{[\s\S]*grid-area: composer/);

@@ -54,7 +54,7 @@
     routingSource = normalizeRoutingSource(options.source);
     routingEnabled = typeof options.onProjectChange === "function";
     projectChangeHandler = routingEnabled ? options.onProjectChange : null;
-    projectRoutingElement?.classList.toggle("hidden", !routingEnabled);
+    projectRoutingElement?.classList.add("hidden");
     activeView = options.view || "overview";
     syncTabs();
     renderProjectRouting();
@@ -80,7 +80,7 @@
       if (sequence !== requestSequence) return;
       projectCatalog = Array.isArray(data.personal?.projectCatalog) ? data.personal.projectCatalog : [];
       renderProjectRouting();
-      renderStatus({ ...(data.status || {}), personal: data.personal });
+      renderStatus({ ...(data.status || {}), personal: data.personal, knowledge: data.knowledge });
       if (activeView === "sources") renderSources(data);
       else renderDocument(data);
     } catch (error) {
@@ -95,7 +95,7 @@
   }
 
   function renderStatus(status) {
-    const pendingCount = Number(status.personal?.counts?.pending || 0);
+    const pendingCount = Number(status.knowledge?.counts?.pending ?? status.personal?.counts?.pending ?? 0);
     const runtime = status.personal?.runtime || {};
     const state = pendingCount
       ? `待确认 ${pendingCount}`
@@ -119,7 +119,11 @@
       const response = await fetch("/api/memories/status");
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "读取失败");
-      renderTriggerStatus({ status: data, pendingCount: Number(data.personal?.counts?.pending || 0), runtime: data.personal?.runtime || {} });
+      renderTriggerStatus({
+        status: data,
+        pendingCount: Number(data.knowledge?.counts?.pending ?? data.personal?.counts?.pending ?? 0),
+        runtime: data.personal?.runtime || {},
+      });
     } catch {
       renderTriggerStatus({ error: true });
     }
@@ -148,8 +152,14 @@
   }
 
   function renderContext() {
-    const projectLabel = activeProjects.length ? activeProjects.map(shortProjectName).join(" + ") : "仅全局记忆";
-    contextElement.textContent = activeView === "detail" ? `项目范围：${projectLabel}` : "全局范围";
+    const labels = {
+      overview: "Core、Now 与按需 Topics",
+      detail: "各项目 AGENTS.md",
+      pending: "尚未应用",
+      changes: "可追溯、可撤回",
+      sources: "Session 与原生摘要",
+    };
+    contextElement.textContent = labels[activeView] || "个人记忆";
   }
 
   function renderProjectRouting() {
@@ -220,9 +230,11 @@
     const fragment = documentFragment();
     fragment.append(viewNote(activeView, data.status || {}, memoryDocument));
     if (data.personal?.runtime) fragment.append(renderAutomationStatus(data.personal.runtime));
-    const personalEntries = data.personal?.entries || [];
+    const knowledgeChanges = data.knowledge?.changes || [];
+    const personalEntries = activeView === "overview" ? data.personal?.entries || [] : [];
+    if (knowledgeChanges.length) fragment.append(renderKnowledgeChanges(knowledgeChanges));
     if (personalEntries.length) fragment.append(renderPersonalEntries(personalEntries));
-    if (!memoryDocument.content && !personalEntries.length) {
+    if (!memoryDocument.content && !personalEntries.length && !knowledgeChanges.length) {
       const pendingAvailable = activeView === "overview" && data.status?.documents?.pending?.available;
       fragment.append(
         message(
@@ -259,6 +271,134 @@
       fragment.append(article);
     }
     contentElement.replaceChildren(fragment);
+  }
+
+  function renderKnowledgeChanges(changes) {
+    const section = documentElement("section", "memory-entry-list memory-change-list");
+    for (const change of changes) {
+      const card = documentElement("article", "memory-entry-card memory-change-card");
+      const header = documentElement("header", "memory-entry-meta");
+      const target = documentElement("strong", "memory-entry-category");
+      target.textContent = targetTypeLabel(change.targetType);
+      const action = documentElement("span", "memory-entry-scope");
+      action.textContent = actionLabel(change.action);
+      const status = documentElement("span", `memory-change-status memory-change-status-${change.status}`);
+      status.textContent = statusLabel(change.status, change.targetType);
+      header.append(target, action, status);
+
+      const path = documentElement("p", "memory-change-path");
+      path.textContent = change.targetPath;
+      const diff = documentElement("div", "memory-change-diff");
+      if (change.before !== null) diff.append(diffValue("删除 / 原内容", change.before, "before"));
+      if (change.after !== null) diff.append(diffValue(change.before === null ? "新增" : "改为", change.after, "after"));
+
+      const rationale = documentElement("div", "memory-change-rationale");
+      const rationaleTitle = documentElement("strong", "memory-change-subtitle");
+      rationaleTitle.textContent = "为什么这样改";
+      const rationaleText = documentElement("p", "memory-entry-text");
+      rationaleText.textContent = change.rationale || "没有记录修改原因。";
+      rationale.append(rationaleTitle, rationaleText);
+
+      const evidence = documentElement("details", "memory-entry-evidence");
+      const evidenceTitle = document.createElement("summary");
+      evidenceTitle.textContent = `来源证据 ${change.evidence?.length || 0} · 置信度 ${Math.round(Number(change.confidence || 0) * 100)}%`;
+      evidence.append(evidenceTitle);
+      for (const item of change.evidence || []) {
+        const row = documentElement("p", "memory-entry-source");
+        row.textContent = item.quote ? `${item.title || "未命名 Session"}：${item.quote}` : item.title || item.threadId;
+        evidence.append(row);
+      }
+
+      const actions = documentElement("div", "memory-entry-actions");
+      if (change.status === "pending") {
+        if (change.targetType !== "skill") {
+          actions.append(actionButton("批准并应用", "primary", () => mutateKnowledgeChange(change, "approve")));
+          actions.append(actionButton("修改后再审", "secondary", () => editKnowledgeChange(change)));
+        } else {
+          actions.append(actionButton("批准候选", "primary", () => mutateKnowledgeChange(change, "approve")));
+          actions.append(actionButton("修改后再审", "secondary", () => editKnowledgeChange(change)));
+        }
+        actions.append(actionButton("拒绝", "danger", () => mutateKnowledgeChange(change, "reject")));
+      } else if (["auto_applied", "approved"].includes(change.status)) {
+        actions.append(actionButton("撤回", "danger", () => mutateKnowledgeChange(change, "revert")));
+      }
+      card.append(header, path, diff, rationale, evidence, actions);
+      section.append(card);
+    }
+    return section;
+  }
+
+  function diffValue(label, value, tone) {
+    const item = documentElement("div", `memory-change-value memory-change-value-${tone}`);
+    const title = documentElement("strong", "memory-change-subtitle");
+    title.textContent = label;
+    const content = documentElement("p", "memory-entry-text");
+    content.textContent = changeValueText(value);
+    item.append(title, content);
+    return item;
+  }
+
+  function changeValueText(value) {
+    if (typeof value === "string") return value;
+    if (value?.text) return value.text;
+    if (value?.summary) {
+      const workflow = Array.isArray(value.workflow) && value.workflow.length ? `\n流程：${value.workflow.join(" → ")}` : "";
+      return `${value.name || "Skill"}：${value.summary}${value.trigger ? `\n触发：${value.trigger}` : ""}${workflow}${value.verification ? `\n验证：${value.verification}` : ""}`;
+    }
+    return JSON.stringify(value, null, 2);
+  }
+
+  async function editKnowledgeChange(change) {
+    const current = changeValueText(change.after);
+    const next = global.prompt("修改后再审批：", current);
+    if (next === null || next.trim() === current.trim()) return;
+    if (!next.trim()) {
+      global.alert("修改后的内容不能为空。");
+      return;
+    }
+    await mutateKnowledgeChange(change, "edit", { after: next.trim() }, false);
+  }
+
+  async function mutateKnowledgeChange(change, action, extra = {}, confirmAction = true) {
+    const prompts = {
+      approve: "批准后会立即写入对应的个人记忆或项目 AGENTS.md。继续吗？",
+      reject: "拒绝后不会应用这条变更。继续吗？",
+      revert: "撤回会恢复变更前的内容；如果目标后来被修改，系统会停止并标记冲突。继续吗？",
+    };
+    if (confirmAction && prompts[action] && !global.confirm(prompts[action])) return;
+    try {
+      const response = await fetch(`/api/knowledge-changes/${encodeURIComponent(change.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, ...extra }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "操作失败");
+      await loadView();
+      void refreshStatus();
+    } catch (error) {
+      global.alert(error.message || "知识变更操作失败。");
+    }
+  }
+
+  function targetTypeLabel(value) {
+    return { personal_memory: "个人记忆", project_rule: "项目规则", skill: "Skill 候选" }[value] || "知识变更";
+  }
+
+  function actionLabel(value) {
+    return { create: "新增", update: "修改", delete: "删除" }[value] || value;
+  }
+
+  function statusLabel(value, targetType = "") {
+    if (targetType === "skill" && value === "approved") return "已批准，待创建";
+    return {
+      pending: "未应用",
+      auto_applied: "已自动应用",
+      approved: "已批准",
+      rejected: "已拒绝",
+      reverted: "已撤回",
+      conflict: "有冲突",
+    }[value] || value;
   }
 
   function renderSources(data) {
@@ -439,11 +579,10 @@
   function viewNote(view, status, document) {
     const note = documentElement("aside", "memory-note");
     const copy = {
-      overview: "类似 ChatGPT Overview：这里汇总跨工作与生活的稳定背景、偏好和近期主题。",
-      detail: document.filtered
-        ? "只显示当前选择的一个或多个项目记忆；未选择的项目不会混入。"
-        : "选择一个或多个项目后，会同时读取这些项目的工程与过程记忆。",
-      pending: "只有不确定、敏感、冲突或重要替换建议会来到这里；明确且稳定的信息会自动确认。下方的 Codex 原生候选仍是只读参考。",
+      overview: "个人记忆写在 Obsidian。每轮默认只读取小型 Core 与 Now；Topics 只在当前问题需要时按索引读取。",
+      detail: "这里汇总项目 AGENTS.md 的规则变更；项目事实仍应留在项目文档，普通代码修改不会出现在这里。",
+      pending: "这些变更尚未应用。你可以查看准确前后内容、原因与来源，再批准、修改或拒绝。",
+      changes: "所有知识变更都可追溯；已应用变更可以撤回，目标后来被修改时不会强行覆盖。",
       sources: `这里列出已处理的 Session，以及 Codex 原生生成的 ${status.sourceCount || 0} 份摘要。`,
     };
     note.textContent = copy[view] || status.scope || "";

@@ -1614,15 +1614,10 @@ function syncAppSessionToolbar() {
 }
 
 function syncMemoryProjectLabel() {
-  const scope = activeMemoryProjects.length
-    ? activeMemoryProjects.map(shortSessionMemoryProject).join(" + ")
-    : "全局";
-  const mode = activeMemoryProjectMode === "manual" ? "手动" : "自动";
-  appSessionMemoryProjects.textContent = `${mode} · ${scope}`;
+  appSessionMemoryProjects.textContent = "自动运行";
   const runtime = appSessionMemoriesButton.dataset.memoryRuntimeTitle || "个人记忆自动运行中";
-  const fullProjects = activeMemoryProjects.length ? activeMemoryProjects.join("、") : "仅全局记忆";
-  appSessionMemoriesButton.title = `${runtime}；${mode}使用：${fullProjects}`;
-  appSessionMemoriesButton.setAttribute("aria-label", `记忆：${mode}使用 ${fullProjects}`);
+  appSessionMemoriesButton.title = `${runtime}；默认读取 Core 与 Now，项目规则由所在项目 AGENTS.md 提供`;
+  appSessionMemoriesButton.setAttribute("aria-label", "记忆与规则：自动运行");
 }
 
 function normalizeSessionMemoryProjects(value) {

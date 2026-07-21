@@ -32,6 +32,9 @@ test("worker reads only user and final-answer events after its watermark", () =>
   assert.match(prompt, /untrusted data/);
   assert.match(prompt, /"memoryProjectMode":"manual"/);
   assert.match(prompt, /"activeMemoryProjects":\["agent-terminal-web","home-portal"\]/);
+  assert.match(prompt, /projectRules/);
+  assert.match(prompt, /skills/);
+  assert.match(prompt, /Personal memory is always scope "global"/);
 });
 
 test("worker ignores synthetic probes and records usage without imposing a cap", () => {

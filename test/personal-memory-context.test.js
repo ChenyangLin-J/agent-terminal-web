@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { buildPersonalMemoryContext, resolvePersonalMemoryProjects } from "../lib/personal-memory-context.js";
+import {
+  buildPersonalMemoryContext,
+  personalMemoryContextForPrompt,
+  resolvePersonalMemoryProjects,
+} from "../lib/personal-memory-context.js";
 
 const store = {
   entries: [
@@ -43,6 +50,21 @@ const store = {
     },
   ],
 };
+
+test("runtime progressive context injects Core and Now without bulk-loading Topics", async (t) => {
+  const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "progressive-context-"));
+  t.after(() => fs.rm(codexHome, { recursive: true, force: true }));
+  const memoryRoot = path.join(codexHome, "memory-markdown");
+  await fs.mkdir(path.join(memoryRoot, "Topics"), { recursive: true });
+  await fs.writeFile(path.join(memoryRoot, "Core.md"), '<!-- memory-file: {"kind":"core","title":"核心","description":"测试"} -->\n# 核心\n\n## 偏好\n\n- 喜欢具体回答。 ^core-style\n');
+  await fs.writeFile(path.join(memoryRoot, "Now.md"), '<!-- memory-file: {"kind":"now","title":"当前","description":"测试"} -->\n# 当前\n\n## 当前重点\n\n- 正在搭建记忆系统。 ^now-memory\n');
+  await fs.writeFile(path.join(memoryRoot, "Topics", "Health.md"), '<!-- memory-file: {"kind":"topic","slug":"Health","title":"健康","description":"健康","readWhen":"讨论健康时","sensitive":true} -->\n# 健康\n\n## 健康\n\n- 不应默认读取。 ^health-private\n');
+  const context = await personalMemoryContextForPrompt(codexHome, { prompt: "继续做记忆界面" });
+  assert.match(context.value, /喜欢具体回答/);
+  assert.match(context.value, /正在搭建记忆系统/);
+  assert.doesNotMatch(context.value, /不应默认读取/);
+  assert.deepEqual(context.citation.entries.map((entry) => path.basename(entry.path)), ["Core.md", "Now.md"]);
+});
 
 test("memory context always reads global memory and only the active project", () => {
   const context = buildPersonalMemoryContext(store, {

@@ -228,7 +228,7 @@
 
 .memory-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 6px;
   padding: 0 18px 12px;
   border-bottom: 1px solid #29313f;
@@ -334,6 +334,101 @@
   border-radius: 999px;
   color: #9fb0c9;
   background: #202b3a;
+}
+
+.memory-change-status {
+  margin-left: auto;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #9fb0c9;
+  background: #202b3a;
+  font-size: 11px;
+}
+
+.memory-change-status-pending,
+.memory-change-status-conflict {
+  color: #f1cf89;
+  background: #493819;
+}
+
+.memory-change-status-auto_applied,
+.memory-change-status-approved {
+  color: #a8e0c4;
+  background: #17392a;
+}
+
+.memory-change-status-rejected,
+.memory-change-status-reverted {
+  color: #aeb8ca;
+  background: #242b37;
+}
+
+.memory-change-path {
+  margin: -2px 0 10px;
+  color: #8190a7;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.memory-change-diff {
+  display: grid;
+  gap: 7px;
+}
+
+.memory-change-value,
+.memory-change-rationale {
+  padding: 9px 10px;
+  border: 1px solid #344054;
+  border-radius: 9px;
+  background: #0e151f;
+}
+
+.memory-change-value-before {
+  border-color: #633740;
+  background: #25161a;
+}
+
+.memory-change-value-after {
+  border-color: #315c49;
+  background: #11231b;
+}
+
+.memory-change-rationale {
+  margin-top: 8px;
+  border-color: #39465a;
+  background: #131a25;
+}
+
+.memory-change-subtitle {
+  display: block;
+  margin-bottom: 4px;
+  color: #aebbd0;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+
+.memory-change-value-before .memory-change-subtitle {
+  color: #e6aab4;
+}
+
+.memory-change-value-after .memory-change-subtitle {
+  color: #9ed8b9;
+}
+
+.memory-change-value .memory-entry-text,
+.memory-change-rationale .memory-entry-text {
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.memory-change-skill-hint {
+  align-self: center;
+  color: #a8b3c6;
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 .memory-entry-sensitive {
@@ -537,7 +632,15 @@
   }
 
   .memory-tabs button {
-    padding: 0 5px;
-    font-size: 12px;
+    padding: 0 3px;
+    font-size: 11px;
+  }
+
+  .memory-entry-actions {
+    flex-wrap: wrap;
+  }
+
+  .memory-entry-action-danger {
+    margin-left: 0;
   }
 }

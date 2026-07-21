@@ -20,6 +20,8 @@ import {
   personalMemoryContextForPrompt,
   personalMemoryContextForPromptSync,
 } from "./lib/personal-memory-context.js";
+import { readKnowledgeChanges } from "../memory-system/lib/change-ledger.js";
+import { resolveKnowledgeChange } from "../memory-system/lib/knowledge-actions.js";
 import {
   gardenLinkForLocalMarkdown,
   isPathInside,
@@ -310,9 +312,10 @@ app.get("/api/projects", async (_req, res) => {
 
 app.get("/api/memories/status", async (_req, res) => {
   try {
-    const [status, personal] = await Promise.all([
+    const [status, personal, knowledge] = await Promise.all([
       readCodexMemoryStatus(CODEX_HOME),
       readPersonalMemoryView(CODEX_HOME, { view: "overview" }),
+      readKnowledgeChanges({ codexHome: CODEX_HOME, workspaceRoot: WORKSPACE_ROOT }),
     ]);
     personal.projectCatalog = mergeMemoryProjectCatalog(personal.projectCatalog, workspaceMemoryProjectNames());
     res.json({
@@ -323,6 +326,7 @@ app.get("/api/memories/status", async (_req, res) => {
         runtime: personal.runtime,
         projectCatalog: personal.projectCatalog,
       },
+      knowledge: knowledgeChangeView(knowledge.changes, "status"),
     });
   } catch (error) {
     console.error(`Failed to read Codex memory status: ${error.message}`);
@@ -338,15 +342,31 @@ app.get("/api/memories", async (req, res) => {
       projects: req.query.projects,
       source: req.query.source,
     };
-    const [native, personal] = await Promise.all([
+    const [native, personal, knowledge] = await Promise.all([
       readCodexMemoryView(CODEX_HOME, options),
       readPersonalMemoryView(CODEX_HOME, options),
+      readKnowledgeChanges({ codexHome: CODEX_HOME, workspaceRoot: WORKSPACE_ROOT }),
     ]);
     personal.projectCatalog = mergeMemoryProjectCatalog(personal.projectCatalog, workspaceMemoryProjectNames());
-    res.json({ ...native, personal });
+    res.json({ ...native, personal, knowledge: knowledgeChangeView(knowledge.changes, options.view) });
   } catch (error) {
     console.error(`Failed to read Codex memories: ${error.message}`);
     res.status(500).json({ error: "Codex memories are unavailable." });
+  }
+});
+
+app.patch("/api/knowledge-changes/:id", async (req, res) => {
+  try {
+    const change = await resolveKnowledgeChange(
+      req.params.id,
+      String(req.body?.action || ""),
+      req.body || {},
+      { codexHome: CODEX_HOME, workspaceRoot: WORKSPACE_ROOT },
+    );
+    res.json({ change });
+  } catch (error) {
+    console.error(`Failed to resolve knowledge change: ${error.message}`);
+    res.status(error.statusCode || 500).json({ error: error.message || "知识变更操作失败。" });
   }
 });
 
@@ -3587,6 +3607,27 @@ function normalizeMemoryProjectNames(value) {
 
 function normalizeMemoryProjectSource(value) {
   return ["manual", "prompt", "retained", "cwd", "title", "global"].includes(value) ? value : "global";
+}
+
+function knowledgeChangeView(changes, view) {
+  const all = Array.isArray(changes) ? changes : [];
+  const counts = all.reduce(
+    (result, change) => {
+      result.total += 1;
+      result[change.status] = (result[change.status] || 0) + 1;
+      result[change.targetType] = (result[change.targetType] || 0) + 1;
+      return result;
+    },
+    { total: 0, pending: 0, auto_applied: 0, approved: 0, rejected: 0, reverted: 0, conflict: 0, personal_memory: 0, project_rule: 0, skill: 0 },
+  );
+  const selected = view === "pending"
+    ? all.filter((change) => change.status === "pending")
+    : view === "detail"
+      ? all.filter((change) => change.targetType === "project_rule")
+      : view === "changes"
+        ? all
+        : [];
+  return { counts, changes: selected.slice(0, 250) };
 }
 
 function workspaceMemoryProjectNames() {

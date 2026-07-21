@@ -8,6 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   applyPersonalMemoryProposals,
   personalMemoryFiles,
+  reconcilePersonalMemoryMarkdown,
   readPersonalMemoryRuntime,
   readPersonalMemoryStore,
   writePersonalMemoryRuntime,
@@ -20,6 +21,7 @@ import {
   usageAlertNeeded,
   usageFromCodexEvents,
 } from "../lib/personal-memory-worker.js";
+import { recordProjectAndSkillProposals } from "../../memory-system/lib/legacy-adapter.js";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -91,6 +93,7 @@ async function run() {
   runtime.status = "running";
   runtime.lastRunAt = startedAt.toISOString();
   await writePersonalMemoryRuntime(CODEX_HOME, runtime);
+  await reconcilePersonalMemoryMarkdown(CODEX_HOME);
 
   const threads = listEligibleThreads();
   const summary = { scanned: threads.length, eligible: 0, processed: 0, created: 0, confirmed: 0, pending: 0, failed: 0 };
@@ -133,12 +136,19 @@ async function run() {
       });
       const extraction = await runExtraction(prompt);
       recordWorkerUsage(runtime, extraction.usage, new Date());
-      const proposals = Array.isArray(extraction.output?.proposals) ? extraction.output.proposals : [];
+      const proposals = Array.isArray(extraction.output?.proposals)
+        ? extraction.output.proposals.filter((proposal) => proposal?.scope === "global")
+        : [];
       const results = await applyPersonalMemoryProposals(CODEX_HOME, proposals, {
         threadId: thread.id,
         title: thread.title,
         source: thread.source,
       });
+      const knowledgeProposals = await recordProjectAndSkillProposals(extraction.output, {
+        threadId: thread.id,
+        title: thread.title,
+        source: thread.source,
+      }, { codexHome: CODEX_HOME, workspaceRoot: path.resolve(REPO_ROOT, "..") });
       summary.processed += 1;
       for (const result of results) {
         if (result.action === "created") summary.created += 1;
@@ -148,6 +158,10 @@ async function run() {
           pendingCreated += 1;
         }
       }
+      const pendingKnowledge = knowledgeProposals.filter((change) => change.status === "pending").length;
+      summary.pending += pendingKnowledge;
+      summary.confirmed += knowledgeProposals.filter((change) => change.status === "auto_applied").length;
+      pendingCreated += pendingKnowledge;
       runtime.threads[thread.id] = nextState;
     } catch (error) {
       summary.failed += 1;

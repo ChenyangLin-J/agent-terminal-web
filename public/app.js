@@ -1108,7 +1108,8 @@ function command(value) {
 }
 
 function runAppComposerCommand(prompt) {
-  if (!prompt.startsWith("/") || prompt.startsWith("//")) return false;
+  const commandName = String(prompt || "").trim().split(/\s+/)[0].toLowerCase();
+  if (!APP_COMMANDS.some((item) => item.name === commandName)) return false;
   promptInput.value = "";
   hideComposerSuggestions();
   runAppCommand(prompt);
@@ -1454,7 +1455,8 @@ function updateComposerSuggestions() {
       detail: item.description,
       command: item,
     }));
-    renderComposerSuggestions(items, "Commands");
+    if (items.length) renderComposerSuggestions(items, "Commands");
+    else hideComposerSuggestions();
     return;
   }
   const skillMatch = beforeCaret.match(/(?:^|\s)\$([a-zA-Z0-9_:-]*)$/);

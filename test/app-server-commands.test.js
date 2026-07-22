@@ -61,6 +61,10 @@ test("App Server exposes slash commands and structured Skill mentions", async ()
     assert.match(app, new RegExp(`name: "${command.replace("/", "\\/")}"`));
   }
   assert.match(app, /function updateComposerSuggestions\(\)/);
+  assert.match(app, /const commandName = String\(prompt \|\| ""\)\.trim\(\)\.split\(\/\\s\+\/\)\[0\]\.toLowerCase\(\)/);
+  assert.match(app, /if \(!APP_COMMANDS\.some\(\(item\) => item\.name === commandName\)\) return false/);
+  assert.doesNotMatch(app, /if \(!prompt\.startsWith\("\/"\) \|\| prompt\.startsWith\("\/\/"\)\) return false/);
+  assert.match(app, /if \(items\.length\) renderComposerSuggestions\(items, "Commands"\);\s*else hideComposerSuggestions\(\)/);
   assert.match(app, /function receiveAppSkills\(payload = \{\}\)/);
   assert.match(app, /function renderAppCommandResult\(payload = \{\}\)/);
   assert.match(app, /function syncAppSessionToolbar\(\)/);

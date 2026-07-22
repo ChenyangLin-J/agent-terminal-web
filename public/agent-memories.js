@@ -490,7 +490,13 @@
     state.textContent = runtime.status === "running" ? "后台正在整理" : runtime.status === "error" ? "后台整理遇到问题，会自动重试" : "后台整理每 10 分钟检查一次";
     const detail = documentElement("span", "memory-automation-detail");
     const lastRun = runtime.lastRun || {};
-    detail.textContent = `最近检查 ${runtime.lastRunAt ? formatDate(runtime.lastRunAt) : "尚未运行"} · 今天 ${Number(usage.runs || 0)} 次 / ${formatTokenCount(totalTokens)} · 上次处理 ${Number(lastRun.processed || 0)} 个 Session`;
+    const scanned = Number(lastRun.scanned || 0);
+    const eligible = Number(lastRun.eligible || 0);
+    const processed = Number(lastRun.processed || 0);
+    const runSummary = eligible === 0
+      ? `本轮扫描 ${scanned} 个 Session，没有新的闲置内容`
+      : `本轮扫描 ${scanned} 个 Session，可整理 ${eligible} 个，已整理 ${processed} 个`;
+    detail.textContent = `最近检查 ${runtime.lastRunAt ? formatDate(runtime.lastRunAt) : "尚未运行"} · 今天模型整理 ${Number(usage.runs || 0)} 次 / ${formatTokenCount(totalTokens)} · ${runSummary}`;
     section.append(state, detail);
     if (runtime.lastError) {
       const error = documentElement("span", "memory-automation-error");

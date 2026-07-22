@@ -21,6 +21,7 @@ import {
   personalMemoryContextForPromptSync,
 } from "./lib/personal-memory-context.js";
 import { readProjectRuleDocuments } from "./lib/project-rule-documents.js";
+import { orderKnowledgeChanges } from "./lib/knowledge-change-order.js";
 import { readKnowledgeChanges } from "../memory-system/lib/change-ledger.js";
 import { resolveKnowledgeChange } from "../memory-system/lib/knowledge-actions.js";
 import {
@@ -3627,7 +3628,7 @@ function knowledgeChangeView(changes, view) {
   const selected = view === "pending"
     ? all.filter((change) => change.status === "pending")
     : view === "changes"
-      ? [...all].sort((left, right) => Number(right.status === "pending") - Number(left.status === "pending"))
+      ? orderKnowledgeChanges(all)
       : [];
   return { counts, changes: selected.slice(0, 250) };
 }

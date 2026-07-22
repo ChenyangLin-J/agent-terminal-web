@@ -49,6 +49,7 @@ const queuePromptButton = document.querySelector("#queue-prompt");
 const fileInput = document.querySelector("#file-input");
 const promptInput = document.querySelector("#prompt");
 const composer = document.querySelector("#composer");
+const composerAttachments = document.querySelector("#composer-attachments");
 const composerSuggestions = document.querySelector("#composer-suggestions");
 const uploadStatus = document.querySelector("#upload-status");
 const turnLedger = document.querySelector("#turn-ledger");
@@ -184,6 +185,7 @@ let activeStartupQueueSupported = false;
 let activeTurnInterruptSupported = false;
 let pendingAgentRequest = null;
 let lastSubmittedPrompt = "";
+let lastSubmittedAttachments = [];
 let pendingResumeSession = null;
 let appTranscriptItems = [];
 let restoredAppTurnCount = 0;
@@ -272,14 +274,15 @@ promptInput.addEventListener("keydown", (event) => {
 });
 promptInput.addEventListener("input", updateComposerSuggestions);
 promptInput.addEventListener("focus", updateComposerSuggestions);
-window.AgentUpload.create({
+const uploadController = window.AgentUpload.create({
   attachButton: attachFileButton,
   fileInput,
   composer,
-  insertPromptText,
+  attachmentsHost: composerAttachments,
   setUploadStatus,
   redirectToLogin,
-}).install();
+});
+uploadController.install();
 const voiceInputController = window.AgentVoiceInput.create({
   button: voiceInputButton,
   promptInput,
@@ -941,9 +944,10 @@ function openSocket(params, options = {}) {
       if (appCommandDialog.open && !message.payload.preservePrompt) {
         showAppCommandDialog({ title: appCommandTitle.textContent || "Command", content: message.payload.message });
       }
-      if (message.payload.preservePrompt && lastSubmittedPrompt && !promptInput.value.trim()) {
-        promptInput.value = lastSubmittedPrompt;
-        setUploadStatus("发送失败，文本已保留。");
+      if (message.payload.preservePrompt && (lastSubmittedPrompt || lastSubmittedAttachments.length)) {
+        if (lastSubmittedPrompt && !promptInput.value.trim()) promptInput.value = lastSubmittedPrompt;
+        uploadController.restoreAttachments(lastSubmittedAttachments);
+        setUploadStatus("发送失败，文字和附件已保留。");
       }
       if (message.payload.goHome) {
         currentSessionExited = true;
@@ -973,8 +977,9 @@ function openSocket(params, options = {}) {
 
 function submitPrompt(deliveryMode = "auto") {
   const prompt = promptInput.value.trim();
-  if (!prompt) return;
-  if (activeTransport === "app-server" && runAppComposerCommand(prompt)) return;
+  const attachments = uploadController.getAttachments();
+  if (!prompt && !attachments.length) return;
+  if (!attachments.length && activeTransport === "app-server" && runAppComposerCommand(prompt)) return;
   if (notificationTarget.app === "agent") {
     void ensureAgentPushSubscription({ requestPermission: true }).catch(logPushRegistrationError);
   }
@@ -982,6 +987,7 @@ function submitPrompt(deliveryMode = "auto") {
     send({
       type: "submit",
       data: prompt,
+      attachments,
       deliveryMode,
       skills: activeTransport === "app-server" ? extractSkillMentions(prompt) : [],
       notificationApp: notificationTarget.app,
@@ -989,7 +995,9 @@ function submitPrompt(deliveryMode = "auto") {
     })
   ) {
     lastSubmittedPrompt = prompt;
+    lastSubmittedAttachments = attachments;
     promptInput.value = "";
+    uploadController.clearAttachments();
     hideComposerSuggestions();
     setUploadStatus("正在发送…");
   } else {
@@ -1029,13 +1037,17 @@ function handleControlAck(payload = {}) {
   }
   if (payload.kind === "startup-submit") {
     lastSubmittedPrompt = "";
+    lastSubmittedAttachments = [];
     if (payload.turnState) renderTurnState(payload.turnState);
     const skills = activeSkillAckText(payload.skills);
     setUploadStatus(`会话已恢复，任务已经开始。${skills}`, { clear: true });
     return;
   }
   if (payload.kind !== "submit") return;
-  if (payload.deliveryMode !== "startup-queue") lastSubmittedPrompt = "";
+  if (payload.deliveryMode !== "startup-queue") {
+    lastSubmittedPrompt = "";
+    lastSubmittedAttachments = [];
+  }
   if (payload.turnState) renderTurnState(payload.turnState);
   const message = {
     new: "已开始新任务。",
@@ -2842,8 +2854,21 @@ function normalizeClientTranscriptItem(item = {}) {
     exitCode: Number.isFinite(item.exitCode) ? item.exitCode : null,
     turnId: String(item.turnId || ""),
     turnStartedAt: Number.isFinite(item.turnStartedAt) ? item.turnStartedAt : null,
+    attachments: normalizeClientAttachments(item.attachments),
     memoryCitation: normalizeClientMemoryCitation(item.memoryCitation),
   };
+}
+
+function normalizeClientAttachments(attachments) {
+  return (Array.isArray(attachments) ? attachments : [])
+    .slice(0, 10)
+    .map((attachment) => ({
+      path: String(attachment?.path || ""),
+      originalName: String(attachment?.originalName || attachment?.name || "附件"),
+      mime: String(attachment?.mime || "application/octet-stream"),
+      size: Number.isFinite(attachment?.size) ? attachment.size : null,
+    }))
+    .filter((attachment) => attachment.path);
 }
 
 function normalizeClientMemoryCitation(citation) {
@@ -3255,6 +3280,7 @@ function createAppTranscriptCard(item) {
     }
     card.append(copy);
   }
+  if (item.attachments?.length) card.append(createAppTranscriptAttachments(item.attachments));
 
   if (item.detail) {
     card.append(createTranscriptDetails("查看详情", item.detail, item.type === "notice"));
@@ -3271,6 +3297,57 @@ function createAppTranscriptCard(item) {
     card.append(createTranscriptDetails(summary, formatMemoryCitation(item.memoryCitation), false, "memory-citation"));
   }
   return card;
+}
+
+function createAppTranscriptAttachments(attachments) {
+  const list = document.createElement("div");
+  list.className = "app-transcript-attachments";
+  for (const attachment of attachments) {
+    const link = document.createElement("a");
+    link.className = "app-transcript-attachment";
+    link.href = `/open/local?path=${encodeURIComponent(attachment.path)}`;
+    link.target = "_blank";
+    link.rel = "noopener";
+
+    if (attachment.mime.startsWith("image/")) {
+      const image = document.createElement("img");
+      image.src = link.href;
+      image.alt = "";
+      link.append(image);
+    } else {
+      const type = document.createElement("span");
+      type.className = "app-transcript-attachment-type";
+      type.textContent = transcriptAttachmentExtension(attachment.originalName);
+      link.append(type);
+    }
+
+    const copy = document.createElement("span");
+    const name = document.createElement("strong");
+    name.textContent = attachment.originalName;
+    name.title = attachment.originalName;
+    copy.append(name);
+    if (attachment.size !== null) {
+      const size = document.createElement("small");
+      size.textContent = transcriptAttachmentSize(attachment.size);
+      copy.append(size);
+    }
+    link.append(copy);
+    list.append(link);
+  }
+  return list;
+}
+
+function transcriptAttachmentExtension(name) {
+  const match = String(name || "").match(/\.([^.]+)$/);
+  return (match?.[1] || "FILE").slice(0, 5).toUpperCase();
+}
+
+function transcriptAttachmentSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const unitIndex = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / 1024 ** unitIndex;
+  return `${value.toFixed(value >= 100 || unitIndex === 0 ? 0 : value >= 10 ? 1 : 2)} ${units[unitIndex]}`;
 }
 
 function createTranscriptDetails(summaryText, content, open = false, className = "") {

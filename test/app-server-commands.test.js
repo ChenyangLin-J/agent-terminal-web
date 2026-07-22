@@ -29,7 +29,7 @@ test("App Server exposes slash commands and structured Skill mentions", async ()
   assert.match(server, /\.\.\.appServerTurnAccess\(session\)/);
   assert.match(server, /\? \{ type: "dangerFullAccess" \}/);
   assert.match(server, /: \{ type: "workspaceWrite", writableRoots: \[session\.cwd\], networkAccess: false \}/);
-  assert.match(server, /const submission = await submitAppServerPrompt\(session, prompt\.text, prompt\.deliveryMode, prompt\.skillNames\)/);
+  assert.match(server, /const submission = await submitAppServerPrompt\([\s\S]*prompt\.attachments,[\s\S]*prompt\.requirementText/);
   assert.doesNotMatch(server, /Slash commands are not available in App Server experiment mode/);
 
   assert.match(page, /id="composer-suggestions"/);

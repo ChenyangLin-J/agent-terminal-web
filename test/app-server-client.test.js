@@ -111,6 +111,8 @@ test("app-server client submits structured skills and reads command data", async
     [
       { type: "skill", name: "thinking-partner", path: "/skills/thinking-partner/SKILL.md" },
       { type: "text", text: "$thinking-partner 帮我想清楚" },
+      { type: "localImage", path: "/workspace/uploads/chart.png" },
+      { type: "mention", name: "report.pdf", path: "/workspace/uploads/report.pdf" },
     ],
     {
       sandboxPolicy: { type: "workspaceWrite", writableRoots: ["/workspace"], networkAccess: false },
@@ -123,6 +125,10 @@ test("app-server client submits structured skills and reads command data", async
   const turn = fake.received.find((message) => message.method === "turn/start");
   assert.equal(turn.params.input[0].type, "skill");
   assert.equal(turn.params.input[0].name, "thinking-partner");
+  assert.deepEqual(turn.params.input.slice(2), [
+    { type: "localImage", path: "/workspace/uploads/chart.png" },
+    { type: "mention", name: "report.pdf", path: "/workspace/uploads/report.pdf" },
+  ]);
   assert.deepEqual(turn.params.sandboxPolicy, {
     type: "workspaceWrite",
     writableRoots: ["/workspace"],

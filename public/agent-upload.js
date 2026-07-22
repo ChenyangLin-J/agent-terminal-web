@@ -3,13 +3,19 @@
     attachButton,
     fileInput,
     composer,
-    insertPromptText,
+    attachmentsHost,
     setUploadStatus,
     redirectToLogin,
   }) {
+    const maxPendingAttachments = 5;
+    let pendingAttachments = [];
+
     return {
       install,
       uploadFiles,
+      getAttachments,
+      clearAttachments,
+      restoreAttachments,
     };
 
     function install() {
@@ -43,7 +49,7 @@
         const data = response.data;
         if (!response.ok) throw new Error(data.error || "Upload failed.");
 
-        insertUploadedFiles(data.files || []);
+        addUploadedFiles(data.files || []);
         setUploadStatus(`Attached ${(data.files || []).length} file${(data.files || []).length === 1 ? "" : "s"}.`, {
           clear: true,
         });
@@ -180,14 +186,80 @@
       return [...(event.dataTransfer?.types || [])].includes("Files");
     }
 
-    function insertUploadedFiles(files) {
-      const uploadedFiles = files.filter((file) => file.path);
-      if (!uploadedFiles.length) return;
-      insertPromptText(
-        uploadedFiles
-          .map((file) => `请读取这个文件（原始文件名：${file.originalName || file.storedName || "未知"}）：${file.path}`)
-          .join("\n"),
-      );
+    function addUploadedFiles(files) {
+      const knownPaths = new Set(pendingAttachments.map((file) => file.path));
+      const uploadedFiles = files.filter((file) => file?.path && !knownPaths.has(file.path));
+      const available = Math.max(0, maxPendingAttachments - pendingAttachments.length);
+      pendingAttachments = [...pendingAttachments, ...uploadedFiles.slice(0, available)];
+      renderAttachments();
+      if (uploadedFiles.length > available) {
+        setUploadStatus(`最多同时发送 ${maxPendingAttachments} 个附件，其余文件未加入。`);
+      }
+    }
+
+    function getAttachments() {
+      return pendingAttachments.map((file) => ({ ...file }));
+    }
+
+    function clearAttachments() {
+      pendingAttachments = [];
+      renderAttachments();
+    }
+
+    function restoreAttachments(files) {
+      const knownPaths = new Set(pendingAttachments.map((file) => file.path));
+      const restored = (Array.isArray(files) ? files : []).filter((file) => file?.path && !knownPaths.has(file.path));
+      pendingAttachments = [...pendingAttachments, ...restored].slice(0, maxPendingAttachments);
+      renderAttachments();
+    }
+
+    function renderAttachments() {
+      if (!attachmentsHost) return;
+      attachmentsHost.replaceChildren(...pendingAttachments.map(createAttachmentItem));
+      attachmentsHost.classList.toggle("hidden", !pendingAttachments.length);
+    }
+
+    function createAttachmentItem(file) {
+      const item = document.createElement("div");
+      item.className = "composer-attachment";
+
+      const preview = document.createElement(file.mime?.startsWith("image/") ? "img" : "span");
+      preview.className = "composer-attachment-preview";
+      if (preview instanceof HTMLImageElement) {
+        preview.src = `/open/local?path=${encodeURIComponent(file.path)}`;
+        preview.alt = "";
+      } else {
+        preview.textContent = fileExtension(file.originalName || file.storedName);
+        preview.setAttribute("aria-hidden", "true");
+      }
+
+      const copy = document.createElement("span");
+      copy.className = "composer-attachment-copy";
+      const name = document.createElement("strong");
+      name.textContent = file.originalName || file.storedName || "附件";
+      name.title = name.textContent;
+      const meta = document.createElement("small");
+      meta.textContent = formatBytes(Number(file.size) || 0);
+      copy.append(name, meta);
+
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "composer-attachment-remove";
+      remove.textContent = "×";
+      remove.title = `移除 ${name.textContent}`;
+      remove.setAttribute("aria-label", remove.title);
+      remove.addEventListener("click", () => {
+        pendingAttachments = pendingAttachments.filter((entry) => entry.path !== file.path);
+        renderAttachments();
+      });
+
+      item.append(preview, copy, remove);
+      return item;
+    }
+
+    function fileExtension(name) {
+      const match = String(name || "").match(/\.([^.]+)$/);
+      return (match?.[1] || "FILE").slice(0, 5).toUpperCase();
     }
 
     function setUploading(uploading) {

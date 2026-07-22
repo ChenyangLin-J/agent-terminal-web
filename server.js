@@ -1017,6 +1017,7 @@ function createAppServerSession(cwd, launch, restored = {}) {
     pendingStartupPrompts: [],
     pendingPersonalMemoryCitations: [],
     personalMemoryCitationsByTurn: new Map(),
+    submittedAttachmentMetadata: new Map(),
     streamedItemIds: new Set(),
     lastAssistantMessage: "",
     appTranscript: [],
@@ -1390,18 +1391,29 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
 
     if (message.type === "submit" && typeof message.data === "string") {
       const normalized = message.data.trim();
-      if (normalized) {
+      let attachments;
+      try {
+        attachments = normalizeSubmittedAttachments(message.attachments);
+      } catch (error) {
+        send(ws, "error", { message: error.message, preservePrompt: true });
+        return;
+      }
+      if (normalized || attachments.length) {
+        const requirementText = normalized || attachmentRequirementText(attachments);
         rememberNotificationTarget(session, message.notificationApp, message.notificationDeviceId);
         renewSessionRetention(session);
-        logControlMessage(session, ws, "submit", normalized);
-        if (!session.title) session.title = cleanTitle(normalized) || "New Codex session";
+        logControlMessage(session, ws, "submit", requirementText);
+        if (!session.title) session.title = cleanTitle(requirementText) || "New Codex session";
         const prompt = prepareSessionPrompt(session, normalized);
         const skillNames = requestedAppSkillNames(prompt.text, message.skills);
         if (prompt.activatesThink) session.thinkSkillActivationPending = true;
         if (session.transport === APP_SERVER_TRANSPORT) {
+          rememberSubmittedAttachments(session, attachments);
           if (!session.ready) {
             session.pendingStartupPrompts.push({
               text: prompt.text,
+              requirementText,
+              attachments,
               deliveryMode: message.deliveryMode,
               activatesThink: prompt.activatesThink,
               skillNames,
@@ -1414,7 +1426,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
             });
             return;
           }
-          void submitAppServerPrompt(session, prompt.text, message.deliveryMode, skillNames)
+          void submitAppServerPrompt(session, prompt.text, message.deliveryMode, skillNames, attachments, requirementText)
             .then((submission) => {
               if (prompt.activatesThink) {
                 session.thinkSkillActivated = true;
@@ -1437,7 +1449,12 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
             });
           return;
         }
-        const submission = submitTrackedPrompt(session, prompt.text, message.deliveryMode);
+        const submission = submitTrackedPrompt(
+          session,
+          terminalPromptWithAttachments(prompt.text, attachments),
+          message.deliveryMode,
+          requirementText,
+        );
         if (prompt.activatesThink) {
           session.thinkSkillActivated = true;
           session.thinkSkillActivationPending = false;
@@ -1873,6 +1890,76 @@ async function handleUpload(req, res) {
   req.pipe(form);
 }
 
+function normalizeSubmittedAttachments(value) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new Error("附件信息无效，请重新上传。");
+  if (value.length > MAX_UPLOAD_FILES) throw new Error(`最多同时发送 ${MAX_UPLOAD_FILES} 个附件。`);
+
+  let uploadsRoot;
+  try {
+    uploadsRoot = fsSync.realpathSync(UPLOADS_ROOT);
+  } catch {
+    throw new Error("附件目录暂时不可用，请重新上传。");
+  }
+
+  return value.map((attachment) => {
+    const submittedPath = String(attachment?.path || "").trim();
+    if (!submittedPath || !path.isAbsolute(submittedPath) || !isPathInside(UPLOADS_ROOT, submittedPath)) {
+      throw new Error("附件路径无效，请重新上传。");
+    }
+
+    let filePath;
+    let stat;
+    try {
+      filePath = fsSync.realpathSync(submittedPath);
+      stat = fsSync.statSync(filePath);
+    } catch {
+      throw new Error("附件已经不存在，请重新上传。");
+    }
+    if (!isPathInside(uploadsRoot, filePath) || !stat.isFile()) {
+      throw new Error("附件路径无效，请重新上传。");
+    }
+    if (stat.size > MAX_UPLOAD_FILE_BYTES) {
+      throw new Error(`每个附件不能超过 ${formatBytes(MAX_UPLOAD_FILE_BYTES)}。`);
+    }
+
+    return {
+      path: filePath,
+      originalName: cleanUploadOriginalName(attachment?.originalName || attachment?.storedName || path.basename(filePath)),
+      storedName: path.basename(filePath),
+      size: stat.size,
+      mime: cleanAttachmentMime(attachment?.mime),
+    };
+  });
+}
+
+function cleanAttachmentMime(value) {
+  const mime = String(value || "application/octet-stream")
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .trim()
+    .slice(0, 200);
+  return /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/i.test(mime) ? mime : "application/octet-stream";
+}
+
+function attachmentRequirementText(attachments) {
+  return `附件：${attachments.map((attachment) => attachment.originalName).join("、")}`;
+}
+
+function terminalPromptWithAttachments(text, attachments) {
+  if (!attachments.length) return text;
+  const attachmentLines = attachments.map(
+    (attachment) => `- ${attachment.originalName}：${attachment.path}`,
+  );
+  return [text, `请读取并处理以下附件：\n${attachmentLines.join("\n")}`].filter(Boolean).join("\n\n");
+}
+
+function rememberSubmittedAttachments(session, attachments) {
+  for (const attachment of attachments) session.submittedAttachmentMetadata.set(attachment.path, attachment);
+  while (session.submittedAttachmentMetadata.size > 100) {
+    session.submittedAttachmentMetadata.delete(session.submittedAttachmentMetadata.keys().next().value);
+  }
+}
+
 function writeAndSubmit(session, text, { paste, submitKey = "\r" }) {
   if (!text) return;
   session.terminal.write("\x15");
@@ -2299,12 +2386,17 @@ function requestedAppSkillNames(text, supplied) {
   return [...new Set(names.map((name) => name.trim()).filter(Boolean))].slice(0, 8);
 }
 
-function appServerPromptInput(text, skills) {
-  if (!skills.length) return text;
-  return [
-    ...skills.map((skill) => ({ type: "skill", name: skill.name, path: skill.path })),
-    { type: "text", text },
-  ];
+function appServerPromptInput(text, skills, attachments = []) {
+  const input = skills.map((skill) => ({ type: "skill", name: skill.name, path: skill.path }));
+  if (String(text || "").trim()) input.push({ type: "text", text });
+  for (const attachment of attachments) {
+    input.push(
+      attachment.mime.startsWith("image/")
+        ? { type: "localImage", path: attachment.path }
+        : { type: "mention", name: attachment.originalName, path: attachment.path },
+    );
+  }
+  return input;
 }
 
 function appServerTurnAccess(session) {
@@ -2396,19 +2488,26 @@ function mergeMemoryCitations(...citations) {
   };
 }
 
-async function submitAppServerPrompt(session, text, requestedMode, skillNames = []) {
+async function submitAppServerPrompt(
+  session,
+  text,
+  requestedMode,
+  skillNames = [],
+  attachments = [],
+  requirementText = text,
+) {
   if (!session.ready || session.exited) throw new Error("App Server is still starting or has exited.");
   const state = session.turnState;
   const appServer = session.appServer;
   const wantsQueue = requestedMode === "queue";
   const skills = await resolveAppServerSkills(session, skillNames);
   const activeSkills = skills.map((skill) => skill.name);
-  const input = (value) => appServerPromptInput(value, skills);
-  const personalMemory = await appServerPersonalMemory(session, text);
+  const input = (value) => appServerPromptInput(value, skills, attachments);
+  const personalMemory = await appServerPersonalMemory(session, requirementText);
   let lateSteer = false;
 
   if (wantsQueue && appServer.activeTurnId) {
-    const requirement = turnRequirement(state, text, "queued", "queued");
+    const requirement = turnRequirement(state, requirementText, "queued", "queued");
     state.queuedTurns.push(requirement);
     trimTrackedRequirements(state);
     queuePersonalMemoryCitation(session, requirement.id, personalMemory.citation);
@@ -2432,7 +2531,7 @@ async function submitAppServerPrompt(session, text, requestedMode, skillNames = 
   }
 
   if (appServer.activeTurnId) {
-    const requirement = turnRequirement(state, text, "followup", "working");
+    const requirement = turnRequirement(state, requirementText, "followup", "working");
     state.requirements.push(requirement);
     trimTrackedRequirements(state);
     try {
@@ -2463,7 +2562,12 @@ async function submitAppServerPrompt(session, text, requestedMode, skillNames = 
   state.interrupted = false;
   state.interruptedAt = "";
   state.turnId = "";
-  const requirement = turnRequirement(state, text, wantsQueue || lateSteer ? "queued" : "original", "working");
+  const requirement = turnRequirement(
+    state,
+    requirementText,
+    wantsQueue || lateSteer ? "queued" : "original",
+    "working",
+  );
   state.requirements = [requirement];
   session.lastAssistantMessage = "";
   queuePersonalMemoryCitation(session, requirement.id, personalMemory.citation);
@@ -2489,7 +2593,14 @@ async function drainAppServerStartupPrompts(session) {
   while (session.ready && !session.exited && session.pendingStartupPrompts.length) {
     const prompt = session.pendingStartupPrompts.shift();
     try {
-      const submission = await submitAppServerPrompt(session, prompt.text, prompt.deliveryMode, prompt.skillNames);
+      const submission = await submitAppServerPrompt(
+        session,
+        prompt.text,
+        prompt.deliveryMode,
+        prompt.skillNames,
+        prompt.attachments,
+        prompt.requirementText,
+      );
       if (prompt.activatesThink) {
         session.thinkSkillActivated = true;
         session.thinkSkillActivationPending = false;
@@ -2642,8 +2753,21 @@ function normalizeAppTranscriptItem(item) {
     turnId: String(item.turnId || ""),
     turnStartedAt: Number.isFinite(item.turnStartedAt) ? item.turnStartedAt : null,
     turnStatus: String(item.turnStatus || ""),
+    attachments: normalizeTranscriptAttachments(item.attachments),
     memoryCitation: normalizeMemoryCitation(item.memoryCitation),
   };
+}
+
+function normalizeTranscriptAttachments(attachments) {
+  return (Array.isArray(attachments) ? attachments : [])
+    .slice(0, 10)
+    .map((attachment) => ({
+      path: trimAppTranscriptValue(attachment?.path, 2_000),
+      originalName: trimAppTranscriptValue(attachment?.originalName || attachment?.name || "附件", 300),
+      mime: trimAppTranscriptValue(attachment?.mime || "application/octet-stream", 200),
+      size: Number.isFinite(attachment?.size) ? attachment.size : null,
+    }))
+    .filter((attachment) => attachment.path);
 }
 
 function normalizeMemoryCitation(citation) {
@@ -2668,7 +2792,8 @@ function appTranscriptFromThreadItem(session, item, context = {}) {
   if (!item || typeof item !== "object") return null;
   const base = { id: item.id, ...context };
   if (item.type === "userMessage") {
-    return { ...base, type: "user", label: "你", text: appServerUserMessageText(item.content) };
+    const message = appServerUserMessageContent(session, item.content);
+    return { ...base, type: "user", label: "你", text: message.text, attachments: message.attachments };
   }
   if (item.type === "agentMessage") {
     const turnId = String(context.turnId || session.turnState.turnId || "");
@@ -2763,20 +2888,37 @@ function rememberToolMemoryCitation(session, item, turnId) {
   );
 }
 
-function appServerUserMessageText(content) {
-  if (!Array.isArray(content)) return "";
-  return content
-    .map((entry) => {
-      if (typeof entry === "string") return entry;
-      if (entry?.type === "text") return entry.text || "";
-      if (entry?.type === "image") return `图片：${entry.url || ""}`;
-      if (entry?.type === "localImage") return `图片：${entry.path || ""}`;
-      if (entry?.type === "skill") return `Skill：${entry.name || entry.path || ""}`;
-      if (entry?.type === "mention") return `提及：${entry.name || entry.path || ""}`;
-      return "";
-    })
-    .filter(Boolean)
-    .join("\n");
+function appServerUserMessageContent(session, content) {
+  if (!Array.isArray(content)) return { text: "", attachments: [] };
+  const text = [];
+  const attachments = [];
+  for (const entry of content) {
+    if (typeof entry === "string") text.push(entry);
+    else if (entry?.type === "text" && entry.text) text.push(entry.text);
+    else if (entry?.type === "image" && entry.url) text.push(`图片：${entry.url}`);
+    else if (["localImage", "mention"].includes(entry?.type) && entry.path) {
+      attachments.push(appServerMessageAttachment(session, entry));
+    } else if (entry?.type === "skill") text.push(`Skill：${entry.name || entry.path || ""}`);
+  }
+  return { text: text.filter(Boolean).join("\n"), attachments };
+}
+
+function appServerMessageAttachment(session, entry) {
+  const remembered = session.submittedAttachmentMetadata?.get(entry.path);
+  if (remembered) return { ...remembered };
+  let size = null;
+  try {
+    const stat = fsSync.statSync(entry.path);
+    if (stat.isFile()) size = stat.size;
+  } catch {
+    size = null;
+  }
+  return {
+    path: String(entry.path),
+    originalName: cleanUploadOriginalName(entry.name || path.basename(entry.path)),
+    mime: entry.type === "localImage" ? "image/*" : "application/octet-stream",
+    size,
+  };
 }
 
 function appServerFileChangeText(change) {
@@ -3189,7 +3331,7 @@ function appendSessionOutput(session, raw) {
   broadcast(session, "output", { raw, revision });
 }
 
-function submitTrackedPrompt(session, text, requestedMode) {
+function submitTrackedPrompt(session, text, requestedMode, requirementText = text) {
   const state = session.turnState;
   const wantsQueue = requestedMode === "queue";
 
@@ -3200,20 +3342,20 @@ function submitTrackedPrompt(session, text, requestedMode) {
     state.interrupted = false;
     state.interruptedAt = "";
     state.turnId = "";
-    state.requirements = [turnRequirement(state, text, "original", "working")];
+    state.requirements = [turnRequirement(state, requirementText, "original", "working")];
     writeAndSubmit(session, text, { paste: true });
     return { deliveryMode: "new" };
   }
 
   if (wantsQueue) {
-    const requirement = turnRequirement(state, text, "queued", "queued");
+    const requirement = turnRequirement(state, requirementText, "queued", "queued");
     state.queuedTurns.push(requirement);
     trimTrackedRequirements(state);
     writeAndSubmit(session, queuePromptText(text), { paste: true, submitKey: "\t" });
     return { deliveryMode: "queue" };
   }
 
-  const requirement = turnRequirement(state, text, "followup", "working");
+  const requirement = turnRequirement(state, requirementText, "followup", "working");
   state.requirements.push(requirement);
   trimTrackedRequirements(state);
   writeAndSubmit(session, steerPromptText(text, state.requirements.length), { paste: true });

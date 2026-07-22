@@ -39,6 +39,7 @@ test("worker reads only user and final-answer events after its watermark", () =>
   assert.match(prompt, /current-turn or follow-up requirements/);
   assert.match(prompt, /different future task in the same repository/);
   assert.match(prompt, /always require review/);
+  assert.match(prompt, /existing first-level directory directly under the workspace root/);
 });
 
 test("worker ignores synthetic probes and records usage without imposing a cap", () => {

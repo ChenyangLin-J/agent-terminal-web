@@ -298,7 +298,7 @@
       const unresolvedTarget = change.targetType === "project_rule" && String(change.targetPath || "").startsWith("project:");
       const targetWarning = unresolvedTarget ? documentElement("p", "memory-change-target-warning") : null;
       if (targetWarning) {
-        targetWarning.textContent = "未找到可写入的项目目录；这条内容可能是项目背景或旧候选，批准不会自动创建项目。";
+        targetWarning.textContent = "项目规则只允许写入 workspace 一级子目录的 AGENTS.md；这条旧候选没有有效目标，不能应用。";
       }
       const diff = documentElement("div", "memory-change-diff");
       if (change.before !== null) diff.append(diffValue("删除 / 原内容", change.before, "before"));

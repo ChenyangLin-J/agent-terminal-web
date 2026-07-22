@@ -246,7 +246,8 @@ test("Agent Web exposes memory review views and authenticated APIs", async () =>
   assert.match(memoryUi, /待审批变更置顶/);
   assert.match(memoryUi, /审批反馈/);
   assert.match(memoryUi, /今天模型整理/);
-  assert.match(memoryUi, /没有新的闲置内容/);
+  assert.match(memoryUi, /Turn 完成 1 分钟后整理/);
+  assert.match(memoryUi, /没有可整理的已完成内容/);
   assert.match(memoryUi, /正在处理这条变更/);
   assert.match(memoryUi, /没有改写目标/);
   assert.match(memoryUi, /workspace 一级子目录的 AGENTS\.md/);

@@ -1,5 +1,5 @@
 [Unit]
-Description=Check idle Codex sessions for durable personal memory
+Description=Fallback scan for completed Codex turns with durable personal memory
 
 [Timer]
 OnBootSec=2min

@@ -103,7 +103,7 @@ function memoryPayload(view) {
         : [],
       sources: [],
       projectCatalog: [],
-      runtime: { initializedAt: "2026-07-21T00:00:00Z", status: "idle", usage: { days: {} }, lastRun: { scanned: 14, eligible: 0, processed: 0 } },
+      runtime: { initializedAt: "2026-07-21T00:00:00Z", status: "idle", usage: { days: {}, lastAlertedDay: "" }, lastRun: { scanned: 14, eligible: 0, processed: 0 } },
     },
     knowledge: {
       counts: { total: 29, pending: 2, auto_applied: 18, project_rule: 11 },

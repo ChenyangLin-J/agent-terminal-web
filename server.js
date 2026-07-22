@@ -22,6 +22,7 @@ import {
 } from "./lib/personal-memory-context.js";
 import { readProjectRuleDocuments } from "./lib/project-rule-documents.js";
 import { orderKnowledgeChanges } from "./lib/knowledge-change-order.js";
+import { createPersonalMemoryScheduler } from "./lib/personal-memory-scheduler.js";
 import { readKnowledgeChanges } from "../memory-system/lib/change-ledger.js";
 import { resolveKnowledgeChange } from "../memory-system/lib/knowledge-actions.js";
 import {
@@ -99,6 +100,7 @@ const USE_TMUX_SESSIONS = process.env.AGENT_USE_TMUX === "1";
 const CODEX_NOTIFY_SCRIPT = path.join(__dirname, "scripts", "codex-notify.js");
 const CODEX_GUARD_BIN = path.join(__dirname, "scripts", "codex-guard-bin");
 const AGENT_NOTIFY_URL = process.env.AGENT_NOTIFY_URL || `http://${HOST}:${PORT}/internal/codex-notify`;
+const PERSONAL_MEMORY_SETTLE_MS = Math.max(60_000, Number(process.env.PERSONAL_MEMORY_SETTLE_MS) || 60_000);
 const HOME_PUSH_URL = process.env.HOME_PUSH_URL || "http://127.0.0.1:3050/internal/push";
 const HOME_PUSH_SUBSCRIBE_URL = process.env.HOME_PUSH_SUBSCRIBE_URL || `${HOME_PUSH_URL}/subscriptions`;
 const HOME_VAPID_PUBLIC_KEY = process.env.HOME_VAPID_PUBLIC_KEY || "";
@@ -118,6 +120,11 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/terminal" });
 const sessions = new Map();
 const agentInstanceId = cryptoRandomId();
+const personalMemoryScheduler = createPersonalMemoryScheduler({
+  delayMs: PERSONAL_MEMORY_SETTLE_MS,
+  run: () => execFileOutput("systemctl", ["--user", "start", "--no-block", "personal-memory-worker.service"]),
+  onError: (error) => logAgentEvent("personal-memory-trigger-failed", { message: error.message }),
+});
 
 wss.on("error", (error) => {
   logAgentEvent("ws-server-error", {
@@ -171,6 +178,7 @@ app.post("/internal/codex-notify", async (req, res) => {
   session.lastActivityAt = new Date().toISOString();
   persistRestorableWebSession(session);
   broadcast(session, "status", publicSession(session));
+  personalMemoryScheduler.schedule(threadId || session.id);
 
   try {
     const result = await sendHomeTurnNotification(session, event);
@@ -2834,7 +2842,10 @@ function handleAppServerNotification(session, message) {
     );
     persistRestorableWebSession(session);
     broadcast(session, "status", publicSession(session));
-    if (!stopped) void sendAppServerTurnNotification(session, turnId);
+    if (!stopped) {
+      personalMemoryScheduler.schedule(session.sessionId || session.id);
+      void sendAppServerTurnNotification(session, turnId);
+    }
   } else if (method === "error") {
     const errorMessage = params.error?.message || params.message || "App Server error";
     appendAppTranscriptNotice(session, errorMessage, "error");

@@ -24,9 +24,9 @@ The current user message always wins over stored memory. Answers show a citation
 
 ## Write policy
 
-`personal-memory-worker.timer` checks every ten minutes. A non-archived, user-created CLI or Agent Web thread becomes eligible after ten minutes of inactivity. The worker uses a transient `codex exec --ephemeral` extraction run and advances the thread watermark only after a successful result.
+After an Agent Web Turn completes, the server schedules a memory check after a one-minute write-settling buffer. A non-archived, user-created thread is eligible only when the latest fresh user message has a later final answer; keeping the Session process open does not block extraction. Incomplete Turns never advance the thread watermark. `personal-memory-worker.timer` still scans every ten minutes as a fallback. The worker uses a transient `codex exec --ephemeral` extraction run and advances the thread watermark only after a successful result.
 
-The UI distinguishes timer checks from model extraction runs. A check may scan every eligible thread but process zero when all watermarks are current or the only new threads have not yet been idle for ten minutes; the daily token figure is cumulative across earlier extraction runs.
+The UI distinguishes checks from model extraction runs. A check may scan every eligible thread but process zero when all watermarks are current, the newest Turn is incomplete, or a completed Turn is still inside the one-minute settling buffer; the daily token figure is cumulative across earlier extraction runs.
 
 The worker reads the Session's persisted semantic project set. Manual selections are authoritative; automatic selections are a strong hint that the fresh user transcript must still support. Separate durable facts may be written to separate projects when a Session uses multiple projects.
 

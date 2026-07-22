@@ -16,6 +16,7 @@ import {
 import {
   buildPersonalMemoryExtractionPrompt,
   conversationFromRollout,
+  hasCompletedFreshTurn,
   recordWorkerUsage,
   shouldProcessConversation,
   usageAlertNeeded,
@@ -30,7 +31,10 @@ const CODEX_HOME = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
 const AGENT_SESSION_SETTINGS_FILE = path.join(CODEX_HOME, "agent-session-settings.json");
 const SCHEMA_FILE = path.join(REPO_ROOT, "config", "personal-memory-output.schema.json");
 const HOME_PUSH_URL = process.env.HOME_PUSH_URL || "http://127.0.0.1:3050/internal/push";
-const IDLE_MS = Math.max(60_000, Number(process.env.PERSONAL_MEMORY_IDLE_MS) || 10 * 60_000);
+const SETTLE_MS = Math.max(
+  60_000,
+  Number(process.env.PERSONAL_MEMORY_SETTLE_MS || process.env.PERSONAL_MEMORY_IDLE_MS) || 60_000,
+);
 const EXTRACTION_TIMEOUT_MS = Math.max(
   60_000,
   Number(process.env.PERSONAL_MEMORY_EXTRACTION_TIMEOUT_MS) || 20 * 60_000,
@@ -106,17 +110,17 @@ async function run() {
   let lastError = "";
 
   for (const thread of threads) {
-    if (Date.now() - thread.updatedAtMs < IDLE_MS) continue;
+    if (Date.now() - thread.updatedAtMs < SETTLE_MS) continue;
     const threadState = runtime.threads[thread.id] || null;
     if (threadState?.nextRetryAt && Date.parse(threadState.nextRetryAt) > Date.now()) continue;
     const stat = await fs.stat(thread.rolloutPath).catch(() => null);
     if (!stat) continue;
     if (threadState && threadState.offset >= stat.size && threadState.updatedAtMs >= thread.updatedAtMs) continue;
-    summary.eligible += 1;
-
     try {
       const raw = await fs.readFile(thread.rolloutPath, "utf8");
       const conversation = conversationFromRollout(raw, threadState?.lastEventAt || "");
+      if (!hasCompletedFreshTurn(conversation)) continue;
+      summary.eligible += 1;
       const nextState = {
         rolloutPath: thread.rolloutPath,
         offset: stat.size,

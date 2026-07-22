@@ -115,7 +115,7 @@
     statusElement.dataset.state = pendingCount || runtime.status === "running" ? "working" : runtime.status === "error" ? "error" : runtime.initializedAt ? "ready" : "off";
     statusElement.title = runtime.lastRunAt
       ? `最近检查：${formatDate(runtime.lastRunAt)}`
-      : "Session 闲置后会被自动整理";
+      : "Turn 完成后会被自动整理";
     renderTriggerStatus({ status, pendingCount, runtime });
   }
 
@@ -487,14 +487,14 @@
     const usage = runtime.usage?.days?.[today] || {};
     const totalTokens = Number(usage.inputTokens || 0) + Number(usage.outputTokens || 0);
     const state = documentElement("strong", "memory-automation-title");
-    state.textContent = runtime.status === "running" ? "后台正在整理" : runtime.status === "error" ? "后台整理遇到问题，会自动重试" : "后台整理每 10 分钟检查一次";
+    state.textContent = runtime.status === "running" ? "后台正在整理" : runtime.status === "error" ? "后台整理遇到问题，会自动重试" : "Turn 完成 1 分钟后整理 · 每 10 分钟兜底";
     const detail = documentElement("span", "memory-automation-detail");
     const lastRun = runtime.lastRun || {};
     const scanned = Number(lastRun.scanned || 0);
     const eligible = Number(lastRun.eligible || 0);
     const processed = Number(lastRun.processed || 0);
     const runSummary = eligible === 0
-      ? `本轮扫描 ${scanned} 个 Session，没有新的闲置内容`
+      ? `本轮扫描 ${scanned} 个 Session，没有可整理的已完成内容`
       : `本轮扫描 ${scanned} 个 Session，可整理 ${eligible} 个，已整理 ${processed} 个`;
     detail.textContent = `最近检查 ${runtime.lastRunAt ? formatDate(runtime.lastRunAt) : "尚未运行"} · 今天模型整理 ${Number(usage.runs || 0)} 次 / ${formatTokenCount(totalTokens)} · ${runSummary}`;
     section.append(state, detail);

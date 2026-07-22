@@ -24,7 +24,7 @@ test("App Server exposes slash commands and structured Skill mentions", async ()
   assert.match(server, /message\.type === "interrupt-turn"/);
   assert.match(server, /session\.appServer[\s\S]*\.interruptTurn\(\)/);
   assert.match(server, /if \(!stopped\) persistCompletedSessionPreview/);
-  assert.match(server, /if \(!stopped\) void sendAppServerTurnNotification/);
+  assert.match(server, /if \(!stopped\) \{[\s\S]*personalMemoryScheduler\.schedule\([^)]*\);[\s\S]*void sendAppServerTurnNotification/);
   assert.match(server, /type: "skill", name: skill\.name, path: skill\.path/);
   assert.match(server, /\.\.\.appServerTurnAccess\(session\)/);
   assert.match(server, /\? \{ type: "dangerFullAccess" \}/);

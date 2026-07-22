@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildPersonalMemoryExtractionPrompt,
   conversationFromRollout,
+  hasCompletedFreshTurn,
   recordWorkerUsage,
   shouldProcessConversation,
   usageAlertNeeded,
@@ -19,7 +20,14 @@ test("worker reads only user and final-answer events after its watermark", () =>
   const conversation = conversationFromRollout(raw, "2026-07-21T10:00:02Z");
   assert.deepEqual(conversation.recent.map((item) => item.text), ["我喜欢具体回答", "知道了"]);
   assert.deepEqual(conversation.fresh.map((item) => item.text), ["以后也请分析利弊"]);
+  assert.equal(hasCompletedFreshTurn(conversation), false);
   assert.equal(shouldProcessConversation({ title: "交流偏好" }, conversation), true);
+  const completed = conversationFromRollout(`${raw}\n${event("2026-07-21T10:10:02Z", {
+    type: "agent_message",
+    phase: "final_answer",
+    message: "以后会分析利弊。",
+  })}`, "2026-07-21T10:00:02Z");
+  assert.equal(hasCompletedFreshTurn(completed), true);
   const prompt = buildPersonalMemoryExtractionPrompt({
     thread: {
       id: "one",

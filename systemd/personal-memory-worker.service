@@ -1,5 +1,5 @@
 [Unit]
-Description=Extract durable personal memories from idle Codex sessions
+Description=Extract durable personal memories from completed Codex turns
 After=network-online.target
 Wants=network-online.target
 
@@ -8,7 +8,7 @@ Type=oneshot
 WorkingDirectory=%h/workspace/agent-terminal-web
 ExecStart=%h/.nvm/versions/node/v24.17.0/bin/node %h/workspace/agent-terminal-web/scripts/personal-memory-worker.mjs
 Environment=NODE_ENV=production
-Environment=PERSONAL_MEMORY_IDLE_MS=600000
+Environment=PERSONAL_MEMORY_SETTLE_MS=60000
 Environment=PERSONAL_MEMORY_USAGE_TOKEN_ALERT=250000
 Environment=PERSONAL_MEMORY_USAGE_RUN_ALERT=20
 TimeoutStartSec=6h

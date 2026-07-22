@@ -22,7 +22,15 @@ try {
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
     await page.evaluate(() => document.querySelector("#start-screen")?.classList.remove("hidden"));
     await page.click("#open-memories");
-    await page.click('[data-memory-view="pending"]');
+    await page.waitForSelector(".memory-markdown-file");
+    assert.equal(await page.locator("[data-memory-view]").count(), 3, `${viewport.name}: expected three memory tabs`);
+    assert.equal(await page.locator(".memory-markdown-file").count(), 3, `${viewport.name}: expected Core, Now and Topic documents`);
+    await page.screenshot({ path: `/tmp/memory-system-${viewport.name}-personal.png`, fullPage: true });
+    await page.click('[data-memory-view="detail"]');
+    await page.waitForSelector(".memory-markdown-file");
+    assert.match(await page.locator(".memory-markdown-file summary").first().textContent(), /agent-terminal-web/);
+    await page.screenshot({ path: `/tmp/memory-system-${viewport.name}-projects.png`, fullPage: true });
+    await page.click('[data-memory-view="changes"]');
     await page.waitForSelector(".memory-change-card");
     const geometry = await page.evaluate(() => {
       const dialog = document.querySelector("#memory-dialog");
@@ -60,6 +68,7 @@ function memoryPayload(view) {
       before: "喜欢简短回答。",
       after: { text: "喜欢具体、有依据并分析利弊的回答。", category: "交流偏好" },
       rationale: "用户在新 Session 中明确补充了回答方式。",
+      reviewReason: "",
       evidence: [{ threadId: "thread-1", title: "回答偏好", quote: "希望讨论时能够分析利弊" }],
       confidence: 0.91,
     },
@@ -73,6 +82,7 @@ function memoryPayload(view) {
       before: null,
       after: { category: "学习规则", text: "发音规则需要有可重复测试的验证方法。" },
       rationale: "同一类纠错在项目中反复出现。",
+      reviewReason: "",
       evidence: [{ threadId: "thread-2", title: "藏语学习", quote: "每一次纠错完都要反思并更新方法论" }],
       confidence: 0.88,
     },
@@ -83,8 +93,13 @@ function memoryPayload(view) {
     document: { content: "" },
     personal: {
       counts: { pending: 0, confirmed: 18, total: 18 },
-      entries: view === "overview"
-        ? [{ id: "answer-style", status: "confirmed", scope: "global", category: "交流偏好", text: "喜欢具体、有依据并分析利弊的回答。", evidence: [], confidence: "high" }]
+      entries: [],
+      documents: view === "overview"
+        ? [
+            { kind: "core", fileName: "Core.md", title: "核心记忆", content: "# 核心记忆\n\n## 交流偏好\n\n- 喜欢具体、有依据并分析利弊的回答。" },
+            { kind: "now", fileName: "Now.md", title: "当前关注", content: "# 当前关注\n\n- 正在完善跨 Session 记忆。" },
+            { kind: "topic", fileName: "Career.md", title: "职业探索", content: "# 职业探索\n\n- 关注小而深的公司。" },
+          ]
         : [],
       sources: [],
       projectCatalog: [],
@@ -93,6 +108,11 @@ function memoryPayload(view) {
     knowledge: {
       counts: { total: 29, pending: 2, auto_applied: 18, project_rule: 11 },
       changes: selected,
+    },
+    projectRules: {
+      documents: view === "detail"
+        ? [{ project: "agent-terminal-web", targetPath: "/home/ubuntu/workspace/agent-terminal-web/AGENTS.md", content: "# Agent Web rules\n\n- Keep approvals visible." }]
+        : [],
     },
   };
 }

@@ -44,7 +44,7 @@
   tabs.forEach((tab) => {
     tab.addEventListener("click", () => {
       actionFeedback = null;
-      activeView = tab.dataset.memoryView || "overview";
+      activeView = normalizeManagerView(tab.dataset.memoryView);
       syncTabs();
       void loadView();
     });
@@ -61,7 +61,7 @@
     routingEnabled = typeof options.onProjectChange === "function";
     projectChangeHandler = routingEnabled ? options.onProjectChange : null;
     projectRoutingElement?.classList.add("hidden");
-    activeView = options.view || "overview";
+    activeView = normalizeManagerView(options.view);
     syncTabs();
     renderProjectRouting();
     renderContext();
@@ -87,8 +87,7 @@
       projectCatalog = Array.isArray(data.personal?.projectCatalog) ? data.personal.projectCatalog : [];
       renderProjectRouting();
       renderStatus({ ...(data.status || {}), personal: data.personal, knowledge: data.knowledge });
-      if (activeView === "sources") renderSources(data);
-      else renderDocument(data);
+      renderDocument(data);
     } catch (error) {
       if (sequence !== requestSequence) return;
       statusElement.textContent = "读取失败";
@@ -110,7 +109,7 @@
         : runtime.status === "running"
           ? "正在自动整理"
           : runtime.initializedAt
-            ? "自动运行中"
+            ? "自动检查中"
             : "尚未启动";
     statusElement.textContent = state;
     statusElement.dataset.state = pendingCount || runtime.status === "running" ? "working" : runtime.status === "error" ? "error" : runtime.initializedAt ? "ready" : "off";
@@ -143,7 +142,7 @@
         : runtime.status === "running"
           ? { key: "working", text: "整理中", title: "个人记忆正在后台自动整理" }
           : runtime.initializedAt
-            ? { key: "ready", text: "自动运行", title: "个人记忆自动运行中；点击管理和追溯" }
+            ? { key: "ready", text: "自动检查", title: "后台自动提取候选，审批后才会写入；点击管理和追溯" }
             : { key: "off", text: "未启动", title: "个人记忆后台尚未启动" };
     for (const button of triggerButtons) {
       button.dataset.memoryState = state.key;
@@ -159,11 +158,9 @@
 
   function renderContext() {
     const labels = {
-      overview: "Core、Now 与按需 Topics",
+      overview: "Core、Now 与 Topics 文档",
       detail: "各项目 AGENTS.md",
-      pending: "尚未应用",
-      changes: "可追溯、可撤回",
-      sources: "Session 与原生摘要",
+      changes: "待审批置顶 · 全部可追溯",
     };
     contextElement.textContent = labels[activeView] || "个人记忆";
   }
@@ -232,57 +229,71 @@
   }
 
   function renderDocument(data) {
-    const memoryDocument = data.document || {};
     const fragment = documentFragment();
-    fragment.append(viewNote(activeView, data.status || {}, memoryDocument));
+    fragment.append(viewNote(activeView));
     if (actionFeedback) fragment.append(actionFeedbackElement(actionFeedback));
-    if (data.personal?.runtime) fragment.append(renderAutomationStatus(data.personal.runtime));
-    const knowledgeChanges = data.knowledge?.changes || [];
-    const personalEntries = activeView === "overview" ? data.personal?.entries || [] : [];
-    if (knowledgeChanges.length) fragment.append(renderKnowledgeChanges(knowledgeChanges));
-    if (personalEntries.length) fragment.append(renderPersonalEntries(personalEntries));
-    if (!memoryDocument.content && !personalEntries.length && !knowledgeChanges.length) {
-      const pendingAvailable = activeView === "overview" && data.status?.documents?.pending?.available;
-      fragment.append(
-        message(
-          pendingAvailable
-            ? "原始候选已经生成，最终总览仍在合并。你可以先检查已抽取的内容。"
-            : data.status?.enabled
-              ? "还没有生成这部分记忆。Codex 会在符合条件的历史会话完成并闲置后，后台逐步整理。"
-            : "个人记忆后台尚未启动。",
-          "empty",
-        ),
-      );
-      if (pendingAvailable) {
-        const review = document.createElement("button");
-        review.type = "button";
-        review.className = "memory-review-action";
-        review.textContent = "查看已抽取内容";
-        review.addEventListener("click", () => {
-          activeView = "pending";
-          syncTabs();
-          void loadView();
-        });
-        fragment.append(review);
-      }
-    } else if (memoryDocument.content) {
-      if (personalEntries.length) {
-        const heading = documentElement("h3", "memory-section-title");
-        heading.textContent = activeView === "pending" ? "Codex 原生候选（参考）" : "Codex 原生记忆（只读参考）";
-        fragment.append(heading);
-      }
-      const article = document.createElement("article");
-      article.className = "memory-document app-transcript-markdown";
-      if (global.AgentMarkdown) global.AgentMarkdown.render(article, memoryDocument.content, renderer);
-      else article.textContent = memoryDocument.content;
-      fragment.append(article);
+    if (activeView === "overview") {
+      if (data.personal?.runtime) fragment.append(renderAutomationStatus(data.personal.runtime));
+      const documents = data.personal?.documents || [];
+      if (documents.length) fragment.append(renderPersonalDocuments(documents));
+      else fragment.append(message("还没有可展示的个人记忆 Markdown 文档。", "empty"));
+    } else if (activeView === "detail") {
+      const documents = data.projectRules?.documents || [];
+      if (documents.length) fragment.append(renderProjectRuleDocuments(documents));
+      else fragment.append(message("workspace 一级项目目录中还没有可展示的 AGENTS.md。", "empty"));
+    } else {
+      const knowledgeChanges = data.knowledge?.changes || [];
+      if (knowledgeChanges.length) fragment.append(renderKnowledgeChanges(knowledgeChanges));
+      else fragment.append(message("还没有记忆、项目规则或 Skill 的审批记录。", "empty"));
     }
     contentElement.replaceChildren(fragment);
   }
 
+  function renderPersonalDocuments(documents) {
+    const section = documentElement("section", "memory-document-list");
+    for (const document of documents) {
+      const label = document.kind === "core"
+        ? `Core · ${document.fileName}`
+        : document.kind === "now"
+          ? `Now · ${document.fileName}`
+          : `Topic · ${document.title || document.fileName}`;
+      section.append(markdownDocumentDetails(label, document.content, document.kind !== "topic"));
+    }
+    return section;
+  }
+
+  function renderProjectRuleDocuments(documents) {
+    const section = documentElement("section", "memory-document-list");
+    const expand = documents.length <= 2;
+    for (const document of documents) {
+      section.append(markdownDocumentDetails(`${document.project} · AGENTS.md`, document.content, expand));
+    }
+    return section;
+  }
+
+  function markdownDocumentDetails(label, content, open) {
+    const details = documentElement("details", "memory-markdown-file");
+    details.open = open;
+    const summary = document.createElement("summary");
+    summary.textContent = label;
+    const article = documentElement("article", "memory-document app-transcript-markdown");
+    if (global.AgentMarkdown) global.AgentMarkdown.render(article, content, renderer);
+    else article.textContent = content;
+    details.append(summary, article);
+    return details;
+  }
+
   function renderKnowledgeChanges(changes) {
     const section = documentElement("section", "memory-entry-list memory-change-list");
+    let currentGroup = "";
     for (const change of changes) {
+      const group = change.status === "pending" ? "待审批" : "历史记录";
+      if (group !== currentGroup) {
+        const heading = documentElement("h3", "memory-change-group-title");
+        heading.textContent = group;
+        section.append(heading);
+        currentGroup = group;
+      }
       const card = documentElement("article", "memory-entry-card memory-change-card");
       const header = documentElement("header", "memory-entry-meta");
       const target = documentElement("strong", "memory-entry-category");
@@ -311,6 +322,15 @@
       rationaleText.textContent = change.rationale || "没有记录修改原因。";
       rationale.append(rationaleTitle, rationaleText);
 
+      const review = change.reviewReason ? documentElement("div", "memory-change-rationale memory-change-review") : null;
+      if (review) {
+        const reviewTitle = documentElement("strong", "memory-change-subtitle");
+        reviewTitle.textContent = "审批反馈";
+        const reviewText = documentElement("p", "memory-entry-text");
+        reviewText.textContent = change.reviewReason;
+        review.append(reviewTitle, reviewText);
+      }
+
       const evidence = documentElement("details", "memory-entry-evidence");
       const evidenceTitle = document.createElement("summary");
       evidenceTitle.textContent = `来源证据 ${change.evidence?.length || 0} · 置信度 ${Math.round(Number(change.confidence || 0) * 100)}%`;
@@ -336,7 +356,9 @@
       }
       card.append(header, path);
       if (targetWarning) card.append(targetWarning);
-      card.append(diff, rationale, evidence, actions);
+      card.append(diff, rationale);
+      if (review) card.append(review);
+      card.append(evidence, actions);
       section.append(card);
     }
     return section;
@@ -454,115 +476,6 @@
     }[value] || value;
   }
 
-  function renderSources(data) {
-    const fragment = documentFragment();
-    fragment.append(viewNote("sources", data.status || {}, {}));
-    const personalSources = data.personal?.sources || [];
-    if (personalSources.length) fragment.append(renderImportSources(personalSources, data.personal?.importScope));
-    if (data.selected?.content) {
-      const back = document.createElement("button");
-      back.type = "button";
-      back.className = "memory-source-back";
-      back.textContent = "← 返回来源列表";
-      back.addEventListener("click", () => void loadView());
-      const heading = document.createElement("h3");
-      heading.className = "memory-source-title";
-      heading.textContent = data.selected.name;
-      const article = document.createElement("article");
-      article.className = "memory-document app-transcript-markdown";
-      if (global.AgentMarkdown) global.AgentMarkdown.render(article, data.selected.content, renderer);
-      else article.textContent = data.selected.content;
-      fragment.append(back, heading, article);
-    } else if (data.sources?.length) {
-      const heading = documentElement("h3", "memory-section-title");
-      heading.textContent = "Codex 原生会话摘要（参考）";
-      const list = document.createElement("div");
-      list.className = "memory-source-list";
-      for (const source of data.sources) {
-        const button = document.createElement("button");
-        button.type = "button";
-        const name = document.createElement("strong");
-        name.textContent = source.name;
-        const meta = document.createElement("span");
-        meta.textContent = `${formatBytes(source.bytes)} · ${formatDate(source.updatedAt)}`;
-        button.append(name, meta);
-        button.addEventListener("click", () => void loadView(source.name));
-        list.append(button);
-      }
-      fragment.append(heading, list);
-    } else if (!personalSources.length) {
-      fragment.append(message("还没有会话摘要来源。", "empty"));
-    }
-    contentElement.replaceChildren(fragment);
-  }
-
-  function renderPersonalEntries(entries) {
-    const section = documentElement("section", "memory-entry-list");
-    for (const entry of entries) {
-      const card = documentElement("article", "memory-entry-card");
-      const header = documentElement("header", "memory-entry-meta");
-      const category = documentElement("strong", "memory-entry-category");
-      category.textContent = entry.category || "其他";
-      const scope = documentElement("span", "memory-entry-scope");
-      scope.textContent = entry.scope === "project" ? `项目 · ${entry.project}` : entry.memoryLocation || "个人记忆";
-      header.append(category, scope);
-      if (entry.proposalAction) {
-        const proposal = documentElement("span", "memory-entry-proposal");
-        proposal.textContent = entry.proposalAction === "retire" ? "建议停用旧记忆" : "建议更新旧记忆";
-        header.append(proposal);
-      }
-      if (entry.sensitive) {
-        const sensitive = documentElement("span", "memory-entry-sensitive");
-        sensitive.textContent = "敏感信息";
-        header.append(sensitive);
-      }
-      const content = documentElement("p", "memory-entry-text");
-      content.textContent = entry.text;
-      const evidence = documentElement("details", "memory-entry-evidence");
-      const evidenceTitle = document.createElement("summary");
-      evidenceTitle.textContent = `来源 ${entry.evidence?.length || 0} · ${confidenceLabel(entry.confidence)}`;
-      evidence.append(evidenceTitle);
-      for (const item of entry.evidence || []) {
-        const row = documentElement("p", "memory-entry-source");
-        row.textContent = item.quote ? `${item.title}：${item.quote}` : item.title;
-        evidence.append(row);
-      }
-      const actions = documentElement("div", "memory-entry-actions");
-      if (entry.status === "pending") {
-        const confirmation = entry.proposalAction === "retire" ? "确认停用" : entry.proposalAction === "update" ? "确认更新" : "确认";
-        actions.append(actionButton(confirmation, "primary", () => mutateEntry(entry.id, { status: "confirmed" })));
-      }
-      else actions.append(actionButton("退回待检查", "secondary", () => mutateEntry(entry.id, { status: "pending" })));
-      actions.append(actionButton("修改", "secondary", () => editEntry(entry, card)));
-      actions.append(actionButton(entry.proposalAction ? "忽略建议" : "删除", "danger", () => removeEntry(entry, card)));
-      card.append(header, content, evidence, actions);
-      section.append(card);
-    }
-    return section;
-  }
-
-  function renderImportSources(sources, importScope) {
-    const section = documentElement("section", "memory-import-sources");
-    const heading = documentElement("h3", "memory-section-title");
-    const included = sources.filter((source) => source.decision === "included").length;
-    const excluded = sources.length - included;
-    heading.textContent = `已处理 Session：读取 ${included} · 排除 ${excluded}`;
-    const note = documentElement("p", "memory-import-note");
-    note.textContent = importScope?.note || "这批来源只用于生成候选记忆。";
-    const list = documentElement("div", "memory-source-list");
-    for (const source of sources) {
-      const row = documentElement("div", "memory-import-source");
-      const name = document.createElement("strong");
-      name.textContent = source.title;
-      const meta = document.createElement("span");
-      meta.textContent = `${source.decision === "included" ? "已读取" : "已排除"}${source.reason ? ` · ${source.reason}` : ""}`;
-      row.append(name, meta);
-      list.append(row);
-    }
-    section.append(heading, note, list);
-    return section;
-  }
-
   function renderAutomationStatus(runtime) {
     const section = documentElement("aside", "memory-automation-status");
     const today = new Intl.DateTimeFormat("en-CA", {
@@ -651,54 +564,14 @@
     card.querySelector(":scope > .memory-inline-panel")?.remove();
   }
 
-  function editEntry(entry, card) {
-    showInlineEditor(card, {
-      value: entry.text,
-      saveLabel: "保存修改",
-      emptyMessage: "记忆内容不能为空；如果不需要，请使用删除。",
-      onSave: (text) => mutateEntry(entry.id, { text }),
-    });
-  }
-
-  function removeEntry(entry, card) {
-    showInlineConfirmation(card, {
-      message: entry.proposalAction ? "忽略后不会应用这条建议。" : `确定删除这条记忆吗？${entry.text}`,
-      confirmLabel: entry.proposalAction ? "确认忽略" : "确认删除",
-      onConfirm: () => mutateEntry(entry.id, null, "DELETE"),
-    });
-  }
-
-  async function mutateEntry(id, changes, method = "PATCH") {
-    try {
-      const response = await fetch(`/api/memories/${encodeURIComponent(id)}`, {
-        method,
-        headers: method === "PATCH" ? { "Content-Type": "application/json" } : undefined,
-        body: method === "PATCH" ? JSON.stringify(changes) : undefined,
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "修改失败");
-      actionFeedback = { tone: "success", text: method === "DELETE" ? "已删除。" : "修改已保存。" };
-      await loadView();
-    } catch (error) {
-      actionFeedback = { tone: "error", text: `没有改写目标：${error.message || "记忆修改失败。"}` };
-      await loadView();
-    }
-  }
-
-  function confidenceLabel(value) {
-    return { high: "高置信", medium: "待核对", low: "低置信" }[value] || "待核对";
-  }
-
-  function viewNote(view, status, document) {
+  function viewNote(view) {
     const note = documentElement("aside", "memory-note");
     const copy = {
-      overview: "个人记忆写在 Obsidian。每轮默认只读取小型 Core 与 Now；Topics 只在当前问题需要时按索引读取。",
-      detail: "这里汇总项目 AGENTS.md 的规则变更；项目事实仍应留在项目文档，普通代码修改不会出现在这里。",
-      pending: "这些变更尚未应用。你可以查看准确前后内容、原因与来源，再批准、修改或拒绝。",
-      changes: "所有知识变更都可追溯；已应用变更可以撤回，目标后来被修改时不会强行覆盖。",
-      sources: `这里列出已处理的 Session，以及 Codex 原生生成的 ${status.sourceCount || 0} 份摘要。`,
+      overview: "这里按 Markdown 文档展示 Obsidian 中的 Core、Now 与 Topics。后台只生成候选，审批后才会写入。",
+      detail: "这里直接展示 workspace 一级项目目录中的 AGENTS.md；项目事实和产品需求仍应留在项目文档、代码或测试中。",
+      changes: "待审批变更置顶，已处理记录接在后面；每条都保留原因与来源证据，并可在安全时撤回。",
     };
-    note.textContent = copy[view] || status.scope || "";
+    note.textContent = copy[view] || "";
     return note;
   }
 
@@ -721,6 +594,12 @@
   function normalizeProject(value) {
     const project = String(value || "").trim();
     return project === "." ? "" : project;
+  }
+
+  function normalizeManagerView(value) {
+    if (value === "detail") return "detail";
+    if (["changes", "pending", "sources"].includes(value)) return "changes";
+    return "overview";
   }
 
   function normalizeProjects(value) {
@@ -747,11 +626,6 @@
     if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M tokens`;
     if (count >= 1_000) return `${Math.round(count / 1_000)}K tokens`;
     return `${count} tokens`;
-  }
-
-  function formatBytes(value) {
-    const bytes = Number(value || 0);
-    return bytes >= 1024 ? `${(bytes / 1024).toFixed(bytes >= 10_240 ? 0 : 1)} KB` : `${bytes} B`;
   }
 
   global.AgentMemories = Object.freeze({ open, refreshStatus, updateSessionRouting });

@@ -41,12 +41,11 @@ The production route is reverse proxied by Caddy. Authentication is delegated to
 
 ## Memory
 
-Agent Web 使用 Codex 原生 Memories 作为自动提炼层，并增加一个轻量的本地审核层；不使用向量数据库或知识图谱。入口包含四个视图：
+Agent Web 使用轻量的本地 Markdown 记忆与审核层；不使用向量数据库或知识图谱。入口包含三个视图：
 
-- `总览`：跨工作与生活的稳定背景、偏好和近期主题，接近 ChatGPT 的 Overview。
-- `当前项目`：显示当前 Session 自动识别或手动多选的一个或多个语义项目记忆；`workspace` 只代表文件范围，不会被当作项目记忆。
-- `待检查`：历史补录先变成逐条候选，可确认、修改或删除；未确认内容不会进入正式记忆。页面下方仍保留 Codex 原生候选作为只读参考。
-- `来源`：查看本轮扫描、排除的 Session，以及 Codex 原生会话摘要证据。
+- `个人记忆`：按 Markdown 文档展示 Obsidian 中的 Core、Now 与 Topics。
+- `项目规则`：直接展示 workspace 一级项目目录中现有的 `AGENTS.md`。
+- `审批记录`：待审批候选置顶，已处理记录接在后面；每条保留来源证据。
 
 App Server 的回答如果携带原生 `memoryCitation`，会在回答下显示“参考了 N 条记忆”，可展开查看来源与行号。
 
@@ -56,13 +55,13 @@ App Server 的回答如果携带原生 `memoryCitation`，会在回答下显示�
 ~/.codex/memories/
 ```
 
-可审核的个人记忆保存在：
+可阅读和编辑的个人记忆保存在：
 
 ```text
-~/.codex/personal-memories/store.json
+obsidian/MainVault/System/Memory/
 ```
 
-这里按 `global` / `project` 和 `pending` / `confirmed` 保存结构化条目、置信度和来源 Session。它是用户可控的数据层，不直接改写 Codex 自动生成的文件。
+后台自动提取只生成待审批候选，不会直接写入这些 Markdown。结构化证据、处理水位和审计状态保存在 `~/.codex/` 下的私有运行文件中。
 
 Memories 目前仍是实验功能。自动记忆适合召回背景与经验；必须执行的工程规则继续写在 `AGENTS.md`、Skill 或项目文档中。任务、截止时间和主动提醒继续由 Home 管理，不作为长期事实混进记忆。
 

@@ -22,6 +22,7 @@ import {
   usageFromCodexEvents,
 } from "../lib/personal-memory-worker.js";
 import { recordProjectAndSkillProposals } from "../../memory-system/lib/legacy-adapter.js";
+import { readKnowledgeChanges } from "../../memory-system/lib/change-ledger.js";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -96,6 +97,10 @@ async function run() {
   await reconcilePersonalMemoryMarkdown(CODEX_HOME);
 
   const threads = listEligibleThreads();
+  const reviewHistory = await readKnowledgeChanges({
+    codexHome: CODEX_HOME,
+    workspaceRoot: path.resolve(REPO_ROOT, ".."),
+  });
   const summary = { scanned: threads.length, eligible: 0, processed: 0, created: 0, confirmed: 0, pending: 0, failed: 0 };
   let pendingCreated = 0;
   let lastError = "";
@@ -133,6 +138,7 @@ async function run() {
         thread,
         conversation,
         existingEntries: store.entries,
+        reviewDecisions: reviewHistory.changes,
       });
       const extraction = await runExtraction(prompt);
       recordWorkerUsage(runtime, extraction.usage, new Date());

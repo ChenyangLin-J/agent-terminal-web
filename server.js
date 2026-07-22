@@ -20,6 +20,7 @@ import {
   personalMemoryContextForPrompt,
   personalMemoryContextForPromptSync,
 } from "./lib/personal-memory-context.js";
+import { readProjectRuleDocuments } from "./lib/project-rule-documents.js";
 import { readKnowledgeChanges } from "../memory-system/lib/change-ledger.js";
 import { resolveKnowledgeChange } from "../memory-system/lib/knowledge-actions.js";
 import {
@@ -342,13 +343,16 @@ app.get("/api/memories", async (req, res) => {
       projects: req.query.projects,
       source: req.query.source,
     };
-    const [native, personal, knowledge] = await Promise.all([
+    const [native, personal, knowledge, projectRules] = await Promise.all([
       readCodexMemoryView(CODEX_HOME, options),
       readPersonalMemoryView(CODEX_HOME, options),
       readKnowledgeChanges({ codexHome: CODEX_HOME, workspaceRoot: WORKSPACE_ROOT }),
+      options.view === "detail"
+        ? readProjectRuleDocuments(WORKSPACE_ROOT)
+        : Promise.resolve({ selectedProjects: [], documents: [] }),
     ]);
     personal.projectCatalog = mergeMemoryProjectCatalog(personal.projectCatalog, workspaceMemoryProjectNames());
-    res.json({ ...native, personal, knowledge: knowledgeChangeView(knowledge.changes, options.view) });
+    res.json({ ...native, personal, projectRules, knowledge: knowledgeChangeView(knowledge.changes, options.view) });
   } catch (error) {
     console.error(`Failed to read Codex memories: ${error.message}`);
     res.status(500).json({ error: "Codex memories are unavailable." });
@@ -3622,11 +3626,9 @@ function knowledgeChangeView(changes, view) {
   );
   const selected = view === "pending"
     ? all.filter((change) => change.status === "pending")
-    : view === "detail"
-      ? all.filter((change) => change.targetType === "project_rule")
-      : view === "changes"
-        ? all
-        : [];
+    : view === "changes"
+      ? [...all].sort((left, right) => Number(right.status === "pending") - Number(left.status === "pending"))
+      : [];
   return { counts, changes: selected.slice(0, 250) };
 }
 

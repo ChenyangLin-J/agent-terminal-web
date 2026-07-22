@@ -32,7 +32,7 @@ test("Codex memory status reflects config and generated files", async (t) => {
   assert.equal(status.documents.detail.available, false);
 });
 
-test("automatic memory proposals confirm safe facts and keep uncertain updates reviewable", async (t) => {
+test("all automatic personal-memory proposals remain pending until approval", async (t) => {
   const codexHome = await temporaryCodexHome(t);
   await fs.mkdir(path.join(codexHome, "personal-memories"), { recursive: true });
   await fs.writeFile(
@@ -83,7 +83,7 @@ test("automatic memory proposals confirm safe facts and keep uncertain updates r
     ],
     source,
   );
-  assert.deepEqual(created.map((item) => item.status), ["confirmed", "pending"]);
+  assert.deepEqual(created.map((item) => item.status), ["pending", "pending"]);
 
   const [pendingUpdate] = await applyPersonalMemoryProposals(
     codexHome,
@@ -105,11 +105,30 @@ test("automatic memory proposals confirm safe facts and keep uncertain updates r
   );
   assert.equal(pendingUpdate.action, "pending-update");
 
+  const [pendingRetire] = await applyPersonalMemoryProposals(
+    codexHome,
+    [{
+      action: "retire",
+      targetId: "global-answer-style",
+      scope: "global",
+      category: "交流偏好",
+      text: "不再保留这条回答偏好。",
+      confidence: 0.99,
+      explicit: true,
+      conflict: false,
+      sensitive: false,
+      evidenceQuote: "删除这条记忆",
+    }],
+    source,
+  );
+  assert.equal(pendingRetire.action, "pending-retire");
+
   await updatePersonalMemoryEntry(codexHome, pendingUpdate.id, { status: "confirmed" });
   const view = await readPersonalMemoryView(codexHome, { view: "overview" });
   assert.match(view.entries.find((entry) => entry.id === "global-answer-style").text, /分析利弊/);
   assert.equal(view.entries.find((entry) => entry.id === "global-answer-style").memoryLocation, "Core");
-  assert.equal(view.counts.pending, 1);
+  assert.deepEqual(view.documents.map((document) => document.fileName), ["Core.md", "Now.md"]);
+  assert.equal(view.counts.pending, 3);
 
   const audit = await fs.readFile(path.join(codexHome, "personal-memories", "history.jsonl"), "utf8");
   assert.match(audit, /approve-update/);
@@ -208,23 +227,24 @@ test("Agent Web exposes memory review views and authenticated APIs", async () =>
   assert.match(page, /id="app-session-memories"/);
   assert.match(page, /id="memory-project-routing"/);
   assert.doesNotMatch(page, /id="open-memories" class="hidden"/);
-  assert.match(page, /Memory System · 自动运行/);
+  assert.match(page, /Memory System · 审批后写入/);
   assert.match(page, /data-memory-trigger-status/);
   assert.match(page, /data-memory-view="overview"/);
   assert.match(page, /data-memory-view="detail"/);
-  assert.match(page, /data-memory-view="pending"/);
   assert.match(page, /data-memory-view="changes"/);
-  assert.match(page, /data-memory-view="sources"/);
+  assert.doesNotMatch(page, /data-memory-view="pending"|data-memory-view="sources"/);
   assert.match(page, /agent-memories\.js\?v=/);
   const memoryUi = await fs.readFile(new URL("../public/agent-memories.js", import.meta.url), "utf8");
-  assert.match(memoryUi, /查看已抽取内容/);
-  assert.match(memoryUi, /renderPersonalEntries/);
+  assert.match(memoryUi, /renderPersonalDocuments/);
+  assert.match(memoryUi, /renderProjectRuleDocuments/);
+  assert.doesNotMatch(memoryUi, /renderPersonalEntries|renderSources/);
   assert.match(memoryUi, /renderKnowledgeChanges/);
   assert.match(memoryUi, /refreshStatus/);
   assert.match(memoryUi, /待确认 \$\{pendingCount\}/);
   assert.match(memoryUi, /onProjectChange/);
   assert.match(memoryUi, /默认读取 Core 与 Now/);
-  assert.match(memoryUi, /entry\.memoryLocation \|\| "个人记忆"/);
+  assert.match(memoryUi, /待审批变更置顶/);
+  assert.match(memoryUi, /审批反馈/);
   assert.match(memoryUi, /正在处理这条变更/);
   assert.match(memoryUi, /没有改写目标/);
   assert.match(memoryUi, /workspace 一级子目录的 AGENTS\.md/);
@@ -236,9 +256,10 @@ test("Agent Web exposes memory review views and authenticated APIs", async () =>
   assert.match(styles, /\.memory-action-feedback\.memory-message-error/);
   assert.match(styles, /\.memory-inline-confirmation/);
   assert.match(styles, /\.memory-inline-textarea/);
+  assert.match(styles, /\.memory-markdown-file/);
   assert.match(page, /id="memory-context">Core、Now 与按需 Topics/);
   assert.match(app, /name: "\/memories"/);
-  assert.match(app, /查看个人记忆、项目规则、待审批与来源/);
+  assert.match(app, /查看个人记忆、项目规则与审批记录/);
   assert.match(app, /AgentMemories\?\.open/);
   assert.match(app, /type: "set-memory-projects"/);
   assert.match(styles, /\.memory-dialog/);

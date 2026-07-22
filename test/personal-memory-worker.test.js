@@ -28,6 +28,14 @@ test("worker reads only user and final-answer events after its watermark", () =>
     },
     conversation,
     existingEntries: [],
+    reviewDecisions: [{
+      targetType: "project_rule",
+      targetPath: "/workspace/home-portal/AGENTS.md",
+      status: "rejected",
+      after: { text: "Home Session 标题保持一致。" },
+      rationale: "系统曾把它当成项目规则。",
+      reviewReason: "这是产品验收标准。",
+    }],
   });
   assert.match(prompt, /untrusted data/);
   assert.match(prompt, /"memoryProjectMode":"manual"/);
@@ -39,7 +47,12 @@ test("worker reads only user and final-answer events after its watermark", () =>
   assert.match(prompt, /current-turn or follow-up requirements/);
   assert.match(prompt, /different future task in the same repository/);
   assert.match(prompt, /always require review/);
+  assert.match(prompt, /Personal memories, project rules, and Skills are proposals only/);
   assert.match(prompt, /existing first-level directory directly under the workspace root/);
+  assert.match(prompt, /local calibration examples/);
+  assert.match(prompt, /Home Session 标题保持一致/);
+  assert.match(prompt, /系统曾把它当成项目规则/);
+  assert.match(prompt, /这是产品验收标准/);
 });
 
 test("worker ignores synthetic probes and records usage without imposing a cap", () => {

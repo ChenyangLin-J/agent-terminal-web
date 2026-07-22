@@ -4,6 +4,9 @@ The personal memory system is the primary, editable memory source for Agent Web.
 
 ## Files
 
+- `obsidian/MainVault/System/Memory/Core.md`: stable core memory loaded by default.
+- `obsidian/MainVault/System/Memory/Now.md`: current cross-Session focus loaded by default.
+- `obsidian/MainVault/System/Memory/Topics/*.md`: optional topic documents loaded only when relevant.
 - `~/.codex/personal-memories/store.json`: current confirmed and pending memory.
 - `~/.codex/personal-memories/history.jsonl`: append-only create, update, approval, retirement, and deletion audit events.
 - `~/.codex/personal-memories/worker-state.json`: per-thread watermarks, retry state, daily usage, alerts, and latest run status.
@@ -25,10 +28,10 @@ The current user message always wins over stored memory. Answers show a citation
 
 The worker reads the Session's persisted semantic project set. Manual selections are authoritative; automatic selections are a strong hint that the fresh user transcript must still support. Separate durable facts may be written to separate projects when a Session uses multiple projects.
 
-- Explicit, high-confidence, non-sensitive, non-conflicting information is confirmed automatically.
-- Sensitive, uncertain, conflicting, or project-ambiguous information remains pending.
-- Explicit high-confidence refinements update an existing memory in place.
-- Uncertain updates and retirement proposals remain pending and leave the confirmed original untouched until approved.
+- Every automatically extracted create, update, or retirement proposal remains pending until the user approves it.
+- Confidence, sensitivity, and conflict still affect the explanation and warning level, but never bypass approval.
+- Direct Obsidian edits and changes explicitly requested by the user are user actions rather than automatic extraction; they may be applied immediately and remain audited.
+- Update and retirement proposals leave the confirmed original untouched until approved.
 - Deleted or retired content is tombstoned to prevent immediate recreation.
 - One-off tasks, reminders, deadlines, transient status, and assistant-only statements are not memory.
 

@@ -228,7 +228,7 @@
 
 .memory-tabs {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
   padding: 0 18px 12px;
   border-bottom: 1px solid #29313f;
@@ -277,6 +277,35 @@
   margin-top: 0;
 }
 
+.memory-document-list {
+  display: grid;
+  gap: 10px;
+}
+
+.memory-markdown-file {
+  overflow: hidden;
+  border: 1px solid #344054;
+  border-radius: 12px;
+  background: #101720;
+}
+
+.memory-markdown-file > summary {
+  padding: 11px 12px;
+  color: #d8e1ef;
+  background: #151d29;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.memory-markdown-file[open] > summary {
+  border-bottom: 1px solid #303b4d;
+}
+
+.memory-markdown-file > .memory-document {
+  padding: 13px 14px 16px;
+}
+
 .memory-message {
   margin: 18px 0;
   color: #9aa5b8;
@@ -322,15 +351,19 @@
   background: #263765;
 }
 
-.memory-section-title {
-  margin: 18px 0 9px;
-  color: #cbd5e1;
-  font-size: 13px;
-}
-
 .memory-entry-list {
   display: grid;
   gap: 10px;
+}
+
+.memory-change-group-title {
+  margin: 8px 0 0;
+  color: #c8d2e2;
+  font-size: 13px;
+}
+
+.memory-change-group-title:first-child {
+  margin-top: 0;
 }
 
 .memory-entry-card {
@@ -595,79 +628,6 @@
 
 .memory-inline-actions .memory-entry-action-danger {
   margin-left: 0;
-}
-
-.memory-import-note {
-  margin: -2px 0 9px;
-  color: #8f9cb0;
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.memory-import-source {
-  display: grid;
-  min-height: 48px;
-  padding: 9px 11px;
-  border: 1px solid #303b4d;
-  border-radius: 9px;
-  background: #111822;
-}
-
-.memory-import-source strong,
-.memory-import-source span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.memory-import-source strong {
-  color: #cdd6e4;
-  font-size: 12px;
-}
-
-.memory-import-source span {
-  margin-top: 3px;
-  color: #8290a5;
-  font-size: 11px;
-}
-
-.memory-source-list {
-  display: grid;
-  gap: 8px;
-}
-
-.memory-source-list button {
-  display: grid;
-  height: auto;
-  min-height: 58px;
-  padding: 10px 12px;
-  text-align: left;
-}
-
-.memory-source-list strong,
-.memory-source-list span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.memory-source-list span {
-  margin-top: 4px;
-  color: #8895aa;
-  font-size: 11px;
-}
-
-.memory-source-back {
-  min-height: 36px;
-  margin-bottom: 10px;
-  padding: 0 10px;
-}
-
-.memory-source-title {
-  margin: 0 0 14px;
-  color: #d8dfeb;
-  font-size: 14px;
-  overflow-wrap: anywhere;
 }
 
 .memory-citation {

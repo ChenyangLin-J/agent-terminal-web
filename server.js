@@ -65,7 +65,7 @@ const __dirname = path.dirname(__filename);
 const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT || path.join(__dirname, ".."));
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 3030);
-const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 60 * 60 * 1000);
+const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 30 * 60 * 1000);
 const AUTH_VERIFY_URL = process.env.PRIVATE_AUTH_VERIFY_URL || "http://127.0.0.1:3060/api/verify";
 const AUTH_LOGIN_URL = process.env.PRIVATE_AUTH_LOGIN_URL || "https://auth.chenyanglin.com/login";
 const AUTH_LOGOUT_URL = process.env.PRIVATE_AUTH_LOGOUT_URL || "https://auth.chenyanglin.com/logout";
@@ -936,6 +936,7 @@ function createTerminalSession(cwd, launch, restored = {}) {
     outputChunkBytes: 0,
     startedAt: restored.startedAt || startedAt,
     lastActivityAt: restored.lastActivityAt || restored.startedAt || startedAt,
+    detachedAt: validSessionTimestamp(restored.detachedAt),
     cols: 100,
     rows: 30,
     turnState: restoreTurnState(restored.turnState),
@@ -1040,6 +1041,7 @@ function createAppServerSession(cwd, launch, restored = {}) {
     outputChunkBytes: 0,
     startedAt: restored.startedAt || startedAt,
     lastActivityAt: restored.lastActivityAt || restored.startedAt || startedAt,
+    detachedAt: validSessionTimestamp(restored.detachedAt),
     cols: 100,
     rows: 30,
     turnState: restoreTurnState(restored.turnState),
@@ -1142,6 +1144,10 @@ function restoreTmuxSession(id) {
 
   const record = readPersistedWebSessions()[id];
   if (!record) return null;
+  if (persistedSessionExpired(record)) {
+    removePersistedWebSession(id);
+    return null;
+  }
 
   const cwd = persistedWorkspacePath(record.cwd);
   if (!cwd) {
@@ -1168,6 +1174,7 @@ function restoreTmuxSession(id) {
         id,
         startedAt: record.startedAt,
         lastActivityAt: record.lastActivityAt,
+        detachedAt: detachedAtForRecord(record),
         notificationApp: record.notificationApp,
         notificationDeviceId: record.notificationDeviceId,
         purpose: normalizeSessionPurpose(record.purpose),
@@ -1203,6 +1210,7 @@ function restoreTmuxSession(id) {
         id,
         startedAt: record.startedAt,
         lastActivityAt: record.lastActivityAt,
+        detachedAt: detachedAtForRecord(record),
         notificationApp: record.notificationApp,
         notificationDeviceId: record.notificationDeviceId,
         purpose: normalizeSessionPurpose(record.purpose),
@@ -1239,6 +1247,7 @@ function restoreTmuxSession(id) {
     attachExistingTmux: true,
     startedAt: record.startedAt,
     lastActivityAt: record.lastActivityAt,
+    detachedAt: detachedAtForRecord(record),
     notificationApp: record.notificationApp,
     notificationDeviceId: record.notificationDeviceId,
     purpose: normalizeSessionPurpose(record.purpose),
@@ -1253,9 +1262,15 @@ function restoreTmuxSession(id) {
 function listDetachedSessions() {
   const records = readPersistedWebSessions();
   const items = [];
+  let recordsChanged = false;
 
   for (const [id, record] of Object.entries(records)) {
     if (sessions.has(id) || !isValidWebSessionId(id)) continue;
+    if (persistedSessionExpired(record)) {
+      delete records[id];
+      recordsChanged = true;
+      continue;
+    }
     const transport = record.transport === APP_SERVER_TRANSPORT ? APP_SERVER_TRANSPORT : "terminal";
     const tmuxName = cleanTmuxName(record.tmuxName || tmuxNameForWebSession(id));
     if (transport === "terminal" && (!USE_TMUX_SESSIONS || !tmuxName || !tmuxHasSession(tmuxName))) continue;
@@ -1283,10 +1298,11 @@ function listDetachedSessions() {
       memoryProjectSource: normalizeMemoryProjectSource(record.memoryProjectSource),
       startedAt: record.startedAt || new Date().toISOString(),
       lastActivityAt: record.lastActivityAt || record.startedAt || new Date().toISOString(),
+      detachedAt: detachedAtForRecord(record),
       cols: 100,
       rows: 30,
       connectedClients: 0,
-      detachedExpiresAt: null,
+      detachedExpiresAt: detachedExpiresAt(record),
       exited: false,
       exitCode: null,
       signal: null,
@@ -1294,6 +1310,7 @@ function listDetachedSessions() {
     });
   }
 
+  if (recordsChanged) writePersistedWebSessions(records);
   return items;
 }
 
@@ -1361,9 +1378,11 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
         return;
       }
       rememberNotificationTarget(session, message.notificationApp, message.notificationDeviceId);
+      renewSessionRetention(session);
       logControlMessage(session, ws, "input", message.data);
       session.terminal.write(message.data);
       session.lastActivityAt = new Date().toISOString();
+      persistRestorableWebSession(session);
       send(ws, "control-ack", { kind: "input", receivedAt: Date.now() });
       return;
     }
@@ -1372,6 +1391,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
       const normalized = message.data.trim();
       if (normalized) {
         rememberNotificationTarget(session, message.notificationApp, message.notificationDeviceId);
+        renewSessionRetention(session);
         logControlMessage(session, ws, "submit", normalized);
         if (!session.title) session.title = cleanTitle(normalized) || "New Codex session";
         const prompt = prepareSessionPrompt(session, normalized);
@@ -1452,6 +1472,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
         return;
       }
       const continuation = interruptedContinuationPrompt(session.turnState);
+      renewSessionRetention(session);
       session.interruptedResumePending = true;
       void submitAppServerPrompt(session, continuation, "auto")
         .then((submission) => {
@@ -1486,6 +1507,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
       }
       session.turnInterruptPending = true;
       session.turnState.stopping = true;
+      renewSessionRetention(session);
       persistRestorableWebSession(session);
       broadcast(session, "status", publicSession(session));
       void session.appServer
@@ -1511,6 +1533,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
     }
 
     if (message.type === "set-access" && session.transport === APP_SERVER_TRANSPORT) {
+      renewSessionRetention(session);
       session.access = normalizeAccessMode(message.access);
       rememberAgentSessionAccess(session.sessionId, session.access);
       session.lastActivityAt = new Date().toISOString();
@@ -1525,6 +1548,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
     }
 
     if (message.type === "set-memory-projects" && session.transport === APP_SERVER_TRANSPORT) {
+      renewSessionRetention(session);
       void updateSessionMemoryRouting(session, {
         mode: message.mode,
         projects: message.projects,
@@ -1545,6 +1569,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
     }
 
     if (message.type === "command" && typeof message.data === "string") {
+      renewSessionRetention(session);
       if (session.transport === APP_SERVER_TRANSPORT) {
         void handleAppServerCommand(session, ws, message.data).catch((error) => {
           send(ws, "error", { message: `Command failed: ${error.message}` });
@@ -1572,6 +1597,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
 
     if (message.type === "agent-response" && session.transport === APP_SERVER_TRANSPORT) {
       try {
+        renewSessionRetention(session);
         handleAppServerResponse(session, message);
         send(ws, "control-ack", { kind: "agent-response", receivedAt: Date.now() });
       } catch (error) {
@@ -1669,10 +1695,16 @@ function logControlMessage(session, ws, kind, data) {
 
 function scheduleCleanup(session) {
   if (session.cleanupTimer) return;
+  if (!session.detachedAt) session.detachedAt = new Date().toISOString();
+  if (!session.exited) persistRestorableWebSession(session);
+  const expiresAt = detachedExpiresAt(session);
+  const delayMs = Math.max(0, Date.parse(expiresAt) - Date.now());
   logAgentEvent("cleanup-scheduled", {
     webSessionId: session.id,
     codexSessionId: session.sessionId,
     ttlMs: SESSION_TTL_MS,
+    detachedAt: session.detachedAt,
+    expiresAt,
   });
   session.cleanupTimer = setTimeout(() => {
     if (!session.exited) {
@@ -1689,7 +1721,38 @@ function scheduleCleanup(session) {
       webSessionId: session.id,
       codexSessionId: session.sessionId,
     });
-  }, SESSION_TTL_MS);
+  }, delayMs);
+}
+
+function renewSessionRetention(session) {
+  session.detachedAt = null;
+  if (session.cleanupTimer) {
+    clearTimeout(session.cleanupTimer);
+    session.cleanupTimer = null;
+  }
+}
+
+function validSessionTimestamp(value) {
+  const timestamp = String(value || "").trim();
+  return timestamp && Number.isFinite(Date.parse(timestamp)) ? new Date(timestamp).toISOString() : null;
+}
+
+function detachedAtForRecord(record) {
+  return (
+    validSessionTimestamp(record?.detachedAt) ||
+    validSessionTimestamp(record?.lastActivityAt) ||
+    validSessionTimestamp(record?.startedAt)
+  );
+}
+
+function detachedExpiresAt(record) {
+  const detachedAt = detachedAtForRecord(record);
+  return detachedAt ? new Date(Date.parse(detachedAt) + SESSION_TTL_MS).toISOString() : null;
+}
+
+function persistedSessionExpired(record, now = Date.now()) {
+  const expiresAt = detachedExpiresAt(record);
+  return expiresAt ? Date.parse(expiresAt) <= now : true;
 }
 
 async function handleUpload(req, res) {
@@ -3369,7 +3432,9 @@ function publicSession(session) {
     rows: session.rows,
     connectedClients: session.clients.size,
     detachedExpiresAt:
-      session.clients.size === 0 ? new Date(Date.now() + SESSION_TTL_MS).toISOString() : null,
+      session.clients.size === 0
+        ? detachedExpiresAt({ ...session, detachedAt: session.detachedAt || new Date().toISOString() })
+        : null,
     exited: session.exited,
     exitCode: session.exitCode,
     signal: session.signal,
@@ -3505,6 +3570,7 @@ function persistWebSession(session) {
     tmuxName: session.tmuxName,
     startedAt: session.startedAt,
     lastActivityAt: session.lastActivityAt,
+    detachedAt: validSessionTimestamp(session.detachedAt),
     turnState: publicTurnState(session.turnState),
   };
   writePersistedWebSessions(records);

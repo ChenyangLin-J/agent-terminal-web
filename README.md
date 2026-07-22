@@ -74,7 +74,7 @@ Memories 目前仍是实验功能。自动记忆适合召回背景与经验；�
 5. Tap `Send`; while a task is active, use `追加当前` for the same task or `下一轮` for a separate task.
 6. Switch to `Text` when mobile text selection is needed.
 
-Detached live sessions are kept for 1 hour. Terminal sessions use tmux when enabled; App Server sessions persist their thread id and can reconnect after a service restart.
+Detached live sessions are kept for 30 minutes. The deadline survives service restarts, and reconnecting only to restore the page does not extend it; meaningful user input starts a fresh retention window. Terminal sessions use tmux when enabled; App Server sessions persist their thread id and can reconnect after a service restart.
 
 ## Resume
 

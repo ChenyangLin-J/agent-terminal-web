@@ -439,7 +439,7 @@ function renderLiveSessions(sessions) {
   );
   sessionsList.innerHTML = "";
   if (!uniqueSessions.length) {
-    sessionsList.append(empty("No live sessions. Detached sessions stay available for about one hour."));
+    sessionsList.append(empty("No live sessions. Detached sessions stay available for about 30 minutes."));
     return;
   }
 

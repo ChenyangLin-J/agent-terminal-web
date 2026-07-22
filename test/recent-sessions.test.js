@@ -16,6 +16,8 @@ test("recent sessions expose resumable links to local Home callers", async (t) =
   const sessionId = "01900000-0000-7000-8000-000000000001";
   const generatedSessionId = "01900000-0000-7000-8000-000000000002";
   const liveSessionId = "01900000-0000-7000-8000-000000000003";
+  const recentDetachedAt = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const expiredDetachedAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
   const sessionFile = path.join(codexHome, "sessions", "2026", "07", "15", `rollout-${sessionId}.jsonl`);
   await fs.mkdir(path.dirname(sessionFile), { recursive: true });
   await fs.mkdir(projectRoot, { recursive: true });
@@ -70,7 +72,19 @@ test("recent sessions expose resumable links to local Home callers", async (t) =
         access: "full",
         sessionId: liveSessionId,
         title: "Agent 当前展示标题",
-        lastActivityAt: "2026-07-15T10:00:00.000Z",
+        lastActivityAt: recentDetachedAt,
+        detachedAt: recentDetachedAt,
+        turnState: { active: false },
+      },
+      "web-session-expired": {
+        id: "web-session-expired",
+        cwd: projectRoot,
+        transport: "app-server",
+        access: "full",
+        sessionId: generatedSessionId,
+        title: "过期的 Live Session",
+        lastActivityAt: expiredDetachedAt,
+        detachedAt: expiredDetachedAt,
         turnState: { active: false },
       },
     })}\n`,
@@ -124,9 +138,14 @@ test("recent sessions expose resumable links to local Home callers", async (t) =
   assert.equal(custom.lastResult, "个人网站已经调整完成。");
   assert.equal(custom.lastCompletedAt, "2026-07-15T09:00:00.000Z");
   assert.equal(generated.title, "讨论一下自动标题");
+  assert.equal(generated.live, false);
   assert.equal(live.title, "Agent 当前展示标题");
   assert.equal(live.live, true);
   assert.equal(live.webSessionId, "web-session-live-title");
+  assert.match(output, /Detached session TTL: 30 minutes/);
+
+  const persistedSessions = JSON.parse(await fs.readFile(path.join(codexHome, "agent-web-sessions.json"), "utf8"));
+  assert.equal(persistedSessions["web-session-expired"], undefined);
 
   const proxiedResponse = await fetch(`http://127.0.0.1:${port}/internal/recent-sessions`, {
     headers: { "x-forwarded-for": "127.0.0.1" },

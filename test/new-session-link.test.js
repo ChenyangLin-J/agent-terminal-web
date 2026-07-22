@@ -8,7 +8,7 @@ const pageSource = readFileSync(new URL("../public/index.html", import.meta.url)
 test("URL shortcut starts a new workspace session explicitly", () => {
   assert.match(appSource, /const startNew = params\.get\("new"\) === "1"/);
   assert.match(appSource, /if \(startNew\) \{\s+startSession\(\{\s+\.\.\.launch,\s+mode: "new"/);
-  assert.match(appSource, /mode: overrides\.mode \|\| \(overrides\.sessionId \? "new" : launchModeSelect\.value\)/);
-  assert.match(appSource, /!overrides\.sessionId \? accessModeSelect\.value \|\| "safe" : ""/);
-  assert.match(pageSource, /app\.js\?v=20260722-attachments-1/);
+  assert.match(appSource, /mode: overrides\.mode \|\| \(sessionId \? "new" : launchModeSelect\.value\)/);
+  assert.match(appSource, /!sessionId \? accessModeSelect\.value \|\| "safe" : ""/);
+  assert.match(pageSource, /app\.js\?v=20260722-think-options-1/);
 });

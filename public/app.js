@@ -216,12 +216,13 @@ const agentDateTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
 });
 let pushRegistrationPromise = null;
 
+syncStartSelectionsFromUrl(new URLSearchParams(window.location.search));
 window.addEventListener("resize", () => fitTerminal({ delay: 120 }));
 
 logoutButton.addEventListener("click", logout);
 restartAgentButton.addEventListener("click", restartAgentWeb);
 connectButton.addEventListener("click", () => startSession());
-startThinkButton.addEventListener("click", () => startSession({ cwd: ".", mode: "new", purpose: "think" }));
+startThinkButton.addEventListener("click", startThinkSession);
 openMemoriesButton.addEventListener("click", openMemoryManager);
 refreshSessionsButton.addEventListener("click", refreshLists);
 resumeAccessMode.addEventListener("change", renderResumeAccessWarning);
@@ -689,16 +690,38 @@ function empty(text) {
 }
 
 function startSession(overrides = {}) {
+  const hasSessionIdOverride = Object.prototype.hasOwnProperty.call(overrides, "sessionId");
+  const sessionId = hasSessionIdOverride ? String(overrides.sessionId || "").trim() : sessionIdInput.value.trim();
   const params = {
     cwd: overrides.cwd || projectSelect.value,
-    mode: overrides.mode || (overrides.sessionId ? "new" : launchModeSelect.value),
-    sessionId: overrides.sessionId || sessionIdInput.value.trim(),
+    mode: overrides.mode || (sessionId ? "new" : launchModeSelect.value),
+    sessionId,
     transport: overrides.transport || transportSelect.value || "terminal",
     purpose: overrides.purpose === "think" ? "think" : "",
   };
-  const access = overrides.access || (!overrides.sessionId ? accessModeSelect.value || "safe" : "");
+  const access = overrides.access || (!sessionId ? accessModeSelect.value || "safe" : "");
   if (access) params.access = access;
   openSocket(params);
+}
+
+function startThinkSession() {
+  startSession({
+    cwd: ".",
+    mode: "new",
+    sessionId: "",
+    transport: transportSelect.value || "terminal",
+    access: accessModeSelect.value || "safe",
+    purpose: "think",
+  });
+}
+
+function syncStartSelectionsFromUrl(params) {
+  if (params.has("transport")) {
+    transportSelect.value = params.get("transport") === "app-server" ? "app-server" : "terminal";
+  }
+  if (params.has("access")) {
+    accessModeSelect.value = params.get("access") === "full" ? "full" : "safe";
+  }
 }
 
 function attachSession(id, extra = {}) {
@@ -714,6 +737,7 @@ function openInitialSessionFromUrl() {
   const transport = params.get("transport") === "app-server" ? "app-server" : "terminal";
   const access = params.has("access") ? (params.get("access") === "full" ? "full" : "safe") : "";
   const purpose = params.get("purpose") === "think" ? "think" : "";
+  syncStartSelectionsFromUrl(params);
   const launch = {
     cwd: params.get("cwd") || ".",
     sessionId,

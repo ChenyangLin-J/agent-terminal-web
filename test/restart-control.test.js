@@ -15,6 +15,9 @@ test("Agent home exposes an authenticated external restart control", async () =>
   assert.match(app, /restartAgentButton\.addEventListener\("click", restartAgentWeb\)/);
   assert.match(app, /credentials: "include"/);
   assert.match(app, /waitForAgentRestart\(previousInstance\)/);
+  assert.match(app, /loadedAgentInstance = await readAgentInstance\(\)/);
+  assert.match(app, /void reloadAfterAgentUpgrade\(\)/);
+  assert.match(app, /currentInstance !== loadedAgentInstance/);
   assert.match(server, /app\.get\("\/healthz"/);
   assert.match(server, /res\.setHeader\("X-Agent-Instance", agentInstanceId\)/);
 });

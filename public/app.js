@@ -139,6 +139,8 @@ let sessionsTimer = null;
 let reconnectTimer = null;
 let clientHeartbeatTimer = null;
 let visibleProbeTimer = null;
+let loadedAgentInstance = "";
+let agentInstanceCheckPending = false;
 let reconnectAttempts = 0;
 let activeSessionId = "";
 let activeSessionParams = {};
@@ -296,6 +298,7 @@ async function bootstrap() {
   const response = await fetch("/api/auth");
   const data = await response.json();
   if (data.authenticated) {
+    loadedAgentInstance = await readAgentInstance();
     await loadProjects();
     if (globalThis.Notification?.permission === "granted") {
       void ensureAgentPushSubscription().catch(logPushRegistrationError);
@@ -346,6 +349,22 @@ async function readAgentInstance() {
     return response.ok ? response.headers.get("X-Agent-Instance") || "" : "";
   } catch {
     return "";
+  }
+}
+
+async function reloadAfterAgentUpgrade() {
+  if (agentInstanceCheckPending) return;
+  agentInstanceCheckPending = true;
+  try {
+    const currentInstance = await readAgentInstance();
+    if (!currentInstance) return;
+    if (!loadedAgentInstance) {
+      loadedAgentInstance = currentInstance;
+      return;
+    }
+    if (currentInstance !== loadedAgentInstance) window.location.reload();
+  } finally {
+    agentInstanceCheckPending = false;
   }
 }
 
@@ -834,6 +853,7 @@ function openSocket(params, options = {}) {
     if (socket !== nextSocket) return;
     markServerSeen();
     logClientEvent("ws-open");
+    void reloadAfterAgentUpgrade();
     reconnectAttempts = 0;
     setConnectedState(
       activeTransport === "app-server" && !activeSessionReady

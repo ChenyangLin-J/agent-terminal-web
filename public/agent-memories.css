@@ -541,6 +541,62 @@
   color: #eeb1ba;
 }
 
+.memory-inline-panel {
+  display: grid;
+  gap: 9px;
+  margin-top: 11px;
+  padding: 10px;
+  border: 1px solid #4a566a;
+  border-radius: 10px;
+  background: #0d141e;
+}
+
+.memory-inline-confirmation {
+  border-color: #665137;
+  background: #201a12;
+}
+
+.memory-inline-textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 112px;
+  resize: vertical;
+  padding: 9px 10px;
+  border: 1px solid #46536a;
+  border-radius: 8px;
+  color: #e8edf6;
+  background: #0a1018;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.memory-inline-textarea:focus {
+  border-color: #718cdd;
+  outline: 2px solid rgb(85 112 200 / 28%);
+}
+
+.memory-inline-message,
+.memory-inline-validation {
+  margin: 0;
+  color: #c4cede;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.memory-inline-validation {
+  color: #f0a6ae;
+}
+
+.memory-inline-actions {
+  display: flex;
+  gap: 7px;
+}
+
+.memory-inline-actions .memory-entry-action-danger {
+  margin-left: 0;
+}
+
 .memory-import-note {
   margin: -2px 0 9px;
   color: #8f9cb0;
@@ -668,5 +724,9 @@
 
   .memory-entry-action-danger {
     margin-left: 0;
+  }
+
+  .memory-inline-actions {
+    flex-wrap: wrap;
   }
 }

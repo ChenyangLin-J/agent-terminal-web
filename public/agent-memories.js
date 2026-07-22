@@ -325,14 +325,14 @@
       if (change.status === "pending") {
         if (change.targetType !== "skill") {
           actions.append(actionButton("批准并应用", "primary", () => mutateKnowledgeChange(change, "approve")));
-          actions.append(actionButton("修改后再审", "secondary", () => editKnowledgeChange(change)));
+          actions.append(actionButton("修改后再审", "secondary", () => editKnowledgeChange(change, card)));
         } else {
           actions.append(actionButton("批准候选", "primary", () => mutateKnowledgeChange(change, "approve")));
-          actions.append(actionButton("修改后再审", "secondary", () => editKnowledgeChange(change)));
+          actions.append(actionButton("修改后再审", "secondary", () => editKnowledgeChange(change, card)));
         }
-        actions.append(actionButton("拒绝", "danger", () => mutateKnowledgeChange(change, "reject")));
+        actions.append(actionButton("拒绝", "danger", () => confirmKnowledgeChange(change, "reject", card)));
       } else if (["auto_applied", "approved"].includes(change.status)) {
-        actions.append(actionButton("撤回", "danger", () => mutateKnowledgeChange(change, "revert")));
+        actions.append(actionButton("撤回", "danger", () => confirmKnowledgeChange(change, "revert", card)));
       }
       card.append(header, path);
       if (targetWarning) card.append(targetWarning);
@@ -362,23 +362,27 @@
     return JSON.stringify(value, null, 2);
   }
 
-  async function editKnowledgeChange(change) {
+  function editKnowledgeChange(change, card) {
     const current = changeValueText(change.after);
-    const next = global.prompt("修改后再审批：", current);
-    if (next === null || next.trim() === current.trim()) return;
-    if (!next.trim()) {
-      global.alert("修改后的内容不能为空。");
-      return;
-    }
-    await mutateKnowledgeChange(change, "edit", { after: next.trim() }, false);
+    showInlineEditor(card, {
+      value: current,
+      saveLabel: "保存修改",
+      emptyMessage: "修改后的内容不能为空。",
+      onSave: (next) => mutateKnowledgeChange(change, "edit", { after: next }),
+    });
   }
 
-  async function mutateKnowledgeChange(change, action, extra = {}, confirmAction = true) {
-    const prompts = {
-      reject: "拒绝后不会应用这条变更。继续吗？",
-      revert: "撤回会恢复变更前的内容；如果目标后来被修改，系统会停止并标记冲突。继续吗？",
-    };
-    if (confirmAction && prompts[action] && !global.confirm(prompts[action])) return;
+  function confirmKnowledgeChange(change, action, card) {
+    const options = action === "reject"
+      ? { message: "拒绝后不会应用这条变更。", confirmLabel: "确认拒绝" }
+      : { message: "撤回会恢复变更前的内容；如果目标后来被修改，系统会停止并标记冲突。", confirmLabel: "确认撤回" };
+    showInlineConfirmation(card, {
+      ...options,
+      onConfirm: () => mutateKnowledgeChange(change, action),
+    });
+  }
+
+  async function mutateKnowledgeChange(change, action, extra = {}) {
     setActionButtonsDisabled(true);
     showActionFeedback("正在处理这条变更…", "loading");
     try {
@@ -529,8 +533,8 @@
         actions.append(actionButton(confirmation, "primary", () => mutateEntry(entry.id, { status: "confirmed" })));
       }
       else actions.append(actionButton("退回待检查", "secondary", () => mutateEntry(entry.id, { status: "pending" })));
-      actions.append(actionButton("修改", "secondary", () => editEntry(entry)));
-      actions.append(actionButton(entry.proposalAction ? "忽略建议" : "删除", "danger", () => removeEntry(entry)));
+      actions.append(actionButton("修改", "secondary", () => editEntry(entry, card)));
+      actions.append(actionButton(entry.proposalAction ? "忽略建议" : "删除", "danger", () => removeEntry(entry, card)));
       card.append(header, content, evidence, actions);
       section.append(card);
     }
@@ -591,19 +595,77 @@
     return button;
   }
 
-  async function editEntry(entry) {
-    const text = global.prompt("修改这条记忆：", entry.text);
-    if (text === null || text.trim() === entry.text) return;
-    if (!text.trim()) {
-      global.alert("记忆内容不能为空；如果不需要，请使用删除。");
-      return;
-    }
-    await mutateEntry(entry.id, { text: text.trim() });
+  function showInlineEditor(card, options) {
+    clearInlinePanel(card);
+    const panel = documentElement("section", "memory-inline-panel memory-inline-editor");
+    const textarea = document.createElement("textarea");
+    textarea.className = "memory-inline-textarea";
+    textarea.value = options.value;
+    textarea.rows = 5;
+    const validation = documentElement("p", "memory-inline-validation");
+    validation.hidden = true;
+    const actions = documentElement("div", "memory-inline-actions");
+    const save = actionButton(options.saveLabel, "primary", async () => {
+      const next = textarea.value.trim();
+      if (!next) {
+        validation.textContent = options.emptyMessage;
+        validation.hidden = false;
+        textarea.focus();
+        return;
+      }
+      if (next === options.value.trim()) {
+        panel.remove();
+        return;
+      }
+      await options.onSave(next);
+    });
+    const cancel = actionButton("取消", "secondary", () => panel.remove());
+    actions.append(save, cancel);
+    panel.append(textarea, validation, actions);
+    insertInlinePanel(card, panel);
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
   }
 
-  async function removeEntry(entry) {
-    if (!global.confirm(`确定删除这条记忆吗？\n\n${entry.text}`)) return;
-    await mutateEntry(entry.id, null, "DELETE");
+  function showInlineConfirmation(card, options) {
+    clearInlinePanel(card);
+    const panel = documentElement("section", "memory-inline-panel memory-inline-confirmation");
+    const message = documentElement("p", "memory-inline-message");
+    message.textContent = options.message;
+    const actions = documentElement("div", "memory-inline-actions");
+    actions.append(
+      actionButton(options.confirmLabel, "danger", options.onConfirm),
+      actionButton("取消", "secondary", () => panel.remove()),
+    );
+    panel.append(message, actions);
+    insertInlinePanel(card, panel);
+  }
+
+  function insertInlinePanel(card, panel) {
+    const actions = card.querySelector(":scope > .memory-entry-actions");
+    if (actions) actions.before(panel);
+    else card.append(panel);
+  }
+
+  function clearInlinePanel(card) {
+    card.querySelector(":scope > .memory-inline-panel")?.remove();
+  }
+
+  function editEntry(entry, card) {
+    showInlineEditor(card, {
+      value: entry.text,
+      saveLabel: "保存修改",
+      emptyMessage: "记忆内容不能为空；如果不需要，请使用删除。",
+      onSave: (text) => mutateEntry(entry.id, { text }),
+    });
+  }
+
+  function removeEntry(entry, card) {
+    showInlineConfirmation(card, {
+      message: entry.proposalAction ? "忽略后不会应用这条建议。" : `确定删除这条记忆吗？${entry.text}`,
+      confirmLabel: entry.proposalAction ? "确认忽略" : "确认删除",
+      onConfirm: () => mutateEntry(entry.id, null, "DELETE"),
+    });
   }
 
   async function mutateEntry(id, changes, method = "PATCH") {
@@ -615,9 +677,11 @@
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "修改失败");
+      actionFeedback = { tone: "success", text: method === "DELETE" ? "已删除。" : "修改已保存。" };
       await loadView();
     } catch (error) {
-      global.alert(error.message || "记忆修改失败。");
+      actionFeedback = { tone: "error", text: `没有改写目标：${error.message || "记忆修改失败。"}` };
+      await loadView();
     }
   }
 

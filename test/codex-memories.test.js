@@ -108,6 +108,7 @@ test("automatic memory proposals confirm safe facts and keep uncertain updates r
   await updatePersonalMemoryEntry(codexHome, pendingUpdate.id, { status: "confirmed" });
   const view = await readPersonalMemoryView(codexHome, { view: "overview" });
   assert.match(view.entries.find((entry) => entry.id === "global-answer-style").text, /分析利弊/);
+  assert.equal(view.entries.find((entry) => entry.id === "global-answer-style").memoryLocation, "Core");
   assert.equal(view.counts.pending, 1);
 
   const audit = await fs.readFile(path.join(codexHome, "personal-memories", "history.jsonl"), "utf8");
@@ -222,7 +223,11 @@ test("Agent Web exposes memory review views and authenticated APIs", async () =>
   assert.match(memoryUi, /refreshStatus/);
   assert.match(memoryUi, /待确认 \$\{pendingCount\}/);
   assert.match(memoryUi, /onProjectChange/);
+  assert.match(memoryUi, /默认读取 Core 与 Now/);
+  assert.match(memoryUi, /entry\.memoryLocation \|\| "个人记忆"/);
+  assert.match(page, /id="memory-context">Core、Now 与按需 Topics/);
   assert.match(app, /name: "\/memories"/);
+  assert.match(app, /查看个人记忆、项目规则、待审批与来源/);
   assert.match(app, /AgentMemories\?\.open/);
   assert.match(app, /type: "set-memory-projects"/);
   assert.match(styles, /\.memory-dialog/);

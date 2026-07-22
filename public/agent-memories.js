@@ -170,7 +170,7 @@
       retained: "自动：沿用本 Session 上一轮",
       cwd: "自动：由具体项目目录识别",
       title: "自动：由 Session 标题识别",
-      global: "自动：暂未识别项目，只读取全局记忆",
+      global: "自动：暂未识别项目，默认读取 Core 与 Now",
     };
     projectRoutingNote.textContent = `${sourceLabels[routingMode === "manual" ? "manual" : routingSource] || sourceLabels.global}；workspace 只负责文件范围`;
     projectAutoButton.disabled = routingMode === "auto";
@@ -451,7 +451,7 @@
       const category = documentElement("strong", "memory-entry-category");
       category.textContent = entry.category || "其他";
       const scope = documentElement("span", "memory-entry-scope");
-      scope.textContent = entry.scope === "project" ? `项目 · ${entry.project}` : "全局";
+      scope.textContent = entry.scope === "project" ? `项目 · ${entry.project}` : entry.memoryLocation || "个人记忆";
       header.append(category, scope);
       if (entry.proposalAction) {
         const proposal = documentElement("span", "memory-entry-proposal");

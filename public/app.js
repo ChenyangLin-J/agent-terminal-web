@@ -451,6 +451,7 @@ function renderLiveSessions(sessions) {
     sessionsList.append(
       sessionCard({
         title: session.title || "New Codex session",
+        status: appServerLiveStatus(session),
         subtitle: `${displayProject(session.project)} · ${formatLaunch(session)} · ${formatTime(
           session.lastActivityAt,
         )}`,
@@ -490,6 +491,14 @@ function compareLiveSession(a, b) {
   const clients = (a.connectedClients || 0) - (b.connectedClients || 0);
   if (clients !== 0) return clients;
   return new Date(a.lastActivityAt).getTime() - new Date(b.lastActivityAt).getTime();
+}
+
+function appServerLiveStatus(session) {
+  if (session?.transport !== "app-server") return null;
+  if (session.turnState?.interrupted) return { state: "interrupted", label: "已中断" };
+  if (session.ready === false) return { state: "restoring", label: "恢复中" };
+  if (session.turnState?.active) return { state: "running", label: "运行中" };
+  return { state: "waiting", label: "等你回复" };
 }
 
 function renderSavedCodexSessions(sessions) {
@@ -592,6 +601,7 @@ function resumePendingSession(transport) {
 
 function sessionCard({
   title,
+  status,
   subtitle,
   action,
   onClick,
@@ -603,7 +613,22 @@ function sessionCard({
   const card = document.createElement("div");
   card.className = "session-card";
   const meta = document.createElement("div");
-  meta.innerHTML = `<strong>${escapeHtml(title)}</strong><span>${escapeHtml(subtitle)}</span>`;
+  const titleRow = document.createElement("div");
+  titleRow.className = "session-card-title";
+  const titleLabel = document.createElement("strong");
+  titleLabel.textContent = title;
+  titleRow.append(titleLabel);
+  if (status?.label) {
+    const statusLabel = document.createElement("span");
+    statusLabel.className = "session-live-status";
+    statusLabel.dataset.state = status.state || "waiting";
+    statusLabel.setAttribute("aria-label", `状态：${status.label}`);
+    statusLabel.textContent = status.label;
+    titleRow.append(statusLabel);
+  }
+  const subtitleLabel = document.createElement("span");
+  subtitleLabel.textContent = subtitle;
+  meta.append(titleRow, subtitleLabel);
   const actions = document.createElement("div");
   actions.className = "session-card-actions";
   if (secondaryAction) {

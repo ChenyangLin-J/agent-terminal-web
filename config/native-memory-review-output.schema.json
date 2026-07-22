@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "assessment": { "type": "string", "enum": ["no_change", "actionable", "conflict", "noise", "mixed"] },
+        "summary": { "type": "string" },
+        "rationale": { "type": "string" }
+      },
+      "required": ["assessment", "summary", "rationale"]
+    },
+    "proposals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "action": { "type": "string", "enum": ["create", "update", "retire"] },
+          "targetId": { "type": "string" },
+          "scope": { "type": "string", "enum": ["global"] },
+          "project": { "type": "string" },
+          "aliases": { "type": "array", "items": { "type": "string" } },
+          "category": { "type": "string" },
+          "text": { "type": "string" },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "explicit": { "type": "boolean" },
+          "conflict": { "type": "boolean" },
+          "sensitive": { "type": "boolean" },
+          "evidenceThreadId": { "type": "string" },
+          "evidenceTitle": { "type": "string" },
+          "evidenceQuote": { "type": "string" },
+          "rationale": { "type": "string" }
+        },
+        "required": ["action", "targetId", "scope", "project", "aliases", "category", "text", "confidence", "explicit", "conflict", "sensitive", "evidenceThreadId", "evidenceTitle", "evidenceQuote", "rationale"]
+      }
+    },
+    "projectRules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "action": { "type": "string", "enum": ["create", "update", "delete"] },
+          "project": { "type": "string" },
+          "category": { "type": "string" },
+          "text": { "type": "string" },
+          "before": { "type": "string" },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "explicit": { "type": "boolean" },
+          "conflict": { "type": "boolean" },
+          "evidenceThreadId": { "type": "string" },
+          "evidenceTitle": { "type": "string" },
+          "evidenceQuote": { "type": "string" },
+          "rationale": { "type": "string" }
+        },
+        "required": ["id", "action", "project", "category", "text", "before", "confidence", "explicit", "conflict", "evidenceThreadId", "evidenceTitle", "evidenceQuote", "rationale"]
+      }
+    },
+    "skills": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "summary": { "type": "string" },
+          "trigger": { "type": "string" },
+          "workflow": { "type": "array", "items": { "type": "string" } },
+          "verification": { "type": "string" },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "evidenceThreadId": { "type": "string" },
+          "evidenceTitle": { "type": "string" },
+          "evidenceQuote": { "type": "string" },
+          "rationale": { "type": "string" }
+        },
+        "required": ["id", "name", "summary", "trigger", "workflow", "verification", "confidence", "evidenceThreadId", "evidenceTitle", "evidenceQuote", "rationale"]
+      }
+    }
+  },
+  "required": ["review", "proposals", "projectRules", "skills"]
+}

@@ -1,0 +1,13 @@
+[Unit]
+Description=Watch Codex native memory generation for incremental review
+
+[Path]
+PathChanged=%h/.codex/memories
+PathChanged=%h/.codex/memories/raw_memories.md
+PathChanged=%h/.codex/memories/MEMORY.md
+PathChanged=%h/.codex/memories/memory_summary.md
+PathChanged=%h/.codex/memories/rollout_summaries
+Unit=personal-memory-worker.service
+
+[Install]
+WantedBy=default.target

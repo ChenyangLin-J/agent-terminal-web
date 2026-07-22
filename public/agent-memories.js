@@ -313,7 +313,10 @@
       }
       const diff = documentElement("div", "memory-change-diff");
       if (change.before !== null) diff.append(diffValue("删除 / 原内容", change.before, "before"));
-      if (change.after !== null) diff.append(diffValue(change.before === null ? "新增" : "改为", change.after, "after"));
+      if (change.after !== null) {
+        const afterLabel = change.targetType === "native_review" ? "检查结论" : change.before === null ? "新增" : "改为";
+        diff.append(diffValue(afterLabel, change.after, "after"));
+      }
 
       const rationale = documentElement("div", "memory-change-rationale");
       const rationaleTitle = documentElement("strong", "memory-change-subtitle");
@@ -351,7 +354,7 @@
           actions.append(actionButton("修改后再审", "secondary", () => editKnowledgeChange(change, card)));
         }
         actions.append(actionButton("拒绝", "danger", () => confirmKnowledgeChange(change, "reject", card)));
-      } else if (["auto_applied", "approved"].includes(change.status)) {
+      } else if (change.targetType !== "native_review" && ["auto_applied", "approved"].includes(change.status)) {
         actions.append(actionButton("撤回", "danger", () => confirmKnowledgeChange(change, "revert", card)));
       }
       card.append(header, path);
@@ -457,15 +460,16 @@
   }
 
   function targetTypeLabel(value) {
-    return { personal_memory: "个人记忆", project_rule: "项目规则", skill: "Skill 候选" }[value] || "知识变更";
+    return { personal_memory: "个人记忆", project_rule: "项目规则", skill: "Skill 候选", native_review: "Codex 原生记忆" }[value] || "知识变更";
   }
 
   function actionLabel(value) {
-    return { create: "新增", update: "修改", delete: "删除" }[value] || value;
+    return { create: "新增", update: "修改", delete: "删除", review: "检查" }[value] || value;
   }
 
   function statusLabel(value, targetType = "") {
     if (targetType === "skill" && value === "approved") return "已批准，待创建";
+    if (targetType === "native_review" && value === "approved") return "已检查";
     return {
       pending: "未应用",
       auto_applied: "已自动应用",
@@ -487,16 +491,18 @@
     const usage = runtime.usage?.days?.[today] || {};
     const totalTokens = Number(usage.inputTokens || 0) + Number(usage.outputTokens || 0);
     const state = documentElement("strong", "memory-automation-title");
-    state.textContent = runtime.status === "running" ? "后台正在整理" : runtime.status === "error" ? "后台整理遇到问题，会自动重试" : "Turn 完成 1 分钟后整理 · 每 10 分钟兜底";
+    state.textContent = runtime.status === "running" ? "后台正在整理" : runtime.status === "error" ? "后台整理遇到问题，会自动重试" : "Turn 完成 1 分钟后整理 · 原生记忆变化即时对照 · 每 10 分钟兜底";
     const detail = documentElement("span", "memory-automation-detail");
     const lastRun = runtime.lastRun || {};
     const scanned = Number(lastRun.scanned || 0);
     const eligible = Number(lastRun.eligible || 0);
     const processed = Number(lastRun.processed || 0);
+    const nativeReviewed = Number(lastRun.nativeReviewed || 0);
     const runSummary = eligible === 0
       ? `本轮扫描 ${scanned} 个 Session，没有可整理的已完成内容`
       : `本轮扫描 ${scanned} 个 Session，可整理 ${eligible} 个，已整理 ${processed} 个`;
-    detail.textContent = `最近检查 ${runtime.lastRunAt ? formatDate(runtime.lastRunAt) : "尚未运行"} · 今天模型整理 ${Number(usage.runs || 0)} 次 / ${formatTokenCount(totalTokens)} · ${runSummary}`;
+    const nativeSummary = nativeReviewed ? ` · 原生记忆已对照 ${nativeReviewed} 次` : "";
+    detail.textContent = `最近检查 ${runtime.lastRunAt ? formatDate(runtime.lastRunAt) : "尚未运行"} · 今天模型整理 ${Number(usage.runs || 0)} 次 / ${formatTokenCount(totalTokens)} · ${runSummary}${nativeSummary}`;
     section.append(state, detail);
     if (runtime.lastError) {
       const error = documentElement("span", "memory-automation-error");

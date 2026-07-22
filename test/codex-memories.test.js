@@ -104,6 +104,23 @@ test("all automatic personal-memory proposals remain pending until approval", as
     source,
   );
   assert.equal(pendingUpdate.action, "pending-update");
+  const [duplicateUpdate] = await applyPersonalMemoryProposals(
+    codexHome,
+    [{
+      action: "update",
+      targetId: "global-answer-style",
+      scope: "global",
+      category: "交流偏好",
+      text: "喜欢具体、有依据并分析利弊的回答。",
+      confidence: 0.8,
+      explicit: true,
+      conflict: true,
+      sensitive: false,
+      evidenceQuote: "希望分析利弊",
+    }],
+    source,
+  );
+  assert.equal(duplicateUpdate.action, "duplicate");
 
   const [pendingRetire] = await applyPersonalMemoryProposals(
     codexHome,
@@ -247,6 +264,10 @@ test("Agent Web exposes memory review views and authenticated APIs", async () =>
   assert.match(memoryUi, /审批反馈/);
   assert.match(memoryUi, /今天模型整理/);
   assert.match(memoryUi, /Turn 完成 1 分钟后整理/);
+  assert.match(memoryUi, /原生记忆变化即时对照/);
+  assert.match(memoryUi, /Codex 原生记忆/);
+  assert.match(memoryUi, /检查结论/);
+  assert.match(memoryUi, /已检查/);
   assert.match(memoryUi, /没有可整理的已完成内容/);
   assert.match(memoryUi, /正在处理这条变更/);
   assert.match(memoryUi, /没有改写目标/);

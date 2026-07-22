@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -22,14 +23,28 @@ import {
   usageAlertNeeded,
   usageFromCodexEvents,
 } from "../lib/personal-memory-worker.js";
+import {
+  buildNativeMemoryReviewPrompt,
+  captureNativeMemorySnapshot,
+  nativeMemoryDelta,
+  nativeMemorySnapshotState,
+  readNativeMemoryReviewState,
+  verifiedNativeCandidate,
+  writeNativeMemoryReviewState,
+} from "../lib/native-memory-review.js";
 import { recordProjectAndSkillProposals } from "../../memory-system/lib/legacy-adapter.js";
-import { readKnowledgeChanges } from "../../memory-system/lib/change-ledger.js";
+import { readAllMemoryFiles } from "../../memory-system/lib/markdown-memory.js";
+import { knowledgeChange, readKnowledgeChanges, recordKnowledgeChange } from "../../memory-system/lib/change-ledger.js";
+import { memorySystemPaths } from "../../memory-system/lib/paths.js";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
+const WORKSPACE_ROOT = path.resolve(REPO_ROOT, "..");
 const CODEX_HOME = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
 const AGENT_SESSION_SETTINGS_FILE = path.join(CODEX_HOME, "agent-session-settings.json");
 const SCHEMA_FILE = path.join(REPO_ROOT, "config", "personal-memory-output.schema.json");
+const NATIVE_REVIEW_SCHEMA_FILE = path.join(REPO_ROOT, "config", "native-memory-review-output.schema.json");
+const NATIVE_REVIEW_STATE_FILE = path.join(memorySystemPaths({ codexHome: CODEX_HOME, workspaceRoot: WORKSPACE_ROOT }).runtimeRoot, "native-review-state.json");
 const HOME_PUSH_URL = process.env.HOME_PUSH_URL || "http://127.0.0.1:3050/internal/push";
 const SETTLE_MS = Math.max(
   60_000,
@@ -82,7 +97,7 @@ async function initialize() {
   runtime.lastSuccessAt = runtime.lastRunAt;
   runtime.lastError = "";
   runtime.consecutiveFailures = 0;
-  runtime.lastRun = { scanned: threads.length, eligible: 0, processed: 0, created: 0, confirmed: 0, pending: 0, failed: 0 };
+  runtime.lastRun = { scanned: threads.length, eligible: 0, processed: 0, created: 0, confirmed: 0, pending: 0, failed: 0, nativeReviewed: 0, nativeCandidates: 0 };
   await writePersonalMemoryRuntime(CODEX_HOME, runtime);
   console.log(JSON.stringify({ initialized: threads.length, runtime: personalMemoryFiles(CODEX_HOME).runtime }));
 }
@@ -103,11 +118,23 @@ async function run() {
   const threads = listEligibleThreads();
   const reviewHistory = await readKnowledgeChanges({
     codexHome: CODEX_HOME,
-    workspaceRoot: path.resolve(REPO_ROOT, ".."),
+    workspaceRoot: WORKSPACE_ROOT,
   });
-  const summary = { scanned: threads.length, eligible: 0, processed: 0, created: 0, confirmed: 0, pending: 0, failed: 0 };
+  const summary = { scanned: threads.length, eligible: 0, processed: 0, created: 0, confirmed: 0, pending: 0, failed: 0, nativeReviewed: 0, nativeCandidates: 0 };
   let pendingCreated = 0;
   let lastError = "";
+
+  try {
+    const nativeReview = await reviewNativeMemory(reviewHistory.changes, runtime);
+    if (nativeReview.reviewed) summary.nativeReviewed += 1;
+    summary.nativeCandidates += nativeReview.pending;
+    summary.pending += nativeReview.pending;
+    pendingCreated += nativeReview.pending;
+  } catch (error) {
+    summary.failed += 1;
+    lastError = `Codex 原生记忆对照：${error.message}`.slice(0, 2_000);
+    console.error(lastError);
+  }
 
   for (const thread of threads) {
     if (Date.now() - thread.updatedAtMs < SETTLE_MS) continue;
@@ -158,7 +185,7 @@ async function run() {
         threadId: thread.id,
         title: thread.title,
         source: thread.source,
-      }, { codexHome: CODEX_HOME, workspaceRoot: path.resolve(REPO_ROOT, "..") });
+      }, { codexHome: CODEX_HOME, workspaceRoot: WORKSPACE_ROOT });
       summary.processed += 1;
       for (const result of results) {
         if (result.action === "created") summary.created += 1;
@@ -216,6 +243,173 @@ async function run() {
   }
   await writePersonalMemoryRuntime(CODEX_HOME, runtime);
   console.log(JSON.stringify(summary));
+}
+
+async function reviewNativeMemory(reviewDecisions, runtime) {
+  const previousState = await readNativeMemoryReviewState(NATIVE_REVIEW_STATE_FILE);
+  let snapshot = await captureNativeMemorySnapshot(CODEX_HOME);
+  if (!Object.keys(snapshot.files).length || snapshot.fingerprint === previousState.fingerprint) {
+    return { reviewed: false, pending: 0 };
+  }
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await delay(2_000);
+    const next = await captureNativeMemorySnapshot(CODEX_HOME);
+    if (next.fingerprint === snapshot.fingerprint) {
+      snapshot = next;
+      break;
+    }
+    snapshot = next;
+    if (attempt === 2) throw new Error("原生记忆文件仍在写入，稍后自动重试。");
+  }
+
+  const delta = nativeMemoryDelta(previousState, snapshot);
+  if (!delta.changed) return { reviewed: false, pending: 0 };
+  const [personalMarkdown, projectDocuments] = await Promise.all([
+    readAllMemoryFiles({ codexHome: CODEX_HOME, workspaceRoot: WORKSPACE_ROOT }),
+    directProjectRuleDocuments(),
+  ]);
+  const prompt = buildNativeMemoryReviewPrompt({
+    delta,
+    personalDocuments: personalMarkdown.files.map((file) => ({
+      path: path.relative(personalMarkdown.paths.memoryRoot, file.file).split(path.sep).join("/"),
+      content: file.content,
+    })),
+    projectDocuments,
+    reviewDecisions,
+  });
+  const extraction = await runExtraction(prompt, {
+    schemaFile: NATIVE_REVIEW_SCHEMA_FILE,
+    tempPrefix: "native-memory-review-",
+  });
+  recordWorkerUsage(runtime, extraction.usage, new Date());
+
+  const output = extraction.output || {};
+  const candidates = [
+    ...(Array.isArray(output.proposals) ? output.proposals.map((candidate) => ({ type: "personal", candidate })) : []),
+    ...(Array.isArray(output.projectRules) ? output.projectRules.map((candidate) => ({ type: "project", candidate })) : []),
+    ...(Array.isArray(output.skills) ? output.skills.map((candidate) => ({ type: "skill", candidate })) : []),
+  ];
+  const changedThreadIds = new Set(delta.changedSections.map((section) => section.threadId).filter(Boolean));
+  const verified = [];
+  const evidenceCache = new Map();
+  for (const item of candidates) {
+    const threadId = String(item.candidate?.evidenceThreadId || "").trim();
+    if (!threadId || !changedThreadIds.has(threadId)) continue;
+    let source = evidenceCache.get(threadId);
+    if (source === undefined) {
+      source = await originalThreadEvidence(threadId);
+      evidenceCache.set(threadId, source || null);
+    }
+    if (!source || !verifiedNativeCandidate(item.candidate, source.userMessages)) continue;
+    verified.push({ ...item, source });
+  }
+
+  let pending = 0;
+  for (const item of verified) {
+    const source = {
+      threadId: item.source.threadId,
+      title: item.source.title,
+      source: "codex-native-review",
+    };
+    if (item.type === "personal") {
+      const results = await applyPersonalMemoryProposals(CODEX_HOME, [{
+        ...item.candidate,
+        scope: "global",
+        project: "",
+        aliases: Array.isArray(item.candidate.aliases) ? item.candidate.aliases : [],
+        explicit: true,
+      }], source);
+      pending += results.filter((result) => result.status === "pending").length;
+      continue;
+    }
+    const proposalOutput = item.type === "project"
+      ? { projectRules: [{ ...item.candidate, id: "" }], skills: [] }
+      : { projectRules: [], skills: [{ ...item.candidate, id: "" }] };
+    const changes = await recordProjectAndSkillProposals(proposalOutput, source, {
+      codexHome: CODEX_HOME,
+      workspaceRoot: WORKSPACE_ROOT,
+    });
+    pending += changes.filter((change) => change.status === "pending").length;
+  }
+
+  const review = output.review || {};
+  const verificationNote = candidates.length === verified.length
+    ? "所有候选证据均已在原始用户消息中核对。"
+    : `模型提出 ${candidates.length} 条候选，其中 ${verified.length} 条通过原始用户消息核对。`;
+  await recordKnowledgeChange(knowledgeChange({
+    targetType: "native_review",
+    targetPath: path.join(CODEX_HOME, "memories"),
+    entryId: `native-review-${delta.fingerprint.slice(0, 24)}`,
+    action: "review",
+    status: "approved",
+    after: {
+      text: String(review.summary || "已完成 Codex 原生记忆增量对照。"),
+      assessment: String(review.assessment || "noise"),
+      changedFiles: delta.changedFiles,
+      verifiedCandidates: verified.length,
+      pendingCreated: pending,
+      omittedSections: delta.omittedSections,
+      fingerprint: delta.fingerprint,
+    },
+    rationale: `${String(review.rationale || "已与正式 Markdown、项目规则和审批历史完成对照。")} ${verificationNote}`,
+    evidence: [{
+      threadId: `native:${delta.fingerprint.slice(0, 32)}`,
+      title: "Codex 原生记忆",
+      quote: `变化文件：${delta.changedFiles.join("、") || "无"}`,
+    }],
+    confidence: candidates.length === verified.length ? 1 : 0.8,
+    source: "codex-native-review",
+  }), { codexHome: CODEX_HOME, workspaceRoot: WORKSPACE_ROOT });
+
+  await writeNativeMemoryReviewState(NATIVE_REVIEW_STATE_FILE, nativeMemorySnapshotState(snapshot));
+  return { reviewed: true, pending };
+}
+
+async function directProjectRuleDocuments() {
+  const documents = [];
+  for (const entry of await fs.readdir(WORKSPACE_ROOT, { withFileTypes: true }).catch(() => [])) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    const file = path.join(WORKSPACE_ROOT, entry.name, "AGENTS.md");
+    const content = await fs.readFile(file, "utf8").catch(() => "");
+    if (content) documents.push({ path: `${entry.name}/AGENTS.md`, content });
+  }
+  return documents.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+async function originalThreadEvidence(threadId) {
+  const db = new DatabaseSync(latestStateDatabase(), { readOnly: true });
+  let thread;
+  try {
+    thread = db
+      .prepare("SELECT id, title, source, rollout_path AS rolloutPath FROM threads WHERE id = ? LIMIT 1")
+      .get(threadId);
+  } finally {
+    db.close();
+  }
+  if (!thread?.rolloutPath) return null;
+  const raw = await fs.readFile(thread.rolloutPath, "utf8").catch(() => "");
+  const userMessages = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const event = JSON.parse(line);
+      if (event?.type === "event_msg" && event.payload?.type === "user_message") {
+        const message = String(event.payload.message || "").trim();
+        if (message && !message.startsWith("# AGENTS.md instructions") && !message.startsWith("<environment_context>")) {
+          userMessages.push(message);
+        }
+      }
+    } catch {
+      // Ignore malformed or non-JSON rollout lines.
+    }
+  }
+  return {
+    threadId: String(thread.id),
+    title: String(thread.title || "未命名 Session"),
+    source: String(thread.source || "unknown"),
+    userMessages,
+  };
 }
 
 function listEligibleThreads() {
@@ -292,8 +486,10 @@ function requireStat(file) {
   }
 }
 
-async function runExtraction(prompt) {
-  const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "personal-memory-"));
+async function runExtraction(prompt, options = {}) {
+  const schemaFile = options.schemaFile || SCHEMA_FILE;
+  const tempPrefix = options.tempPrefix || "personal-memory-";
+  const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), tempPrefix));
   const outputFile = path.join(tempDirectory, "output.json");
   const commandArgs = [
     "exec",
@@ -306,7 +502,7 @@ async function runExtraction(prompt) {
     "-C",
     os.tmpdir(),
     "--output-schema",
-    SCHEMA_FILE,
+    schemaFile,
     "--json",
     "-o",
     outputFile,

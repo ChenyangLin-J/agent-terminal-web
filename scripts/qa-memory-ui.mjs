@@ -32,6 +32,12 @@ try {
     await page.screenshot({ path: `/tmp/memory-system-${viewport.name}-projects.png`, fullPage: true });
     await page.click('[data-memory-view="changes"]');
     await page.waitForSelector(".memory-change-card");
+    const nativeAudit = page.locator(".memory-change-card").filter({ hasText: "Codex 原生记忆" });
+    assert.equal(await nativeAudit.count(), 1, `${viewport.name}: expected one native memory audit`);
+    assert.match(await nativeAudit.textContent(), /已检查/);
+    assert.equal(await nativeAudit.locator("button").count(), 0, `${viewport.name}: native audits must be read-only`);
+    await nativeAudit.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `/tmp/memory-system-${viewport.name}-native-review.png`, fullPage: true });
     const geometry = await page.evaluate(() => {
       const dialog = document.querySelector("#memory-dialog");
       const box = dialog.getBoundingClientRect();
@@ -85,6 +91,20 @@ function memoryPayload(view) {
       reviewReason: "",
       evidence: [{ threadId: "thread-2", title: "藏语学习", quote: "每一次纠错完都要反思并更新方法论" }],
       confidence: 0.88,
+    },
+    {
+      id: "native-review-one",
+      targetType: "native_review",
+      targetPath: "/home/ubuntu/.codex/memories",
+      entryId: "native-review-abc",
+      action: "review",
+      status: "approved",
+      before: null,
+      after: { text: "已检查 3 个变化文件，没有需要新增的正式记忆。", assessment: "no_change" },
+      rationale: "原生内容已存在于正式 Markdown，且没有新的可验证差异。",
+      reviewReason: "",
+      evidence: [{ threadId: "native:abc", title: "Codex 原生记忆", quote: "变化文件：raw_memories.md" }],
+      confidence: 1,
     },
   ];
   const selected = view === "pending" || view === "changes" ? changes : view === "detail" ? changes.slice(1) : [];

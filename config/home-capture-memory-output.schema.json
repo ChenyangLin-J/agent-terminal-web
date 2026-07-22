@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "proposals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "action": { "type": "string", "enum": ["create", "update", "retire"] },
+          "targetId": { "type": "string" },
+          "category": { "type": "string" },
+          "text": { "type": "string" },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "conflict": { "type": "boolean" },
+          "sensitive": { "type": "boolean" },
+          "evidenceCaptureId": { "type": "string" },
+          "evidenceQuote": { "type": "string" },
+          "rationale": { "type": "string" }
+        },
+        "required": ["action", "targetId", "category", "text", "confidence", "conflict", "sensitive", "evidenceCaptureId", "evidenceQuote", "rationale"]
+      }
+    }
+  },
+  "required": ["proposals"]
+}

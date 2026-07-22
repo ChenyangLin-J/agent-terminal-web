@@ -32,6 +32,14 @@ import {
   verifiedNativeCandidate,
   writeNativeMemoryReviewState,
 } from "../lib/native-memory-review.js";
+import {
+  buildHomeCaptureMemoryPrompt,
+  homeCaptureReviewBatch,
+  readHomeCaptureMemoryState,
+  reviewedHomeCaptureState,
+  verifiedHomeCaptureProposal,
+  writeHomeCaptureMemoryState,
+} from "../lib/home-capture-memory.js";
 import { recordProjectAndSkillProposals } from "../../memory-system/lib/legacy-adapter.js";
 import { readAllMemoryFiles } from "../../memory-system/lib/markdown-memory.js";
 import { knowledgeChange, readKnowledgeChanges, recordKnowledgeChange } from "../../memory-system/lib/change-ledger.js";
@@ -45,6 +53,9 @@ const AGENT_SESSION_SETTINGS_FILE = path.join(CODEX_HOME, "agent-session-setting
 const SCHEMA_FILE = path.join(REPO_ROOT, "config", "personal-memory-output.schema.json");
 const NATIVE_REVIEW_SCHEMA_FILE = path.join(REPO_ROOT, "config", "native-memory-review-output.schema.json");
 const NATIVE_REVIEW_STATE_FILE = path.join(memorySystemPaths({ codexHome: CODEX_HOME, workspaceRoot: WORKSPACE_ROOT }).runtimeRoot, "native-review-state.json");
+const HOME_CAPTURE_SCHEMA_FILE = path.join(REPO_ROOT, "config", "home-capture-memory-output.schema.json");
+const HOME_CAPTURE_FILE = process.env.HOME_CAPTURE_JOBS_FILE || path.join(os.homedir(), ".local", "share", "home-portal", "capture-jobs.json");
+const HOME_CAPTURE_STATE_FILE = path.join(memorySystemPaths({ codexHome: CODEX_HOME, workspaceRoot: WORKSPACE_ROOT }).runtimeRoot, "home-capture-review-state.json");
 const HOME_PUSH_URL = process.env.HOME_PUSH_URL || "http://127.0.0.1:3050/internal/push";
 const SETTLE_MS = Math.max(
   60_000,
@@ -97,7 +108,7 @@ async function initialize() {
   runtime.lastSuccessAt = runtime.lastRunAt;
   runtime.lastError = "";
   runtime.consecutiveFailures = 0;
-  runtime.lastRun = { scanned: threads.length, eligible: 0, processed: 0, created: 0, confirmed: 0, pending: 0, failed: 0, nativeReviewed: 0, nativeCandidates: 0 };
+  runtime.lastRun = { scanned: threads.length, eligible: 0, processed: 0, created: 0, confirmed: 0, pending: 0, failed: 0, nativeReviewed: 0, nativeCandidates: 0, homeCapturesReviewed: 0, homeCandidates: 0 };
   await writePersonalMemoryRuntime(CODEX_HOME, runtime);
   console.log(JSON.stringify({ initialized: threads.length, runtime: personalMemoryFiles(CODEX_HOME).runtime }));
 }
@@ -120,7 +131,7 @@ async function run() {
     codexHome: CODEX_HOME,
     workspaceRoot: WORKSPACE_ROOT,
   });
-  const summary = { scanned: threads.length, eligible: 0, processed: 0, created: 0, confirmed: 0, pending: 0, failed: 0, nativeReviewed: 0, nativeCandidates: 0 };
+  const summary = { scanned: threads.length, eligible: 0, processed: 0, created: 0, confirmed: 0, pending: 0, failed: 0, nativeReviewed: 0, nativeCandidates: 0, homeCapturesReviewed: 0, homeCandidates: 0 };
   let pendingCreated = 0;
   let lastError = "";
 
@@ -133,6 +144,18 @@ async function run() {
   } catch (error) {
     summary.failed += 1;
     lastError = `Codex 原生记忆对照：${error.message}`.slice(0, 2_000);
+    console.error(lastError);
+  }
+
+  try {
+    const homeReview = await reviewHomeCaptures(reviewHistory.changes, runtime);
+    summary.homeCapturesReviewed += homeReview.reviewed;
+    summary.homeCandidates += homeReview.pending;
+    summary.pending += homeReview.pending;
+    pendingCreated += homeReview.pending;
+  } catch (error) {
+    summary.failed += 1;
+    lastError = `Home 语音记忆整理：${error.message}`.slice(0, 2_000);
     console.error(lastError);
   }
 
@@ -364,6 +387,55 @@ async function reviewNativeMemory(reviewDecisions, runtime) {
 
   await writeNativeMemoryReviewState(NATIVE_REVIEW_STATE_FILE, nativeMemorySnapshotState(snapshot));
   return { reviewed: true, pending };
+}
+
+async function reviewHomeCaptures(reviewDecisions, runtime) {
+  const previousState = await readHomeCaptureMemoryState(HOME_CAPTURE_STATE_FILE);
+  const batch = await homeCaptureReviewBatch(HOME_CAPTURE_FILE, previousState, { source: "voice" });
+  if (!batch.captures.length) return { reviewed: 0, pending: 0 };
+
+  const store = await readPersonalMemoryStore(CODEX_HOME);
+  const prompt = buildHomeCaptureMemoryPrompt({
+    captures: batch.captures,
+    existingEntries: store.entries,
+    reviewDecisions,
+  });
+  const extraction = await runExtraction(prompt, {
+    schemaFile: HOME_CAPTURE_SCHEMA_FILE,
+    tempPrefix: "home-capture-memory-",
+  });
+  recordWorkerUsage(runtime, extraction.usage, new Date());
+
+  const capturesById = new Map(batch.captures.map((capture) => [capture.id, capture]));
+  const proposals = Array.isArray(extraction.output?.proposals) ? extraction.output.proposals : [];
+  let pending = 0;
+  for (const proposal of proposals) {
+    const capture = capturesById.get(String(proposal?.evidenceCaptureId || ""));
+    if (!capture || !verifiedHomeCaptureProposal(proposal, capture)) continue;
+    const itemTypes = [...new Set(capture.items.map((item) => item.type).filter(Boolean))];
+    const results = await applyPersonalMemoryProposals(CODEX_HOME, [{
+      ...proposal,
+      scope: "global",
+      project: "",
+      aliases: [],
+      explicit: true,
+    }], {
+      threadId: `home-capture:${capture.id}`,
+      title: `Home 语音${itemTypes.length ? ` · ${itemTypes.map(homeCaptureTypeLabel).join(" / ")}` : ""}`,
+      source: "home-voice",
+    });
+    pending += results.filter((result) => result.status === "pending").length;
+  }
+
+  await writeHomeCaptureMemoryState(
+    HOME_CAPTURE_STATE_FILE,
+    reviewedHomeCaptureState(previousState, batch.captures),
+  );
+  return { reviewed: batch.captures.length, pending };
+}
+
+function homeCaptureTypeLabel(type) {
+  return { thought: "想法", task: "待办", note: "记录" }[type] || String(type || "记录");
 }
 
 async function directProjectRuleDocuments() {

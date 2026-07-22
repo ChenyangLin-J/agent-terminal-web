@@ -23,6 +23,7 @@ try {
     await page.evaluate(() => document.querySelector("#start-screen")?.classList.remove("hidden"));
     await page.click("#open-memories");
     await page.waitForSelector(".memory-markdown-file");
+    assert.match(await page.locator(".memory-automation-detail").textContent(), /Home 语音已检查 5 条/);
     assert.equal(await page.locator("[data-memory-view]").count(), 3, `${viewport.name}: expected three memory tabs`);
     assert.equal(await page.locator(".memory-markdown-file").count(), 3, `${viewport.name}: expected Core, Now and Topic documents`);
     await page.screenshot({ path: `/tmp/memory-system-${viewport.name}-personal.png`, fullPage: true });
@@ -123,7 +124,7 @@ function memoryPayload(view) {
         : [],
       sources: [],
       projectCatalog: [],
-      runtime: { initializedAt: "2026-07-21T00:00:00Z", status: "idle", usage: { days: {}, lastAlertedDay: "" }, lastRun: { scanned: 14, eligible: 0, processed: 0 } },
+      runtime: { initializedAt: "2026-07-21T00:00:00Z", status: "idle", usage: { days: {}, lastAlertedDay: "" }, lastRun: { scanned: 14, eligible: 0, processed: 0, homeCapturesReviewed: 5 } },
     },
     knowledge: {
       counts: { total: 29, pending: 2, auto_applied: 18, project_rule: 11 },

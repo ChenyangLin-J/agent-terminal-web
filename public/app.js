@@ -3264,8 +3264,11 @@ function createAppTranscriptCard(item) {
     card.append(createTranscriptDetails(`查看输出 · ${lines} 行`, item.output, false));
   }
   if (item.memoryCitation) {
-    const count = item.memoryCitation.entries.length || item.memoryCitation.threadIds.length;
-    card.append(createTranscriptDetails(`参考了 ${count} 条记忆`, formatMemoryCitation(item.memoryCitation), false, "memory-citation"));
+    const labels = memoryCitationDocumentLabels(item.memoryCitation);
+    const summary = labels.length
+      ? `读取了 ${labels.length} 个上下文文档 · ${labels.join("、")}`
+      : `关联了 ${item.memoryCitation.threadIds.length} 个记忆 Session`;
+    card.append(createTranscriptDetails(summary, formatMemoryCitation(item.memoryCitation), false, "memory-citation"));
   }
   return card;
 }
@@ -3294,6 +3297,17 @@ function formatMemoryCitation(citation) {
   });
   if (citation.threadIds.length) entries.push(`关联 Session：\n${citation.threadIds.join("\n")}`);
   return entries.join("\n\n");
+}
+
+function memoryCitationDocumentLabels(citation) {
+  return [...new Set(citation.entries.map((entry) => {
+    const normalized = String(entry.path || "").replaceAll("\\", "/");
+    const memoryMarker = "/System/Memory/";
+    if (normalized.includes(memoryMarker)) return normalized.split(memoryMarker)[1] || "个人记忆";
+    const projectRule = normalized.match(/\/([^/]+\/AGENTS\.md)$/);
+    if (projectRule) return projectRule[1];
+    return normalized.split("/").at(-1) || "个人记忆";
+  }).filter(Boolean))];
 }
 
 function replaceAppTranscriptCard(item) {

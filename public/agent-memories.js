@@ -491,18 +491,20 @@
     const usage = runtime.usage?.days?.[today] || {};
     const totalTokens = Number(usage.inputTokens || 0) + Number(usage.outputTokens || 0);
     const state = documentElement("strong", "memory-automation-title");
-    state.textContent = runtime.status === "running" ? "后台正在整理" : runtime.status === "error" ? "后台整理遇到问题，会自动重试" : "Turn 完成 1 分钟后整理 · 原生记忆变化即时对照 · 每 10 分钟兜底";
+    state.textContent = runtime.status === "running" ? "后台正在整理" : runtime.status === "error" ? "后台整理遇到问题，会自动重试" : "Turn 完成 1 分钟后整理 · Home 语音与原生记忆变化后检查 · 每 10 分钟兜底";
     const detail = documentElement("span", "memory-automation-detail");
     const lastRun = runtime.lastRun || {};
     const scanned = Number(lastRun.scanned || 0);
     const eligible = Number(lastRun.eligible || 0);
     const processed = Number(lastRun.processed || 0);
     const nativeReviewed = Number(lastRun.nativeReviewed || 0);
+    const homeCapturesReviewed = Number(lastRun.homeCapturesReviewed || 0);
     const runSummary = eligible === 0
       ? `本轮扫描 ${scanned} 个 Session，没有可整理的已完成内容`
       : `本轮扫描 ${scanned} 个 Session，可整理 ${eligible} 个，已整理 ${processed} 个`;
     const nativeSummary = nativeReviewed ? ` · 原生记忆已对照 ${nativeReviewed} 次` : "";
-    detail.textContent = `最近检查 ${runtime.lastRunAt ? formatDate(runtime.lastRunAt) : "尚未运行"} · 今天模型整理 ${Number(usage.runs || 0)} 次 / ${formatTokenCount(totalTokens)} · ${runSummary}${nativeSummary}`;
+    const homeSummary = homeCapturesReviewed ? ` · Home 语音已检查 ${homeCapturesReviewed} 条` : "";
+    detail.textContent = `最近检查 ${runtime.lastRunAt ? formatDate(runtime.lastRunAt) : "尚未运行"} · 今天模型整理 ${Number(usage.runs || 0)} 次 / ${formatTokenCount(totalTokens)} · ${runSummary}${nativeSummary}${homeSummary}`;
     section.append(state, detail);
     if (runtime.lastError) {
       const error = documentElement("span", "memory-automation-error");

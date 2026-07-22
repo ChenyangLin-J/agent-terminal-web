@@ -264,7 +264,7 @@ test("Agent Web exposes memory review views and authenticated APIs", async () =>
   assert.match(memoryUi, /审批反馈/);
   assert.match(memoryUi, /今天模型整理/);
   assert.match(memoryUi, /Turn 完成 1 分钟后整理/);
-  assert.match(memoryUi, /原生记忆变化即时对照/);
+  assert.match(memoryUi, /Home 语音与原生记忆变化后检查/);
   assert.match(memoryUi, /Codex 原生记忆/);
   assert.match(memoryUi, /检查结论/);
   assert.match(memoryUi, /已检查/);

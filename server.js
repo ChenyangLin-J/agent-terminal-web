@@ -22,6 +22,7 @@ import {
 } from "./lib/personal-memory-context.js";
 import { readProjectRuleDocuments } from "./lib/project-rule-documents.js";
 import { orderKnowledgeChanges } from "./lib/knowledge-change-order.js";
+import { memoryCitationFromToolItem } from "./lib/memory-access-citations.js";
 import { createPersonalMemoryScheduler } from "./lib/personal-memory-scheduler.js";
 import { readKnowledgeChanges } from "../memory-system/lib/change-ledger.js";
 import { resolveKnowledgeChange } from "../memory-system/lib/knowledge-actions.js";
@@ -2576,6 +2577,7 @@ function appTranscriptItemsFromTurns(session, turns) {
       turnStatus: String(turn?.status || ""),
     };
     for (const item of Array.isArray(turn?.items) ? turn.items : []) {
+      rememberToolMemoryCitation(session, item, context.turnId);
       const transcriptItem = appTranscriptFromThreadItem(session, item, context);
       if (transcriptItem) items.push(transcriptItem);
     }
@@ -2747,6 +2749,20 @@ function appTranscriptFromThreadItem(session, item, context = {}) {
   return null;
 }
 
+function rememberToolMemoryCitation(session, item, turnId) {
+  const id = String(turnId || "");
+  if (!id) return;
+  const citation = memoryCitationFromToolItem(item, {
+    memoryRoot: path.join(OBSIDIAN_VAULT_ROOT, "System", "Memory"),
+    workspaceRoot: WORKSPACE_ROOT,
+  });
+  if (!citation) return;
+  session.personalMemoryCitationsByTurn.set(
+    id,
+    mergeMemoryCitations(session.personalMemoryCitationsByTurn.get(id), citation),
+  );
+}
+
 function appServerUserMessageText(content) {
   if (!Array.isArray(content)) return "";
   return content
@@ -2883,6 +2899,7 @@ function handleAppServerNotification(session, message) {
     if (transcriptItem) upsertAppTranscriptItem(session, transcriptItem);
     renderAppServerItemStarted(session, params.item);
   } else if (method === "item/completed") {
+    rememberToolMemoryCitation(session, params.item, params.turnId || session.turnState.turnId);
     const transcriptItem = appTranscriptFromThreadItem(session, params.item, {
       turnId: params.turnId || session.turnState.turnId,
     });

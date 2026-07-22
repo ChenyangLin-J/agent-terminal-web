@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch completed Home captures for personal memory review
+
+[Path]
+PathChanged=%h/.local/share/home-portal/capture-jobs.json
+Unit=personal-memory-worker.service
+
+[Install]
+WantedBy=default.target

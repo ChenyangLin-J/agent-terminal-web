@@ -20,6 +20,7 @@
   let projectChangeHandler = null;
   let projectCatalog = [];
   let requestSequence = 0;
+  let actionFeedback = null;
 
   if (!dialog) {
     global.AgentMemories = Object.freeze({ open() {} });
@@ -27,7 +28,10 @@
   }
 
   closeButton?.addEventListener("click", () => dialog.close());
-  refreshButton?.addEventListener("click", () => void loadView());
+  refreshButton?.addEventListener("click", () => {
+    actionFeedback = null;
+    void loadView();
+  });
   projectAutoButton?.addEventListener("click", () => {
     routingMode = "auto";
     routingSource = activeProjects.length ? "retained" : "global";
@@ -39,6 +43,7 @@
   });
   tabs.forEach((tab) => {
     tab.addEventListener("click", () => {
+      actionFeedback = null;
       activeView = tab.dataset.memoryView || "overview";
       syncTabs();
       void loadView();
@@ -47,6 +52,7 @@
   void refreshStatus();
 
   function open(options = {}) {
+    actionFeedback = null;
     activeProjects = Object.hasOwn(options, "projects")
       ? normalizeProjects(options.projects)
       : normalizeProjects([options.project]);
@@ -229,6 +235,7 @@
     const memoryDocument = data.document || {};
     const fragment = documentFragment();
     fragment.append(viewNote(activeView, data.status || {}, memoryDocument));
+    if (actionFeedback) fragment.append(actionFeedbackElement(actionFeedback));
     if (data.personal?.runtime) fragment.append(renderAutomationStatus(data.personal.runtime));
     const knowledgeChanges = data.knowledge?.changes || [];
     const personalEntries = activeView === "overview" ? data.personal?.entries || [] : [];
@@ -288,6 +295,11 @@
 
       const path = documentElement("p", "memory-change-path");
       path.textContent = change.targetPath;
+      const unresolvedTarget = change.targetType === "project_rule" && String(change.targetPath || "").startsWith("project:");
+      const targetWarning = unresolvedTarget ? documentElement("p", "memory-change-target-warning") : null;
+      if (targetWarning) {
+        targetWarning.textContent = "未找到可写入的项目目录；这条内容可能是项目背景或旧候选，批准不会自动创建项目。";
+      }
       const diff = documentElement("div", "memory-change-diff");
       if (change.before !== null) diff.append(diffValue("删除 / 原内容", change.before, "before"));
       if (change.after !== null) diff.append(diffValue(change.before === null ? "新增" : "改为", change.after, "after"));
@@ -322,7 +334,9 @@
       } else if (["auto_applied", "approved"].includes(change.status)) {
         actions.append(actionButton("撤回", "danger", () => mutateKnowledgeChange(change, "revert")));
       }
-      card.append(header, path, diff, rationale, evidence, actions);
+      card.append(header, path);
+      if (targetWarning) card.append(targetWarning);
+      card.append(diff, rationale, evidence, actions);
       section.append(card);
     }
     return section;
@@ -361,11 +375,12 @@
 
   async function mutateKnowledgeChange(change, action, extra = {}, confirmAction = true) {
     const prompts = {
-      approve: "批准后会立即写入对应的个人记忆或项目 AGENTS.md。继续吗？",
       reject: "拒绝后不会应用这条变更。继续吗？",
       revert: "撤回会恢复变更前的内容；如果目标后来被修改，系统会停止并标记冲突。继续吗？",
     };
     if (confirmAction && prompts[action] && !global.confirm(prompts[action])) return;
+    setActionButtonsDisabled(true);
+    showActionFeedback("正在处理这条变更…", "loading");
     try {
       const response = await fetch(`/api/knowledge-changes/${encodeURIComponent(change.id)}`, {
         method: "PATCH",
@@ -374,11 +389,45 @@
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "操作失败");
+      actionFeedback = { tone: "success", text: knowledgeActionResult(action) };
       await loadView();
       void refreshStatus();
     } catch (error) {
-      global.alert(error.message || "知识变更操作失败。");
+      actionFeedback = {
+        tone: "error",
+        text: `没有改写目标：${error.message || "知识变更操作失败。"}`,
+      };
+      await loadView();
+      void refreshStatus();
+    } finally {
+      setActionButtonsDisabled(false);
     }
+  }
+
+  function knowledgeActionResult(action) {
+    return {
+      approve: "已批准并应用。",
+      reject: "已拒绝，没有写入目标。",
+      revert: "已撤回这条变更。",
+      edit: "修改已保存，仍待审批。",
+    }[action] || "操作已完成。";
+  }
+
+  function showActionFeedback(text, tone) {
+    actionFeedback = { text, tone };
+    contentElement.querySelector(".memory-action-feedback")?.remove();
+    contentElement.prepend(actionFeedbackElement(actionFeedback));
+  }
+
+  function actionFeedbackElement(feedback) {
+    const element = message(feedback.text, feedback.tone);
+    element.classList.add("memory-action-feedback");
+    element.setAttribute("role", feedback.tone === "error" ? "alert" : "status");
+    return element;
+  }
+
+  function setActionButtonsDisabled(disabled) {
+    for (const button of contentElement.querySelectorAll(".memory-entry-action")) button.disabled = disabled;
   }
 
   function targetTypeLabel(value) {

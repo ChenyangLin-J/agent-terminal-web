@@ -225,6 +225,12 @@ test("Agent Web exposes memory review views and authenticated APIs", async () =>
   assert.match(memoryUi, /onProjectChange/);
   assert.match(memoryUi, /默认读取 Core 与 Now/);
   assert.match(memoryUi, /entry\.memoryLocation \|\| "个人记忆"/);
+  assert.match(memoryUi, /正在处理这条变更/);
+  assert.match(memoryUi, /没有改写目标/);
+  assert.match(memoryUi, /批准不会自动创建项目/);
+  assert.match(memoryUi, /await loadView\(\);[\s\S]*refreshStatus/);
+  assert.doesNotMatch(memoryUi, /批准后会立即写入/);
+  assert.match(styles, /\.memory-action-feedback\.memory-message-error/);
   assert.match(page, /id="memory-context">Core、Now 与按需 Topics/);
   assert.match(app, /name: "\/memories"/);
   assert.match(app, /查看个人记忆、项目规则、待审批与来源/);

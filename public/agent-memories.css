@@ -288,6 +288,32 @@
   color: #efb3bd;
 }
 
+.memory-action-feedback {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid #344158;
+  border-radius: 10px;
+  background: #151c27;
+}
+
+.memory-action-feedback.memory-message-success {
+  border-color: #356451;
+  color: #b8e7d0;
+  background: #12251f;
+}
+
+.memory-action-feedback.memory-message-error {
+  border-color: #70414a;
+  background: #2a171c;
+}
+
+.memory-change-target-warning {
+  margin: 0 0 10px;
+  color: #e7c681;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .memory-review-action {
   min-height: 38px;
   margin-bottom: 12px;

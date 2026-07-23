@@ -914,6 +914,10 @@ input {
   user-select: none;
 }
 
+.app-process-group[open] > summary {
+  align-items: start;
+}
+
 .app-process-group > summary::-webkit-details-marker {
   display: none;
 }
@@ -934,6 +938,16 @@ input {
   border-left: 2px solid #8d6570;
   padding-left: 7px;
   background: #150e11;
+}
+
+.app-process-group.is-loading > summary {
+  background: #0b1018;
+}
+
+.app-process-group.is-load-error > summary {
+  border-left: 2px solid #b77751;
+  padding-left: 7px;
+  background: #160f0b;
 }
 
 .app-process-group > summary strong {
@@ -994,6 +1008,12 @@ input {
   white-space: nowrap;
 }
 
+.app-process-group[open] .app-activity-message {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
 .app-process-group.is-active .app-activity-message {
   color: #c2cad8;
   animation: app-activity-pulse 1.8s ease-in-out infinite;
@@ -1012,6 +1032,38 @@ input {
 
 .app-process-content .app-transcript-item:last-child {
   border-bottom: 0;
+}
+
+.app-process-load-state {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 35px;
+  color: #8f9bad;
+  font-size: 12px;
+}
+
+.app-process-load-state i {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  border: 2px solid #33415a;
+  border-top-color: #7894ff;
+  border-radius: 50%;
+  animation: app-process-spin 800ms linear infinite;
+}
+
+.app-process-load-state button {
+  min-height: 30px;
+  margin-left: auto;
+  padding: 4px 10px;
+  border-color: #654632;
+  color: #d8a57f;
+}
+
+.app-process-load-state.is-empty {
+  color: #697386;
 }
 
 .app-interrupted-turn {
@@ -1082,9 +1134,16 @@ input {
   }
 }
 
+@keyframes app-process-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .app-activity-indicator i,
-  .app-process-group.is-active .app-activity-message {
+  .app-process-group.is-active .app-activity-message,
+  .app-process-load-state i {
     animation: none;
   }
 }

@@ -94,11 +94,18 @@ test("historical process details load only when a restored group is expanded", a
   ]);
 
   assert.match(server, /app\.get\("\/api\/session-process\/:sessionId\/:turnId"/);
-  assert.match(server, /item\.turnId === turnId && item\.historical/);
+  assert.match(server, /\(!isRestoredTurn && !isCodexTurnId\)/);
   assert.match(server, /session\.historyProcessCache \|\|= new Map\(\)/);
+  assert.match(server, /logAgentEvent\("session-process-load"/);
   assert.match(app, /group\.addEventListener\("toggle"[\s\S]*loadHistoricalProcessDetails\(turnId\)/);
-  assert.match(app, /historicalProcessDetails\.has\(turnId\)/);
-  assert.match(app, /count\.textContent = "加载中…"/);
+  assert.match(app, /historicalProcessLoads\.set\(turnId, \{ status: "loading", items: \[\] \}\)/);
+  assert.match(app, /copy\.textContent = "正在加载完整过程…"/);
+  assert.match(app, /copy\.textContent = "完整过程加载失败"/);
+  assert.match(app, /isRepeatedProcessSummary\(item, currentItem\)/);
+  assert.match(app, /if \(item\.type === "assistant"\) return normalized/);
+  assert.match(app, /historical: answer\.phase !== "final_answer"/);
+  assert.match(app, /processGroupCounts\.set\(item\.turnId, groupNumber\)/);
+  assert.match(app, /`\$\{turnId \|\| items\[0\]\?\.id \|\| "turn"\}:process:\$\{groupNumber\}`/);
 });
 
 function response(type, payload) {

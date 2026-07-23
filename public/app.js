@@ -201,8 +201,7 @@ let appSkillsRequested = false;
 let suggestionItems = [];
 let activeSuggestionIndex = 0;
 const openAppProcessGroups = new Set();
-const historicalProcessDetails = new Map();
-const historicalProcessLoading = new Set();
+const historicalProcessLoads = new Map();
 const clientId = getClientId();
 const notificationTarget = getNotificationTarget();
 const pushDeviceId = notificationTarget.deviceId;
@@ -872,8 +871,7 @@ function openSocket(params, options = {}) {
     terminalPreviewAllowed = activeTransport === "terminal" && !hasSnapshot && resumesTerminalHistory;
     sessionPreviewRequestSequence += 1;
     openAppProcessGroups.clear();
-    historicalProcessDetails.clear();
-    historicalProcessLoading.clear();
+    historicalProcessLoads.clear();
     renderAppTranscript();
     lastOutputRevision = 0;
     queuedOutputRevision = 0;
@@ -3046,6 +3044,7 @@ function renderAppTranscript({ follow = false } = {}) {
     fragment.append(emptyState);
   } else {
     let previousTurnId = "";
+    const processGroupCounts = new Map();
     for (let index = 0; index < appTranscriptItems.length; index += 1) {
       const item = appTranscriptItems[index];
       if (item.turnId && previousTurnId && item.turnId !== previousTurnId) {
@@ -3061,7 +3060,9 @@ function renderAppTranscript({ follow = false } = {}) {
           processItems.push(appTranscriptItems[index + 1]);
           index += 1;
         }
-        fragment.append(createAppProcessGroup(processItems));
+        const groupNumber = (processGroupCounts.get(item.turnId) || 0) + 1;
+        processGroupCounts.set(item.turnId, groupNumber);
+        fragment.append(createAppProcessGroup(processItems, groupNumber));
       } else {
         fragment.append(createAppTranscriptCard(item));
       }
@@ -3121,6 +3122,7 @@ function diskConversationItems(conversation = {}) {
           status: "completed",
           turnId,
           turnStartedAt: Number.isFinite(turnStartedAt) ? turnStartedAt : null,
+          historical: answer.phase !== "final_answer",
         }),
       );
     }
@@ -3210,15 +3212,20 @@ function createInterruptedTurnNotice() {
   return notice;
 }
 
-function createAppProcessGroup(items) {
+function createAppProcessGroup(items, groupNumber = 1) {
   const group = document.createElement("details");
   group.className = "app-process-group";
   const turnId = items[0]?.turnId || "";
-  const groupId = `${turnId || "turn"}:${items[0]?.id || "process"}`;
+  const groupId = `${turnId || items[0]?.id || "turn"}:process:${groupNumber}`;
   const historical = items.some((item) => item.historical);
-  const loadedDetails = historicalProcessDetails.get(turnId);
-  const contentItems = loadedDetails?.length ? loadedDetails : items;
-  const activeItem = [...contentItems].reverse().find(isRunningTranscriptItem);
+  const loadState = historicalProcessLoads.get(turnId);
+  const contentItems = historical
+    ? loadState?.status === "loaded"
+      ? loadState.items
+      : []
+    : items;
+  const summaryItems = historical ? items : contentItems;
+  const activeItem = [...summaryItems].reverse().find(isRunningTranscriptItem);
   const hasFinalAnswer = appTurnHasFinalAnswer(turnId);
   const isInterruptedTurn = !hasFinalAnswer && appTurnIsInterrupted(turnId);
   const isStoppedTurn = !hasFinalAnswer && appTurnWasStopped(turnId);
@@ -3227,10 +3234,12 @@ function createAppProcessGroup(items) {
   const autoExpanded = isActive && !openAppProcessGroups.has(groupId);
   group.open = autoExpanded || openAppProcessGroups.has(groupId);
   const summary = document.createElement("summary");
-  const currentItem = activeItem || contentItems.at(-1);
+  const currentItem = activeItem || summaryItems.at(-1);
   group.classList.toggle("is-active", isActive);
   group.classList.toggle("is-interrupted", isInterruptedTurn);
   group.classList.toggle("is-stopped", isStoppedTurn);
+  group.classList.toggle("is-loading", loadState?.status === "loading");
+  group.classList.toggle("is-load-error", loadState?.status === "error");
 
   const indicator = document.createElement("span");
   indicator.className = "app-activity-indicator";
@@ -3257,17 +3266,12 @@ function createAppProcessGroup(items) {
   message.title = message.textContent;
   const count = document.createElement("span");
   count.className = "app-activity-count";
-  count.textContent = historicalProcessLoading.has(turnId)
-    ? "加载中…"
-    : contentItems.length > 1
-      ? `${contentItems.length} 项`
-      : "详情";
+  count.textContent = processGroupActionText({ historical, loadState, itemCount: contentItems.length });
   group.addEventListener("toggle", () => {
     if (autoExpanded && group.open) return;
     if (group.open) {
       openAppProcessGroups.add(groupId);
-      if (historical && !historicalProcessDetails.has(turnId) && !historicalProcessLoading.has(turnId)) {
-        count.textContent = "加载中…";
+      if (historical && !loadState) {
         void loadHistoricalProcessDetails(turnId);
       }
     } else {
@@ -3277,15 +3281,26 @@ function createAppProcessGroup(items) {
   summary.append(indicator, label, message, count);
   const content = document.createElement("div");
   content.className = "app-process-content";
-  content.append(...contentItems.map(createAppTranscriptCard));
-  group.append(summary, content);
+  if (historical && loadState?.status !== "loaded") {
+    content.append(createHistoricalProcessLoadState(turnId, loadState));
+  } else {
+    const visibleItems = contentItems.filter((item) => !isRepeatedProcessSummary(item, currentItem));
+    if (visibleItems.length) {
+      content.append(...visibleItems.map(createAppTranscriptCard));
+    } else if (historical) {
+      content.append(createHistoricalProcessEmptyState());
+    }
+  }
+  group.append(summary);
+  if (content.childNodes.length) group.append(content);
   return group;
 }
 
 async function loadHistoricalProcessDetails(turnId) {
   const sessionId = activeSessionId;
   if (!sessionId || !turnId) return;
-  historicalProcessLoading.add(turnId);
+  historicalProcessLoads.set(turnId, { status: "loading", items: [] });
+  renderAppTranscript({ follow: false });
   try {
     const response = await fetch(
       `/api/session-process/${encodeURIComponent(sessionId)}/${encodeURIComponent(turnId)}`,
@@ -3295,18 +3310,74 @@ async function loadHistoricalProcessDetails(turnId) {
       redirectToLogin();
       return;
     }
-    const payload = response.ok ? await response.json() : { items: [] };
+    if (!response.ok) throw new Error("Historical process request failed");
+    const payload = await response.json();
     if (activeSessionId !== sessionId) return;
     const items = (Array.isArray(payload.items) ? payload.items : [])
       .map(normalizeClientTranscriptItem)
       .filter(isProcessTranscriptItem);
-    historicalProcessDetails.set(turnId, items);
+    historicalProcessLoads.set(turnId, { status: "loaded", items });
   } catch {
-    if (activeSessionId === sessionId) historicalProcessDetails.set(turnId, []);
+    if (activeSessionId === sessionId) {
+      historicalProcessLoads.set(turnId, { status: "error", items: [] });
+    }
   } finally {
-    historicalProcessLoading.delete(turnId);
     if (activeSessionId === sessionId) renderAppTranscript({ follow: false });
   }
+}
+
+function processGroupActionText({ historical, loadState, itemCount }) {
+  if (!historical) return itemCount > 1 ? `${itemCount} 项` : "详情";
+  if (loadState?.status === "loading") return "加载中";
+  if (loadState?.status === "error") return "重试";
+  if (loadState?.status === "loaded") return itemCount ? `${itemCount} 项` : "无更多";
+  return "查看";
+}
+
+function createHistoricalProcessLoadState(turnId, loadState) {
+  const state = document.createElement("div");
+  state.className = "app-process-load-state";
+  state.setAttribute("role", "status");
+  state.setAttribute("aria-live", "polite");
+
+  if (loadState?.status === "error") {
+    const copy = document.createElement("span");
+    copy.textContent = "完整过程加载失败";
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.textContent = "重试";
+    retry.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void loadHistoricalProcessDetails(turnId);
+    });
+    state.append(copy, retry);
+    return state;
+  }
+
+  const spinner = document.createElement("i");
+  spinner.setAttribute("aria-hidden", "true");
+  const copy = document.createElement("span");
+  copy.textContent = "正在加载完整过程…";
+  state.append(spinner, copy);
+  return state;
+}
+
+function createHistoricalProcessEmptyState() {
+  const state = document.createElement("div");
+  state.className = "app-process-load-state is-empty";
+  state.textContent = "没有更多过程记录";
+  return state;
+}
+
+function isRepeatedProcessSummary(item, summaryItem) {
+  return Boolean(
+    item?.type === "assistant" &&
+      item.phase !== "final_answer" &&
+      summaryItem?.type === "assistant" &&
+      summaryItem.phase !== "final_answer" &&
+      String(item.text || "").trim() === String(summaryItem.text || "").trim(),
+  );
 }
 
 function isRunningTranscriptItem(item) {
@@ -3332,6 +3403,7 @@ function appActivityText(item = {}) {
   };
   const prefix = prefixes[item.type] || "处理";
   const normalized = content.replace(/^[✓→○]\s*/, "").replace(/\s+/g, " ");
+  if (item.type === "assistant") return normalized;
   return normalized === prefix ? prefix : `${prefix} · ${normalized}`;
 }
 

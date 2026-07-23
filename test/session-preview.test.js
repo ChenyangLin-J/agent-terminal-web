@@ -81,8 +81,25 @@ test("extracts recent user and assistant conversation turns directly from disk",
       type: "event_msg",
       payload: { type: "user_message", message: `request ${index}` },
     });
-    records.push(message("assistant", `progress ${index}`, `2026-07-17T00:${String(index).padStart(2, "0")}:10.000Z`, "commentary"));
-    records.push(message("assistant", `answer ${index}`, `2026-07-17T00:${String(index).padStart(2, "0")}:20.000Z`, "final_answer"));
+    const turnId = `019f0000-0000-7000-8000-${String(index).padStart(12, "0")}`;
+    records.push(
+      message(
+        "assistant",
+        `progress ${index}`,
+        `2026-07-17T00:${String(index).padStart(2, "0")}:10.000Z`,
+        "commentary",
+        turnId,
+      ),
+    );
+    records.push(
+      message(
+        "assistant",
+        `answer ${index}`,
+        `2026-07-17T00:${String(index).padStart(2, "0")}:20.000Z`,
+        "final_answer",
+        turnId,
+      ),
+    );
   }
   await fs.writeFile(file, `${records.map(JSON.stringify).join("\n")}\n`);
 
@@ -90,6 +107,7 @@ test("extracts recent user and assistant conversation turns directly from disk",
   assert.equal(conversation.turns.length, 10);
   assert.equal(conversation.hasEarlier, true);
   assert.equal(conversation.turns[0].user, "request 3");
+  assert.equal(conversation.turns[0].id, "019f0000-0000-7000-8000-000000000003");
   assert.deepEqual(
     conversation.turns.at(-1).assistant.map((item) => item.phase),
     ["commentary", "final_answer"],
@@ -117,7 +135,7 @@ test("preview cache is stored atomically and normalized by session id", async (t
   });
 });
 
-function message(role, text, timestamp, phase = undefined) {
+function message(role, text, timestamp, phase = undefined, turnId = "") {
   return {
     timestamp,
     type: "response_item",
@@ -125,6 +143,7 @@ function message(role, text, timestamp, phase = undefined) {
       type: "message",
       role,
       ...(phase ? { phase } : {}),
+      ...(turnId ? { internal_chat_message_metadata_passthrough: { turn_id: turnId } } : {}),
       content: [{ type: role === "user" ? "input_text" : "output_text", text }],
     },
   };

@@ -340,24 +340,43 @@ app.get("/api/session-image/:sessionId/:itemId", async (req, res) => {
 app.get("/api/session-process/:sessionId/:turnId", async (req, res) => {
   const session = sessions.get(String(req.params.sessionId || ""));
   const turnId = String(req.params.turnId || "");
-  const isRestoredTurn = session?.appTranscript.some(
+  const isRestoredTurn = session?.appTranscript?.some(
     (item) => item.turnId === turnId && item.historical,
   );
-  if (!session?.sessionId || !isRestoredTurn) {
+  const isCodexTurnId = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(turnId);
+  if (!session?.sessionId || (!isRestoredTurn && !isCodexTurnId)) {
     res.status(404).json({ error: "This historical turn is not available in the current Agent session." });
     return;
   }
 
+  const startedAt = Date.now();
   try {
     session.historyProcessCache ||= new Map();
-    if (!session.historyProcessCache.has(turnId)) {
+    const cached = session.historyProcessCache.has(turnId);
+    if (!cached) {
       const file = await findCodexSessionFile(session.sessionId);
       const items = file ? await extractSessionProcessFromJsonl(file, turnId) : [];
       session.historyProcessCache.set(turnId, items);
     }
+    const items = session.historyProcessCache.get(turnId) || [];
+    logAgentEvent("session-process-load", {
+      webSessionId: session.id,
+      codexSessionId: session.sessionId,
+      turnId,
+      cached,
+      itemCount: items.length,
+      durationMs: Date.now() - startedAt,
+    });
     res.set("Cache-Control", "private, no-store");
-    res.json({ items: session.historyProcessCache.get(turnId) || [] });
-  } catch {
+    res.json({ items });
+  } catch (error) {
+    logAgentEvent("session-process-load-failed", {
+      webSessionId: session.id,
+      codexSessionId: session.sessionId,
+      turnId,
+      durationMs: Date.now() - startedAt,
+      message: error.message,
+    });
     res.status(404).json({ error: "The complete process for this turn is no longer available." });
   }
 });

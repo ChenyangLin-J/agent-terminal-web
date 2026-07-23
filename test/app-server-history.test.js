@@ -52,7 +52,7 @@ test("App Server resume restores structured history and keeps raw text available
   assert.match(styles, /\.app-transcript-command/);
   assert.match(styles, /\.app-server-view[\s\S]*background: #080a0f/);
   assert.match(styles, /\.app-server-transcript[\s\S]*font-family: ui-monospace/);
-  assert.match(app, /function createAppProcessGroup\(items\)/);
+  assert.match(app, /function createAppProcessGroup\(items, groupNumber = 1\)/);
   assert.match(app, /item\.type === "assistant" && item\.phase !== "final_answer"/);
   assert.match(app, /function appTurnHasFinalAnswer\(turnId\)/);
   assert.match(app, /const autoExpanded = isActive && !openAppProcessGroups\.has\(groupId\)/);

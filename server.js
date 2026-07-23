@@ -49,6 +49,7 @@ import {
   readSessionPreviews,
   saveSessionPreview,
 } from "./lib/session-preview.js";
+import { extractSessionProcessFromJsonl } from "./lib/session-process.js";
 
 const AGENT_TIME_ZONE = "Asia/Shanghai";
 process.env.TZ = AGENT_TIME_ZONE;
@@ -333,6 +334,31 @@ app.get("/api/session-image/:sessionId/:itemId", async (req, res) => {
     res.sendFile(realFilePath);
   } catch {
     res.status(404).send("This image no longer exists.");
+  }
+});
+
+app.get("/api/session-process/:sessionId/:turnId", async (req, res) => {
+  const session = sessions.get(String(req.params.sessionId || ""));
+  const turnId = String(req.params.turnId || "");
+  const isRestoredTurn = session?.appTranscript.some(
+    (item) => item.turnId === turnId && item.historical,
+  );
+  if (!session?.sessionId || !isRestoredTurn) {
+    res.status(404).json({ error: "This historical turn is not available in the current Agent session." });
+    return;
+  }
+
+  try {
+    session.historyProcessCache ||= new Map();
+    if (!session.historyProcessCache.has(turnId)) {
+      const file = await findCodexSessionFile(session.sessionId);
+      const items = file ? await extractSessionProcessFromJsonl(file, turnId) : [];
+      session.historyProcessCache.set(turnId, items);
+    }
+    res.set("Cache-Control", "private, no-store");
+    res.json({ items: session.historyProcessCache.get(turnId) || [] });
+  } catch {
+    res.status(404).json({ error: "The complete process for this turn is no longer available." });
   }
 });
 
@@ -2691,7 +2717,7 @@ function restoreAppServerTranscript(session, thread, { resumed = false } = {}) {
   session.appTranscript = [];
   session.restoredTurnCount = resumed ? turns.length : 0;
 
-  for (const item of appTranscriptItemsFromTurns(session, turns)) {
+  for (const item of appTranscriptItemsFromTurns(session, turns, { historical: resumed })) {
     upsertAppTranscriptItem(session, item, { notify: false });
   }
 }
@@ -2699,14 +2725,16 @@ function restoreAppServerTranscript(session, thread, { resumed = false } = {}) {
 function prependAppServerTranscript(session, turns) {
   const sortedTurns = [...turns].sort((a, b) => (a?.startedAt ?? 0) - (b?.startedAt ?? 0));
   const existingIds = new Set(session.appTranscript.map((item) => item.id));
-  const earlierItems = appTranscriptItemsFromTurns(session, sortedTurns).filter((item) => !existingIds.has(item.id));
+  const earlierItems = appTranscriptItemsFromTurns(session, sortedTurns, { historical: true }).filter(
+    (item) => !existingIds.has(item.id),
+  );
   session.appTranscript = [...earlierItems.map(normalizeAppTranscriptItem), ...session.appTranscript];
   if (session.appTranscript.length > MAX_APP_TRANSCRIPT_ITEMS) {
     session.appTranscript.splice(0, session.appTranscript.length - MAX_APP_TRANSCRIPT_ITEMS);
   }
 }
 
-function appTranscriptItemsFromTurns(session, turns) {
+function appTranscriptItemsFromTurns(session, turns, { historical = false } = {}) {
   const items = [];
 
   for (const turn of turns) {
@@ -2714,6 +2742,7 @@ function appTranscriptItemsFromTurns(session, turns) {
       turnId: String(turn?.id || ""),
       turnStartedAt: Number.isFinite(turn?.startedAt) ? turn.startedAt : null,
       turnStatus: String(turn?.status || ""),
+      historical,
     };
     for (const item of Array.isArray(turn?.items) ? turn.items : []) {
       rememberToolMemoryCitation(session, item, context.turnId);
@@ -2781,6 +2810,7 @@ function normalizeAppTranscriptItem(item) {
     turnId: String(item.turnId || ""),
     turnStartedAt: Number.isFinite(item.turnStartedAt) ? item.turnStartedAt : null,
     turnStatus: String(item.turnStatus || ""),
+    historical: Boolean(item.historical),
     attachments: normalizeTranscriptAttachments(item.attachments),
     memoryCitation: normalizeMemoryCitation(item.memoryCitation),
   };

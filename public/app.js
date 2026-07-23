@@ -201,6 +201,8 @@ let appSkillsRequested = false;
 let suggestionItems = [];
 let activeSuggestionIndex = 0;
 const openAppProcessGroups = new Set();
+const historicalProcessDetails = new Map();
+const historicalProcessLoading = new Set();
 const clientId = getClientId();
 const notificationTarget = getNotificationTarget();
 const pushDeviceId = notificationTarget.deviceId;
@@ -870,6 +872,8 @@ function openSocket(params, options = {}) {
     terminalPreviewAllowed = activeTransport === "terminal" && !hasSnapshot && resumesTerminalHistory;
     sessionPreviewRequestSequence += 1;
     openAppProcessGroups.clear();
+    historicalProcessDetails.clear();
+    historicalProcessLoading.clear();
     renderAppTranscript();
     lastOutputRevision = 0;
     queuedOutputRevision = 0;
@@ -2903,6 +2907,7 @@ function normalizeClientTranscriptItem(item = {}) {
     exitCode: Number.isFinite(item.exitCode) ? item.exitCode : null,
     turnId: String(item.turnId || ""),
     turnStartedAt: Number.isFinite(item.turnStartedAt) ? item.turnStartedAt : null,
+    historical: Boolean(item.historical),
     attachments: normalizeClientAttachments(item.attachments),
     memoryCitation: normalizeClientMemoryCitation(item.memoryCitation),
   };
@@ -3210,7 +3215,10 @@ function createAppProcessGroup(items) {
   group.className = "app-process-group";
   const turnId = items[0]?.turnId || "";
   const groupId = `${turnId || "turn"}:${items[0]?.id || "process"}`;
-  const activeItem = [...items].reverse().find(isRunningTranscriptItem);
+  const historical = items.some((item) => item.historical);
+  const loadedDetails = historicalProcessDetails.get(turnId);
+  const contentItems = loadedDetails?.length ? loadedDetails : items;
+  const activeItem = [...contentItems].reverse().find(isRunningTranscriptItem);
   const hasFinalAnswer = appTurnHasFinalAnswer(turnId);
   const isInterruptedTurn = !hasFinalAnswer && appTurnIsInterrupted(turnId);
   const isStoppedTurn = !hasFinalAnswer && appTurnWasStopped(turnId);
@@ -3218,13 +3226,8 @@ function createAppProcessGroup(items) {
   const isActive = !isInterruptedTurn && !isStoppedTurn && !hasFinalAnswer && (Boolean(activeItem) || isActiveTurn);
   const autoExpanded = isActive && !openAppProcessGroups.has(groupId);
   group.open = autoExpanded || openAppProcessGroups.has(groupId);
-  group.addEventListener("toggle", () => {
-    if (autoExpanded && group.open) return;
-    if (group.open) openAppProcessGroups.add(groupId);
-    else openAppProcessGroups.delete(groupId);
-  });
   const summary = document.createElement("summary");
-  const currentItem = activeItem || items.at(-1);
+  const currentItem = activeItem || contentItems.at(-1);
   group.classList.toggle("is-active", isActive);
   group.classList.toggle("is-interrupted", isInterruptedTurn);
   group.classList.toggle("is-stopped", isStoppedTurn);
@@ -3254,13 +3257,56 @@ function createAppProcessGroup(items) {
   message.title = message.textContent;
   const count = document.createElement("span");
   count.className = "app-activity-count";
-  count.textContent = items.length > 1 ? `${items.length} 项` : "详情";
+  count.textContent = historicalProcessLoading.has(turnId)
+    ? "加载中…"
+    : contentItems.length > 1
+      ? `${contentItems.length} 项`
+      : "详情";
+  group.addEventListener("toggle", () => {
+    if (autoExpanded && group.open) return;
+    if (group.open) {
+      openAppProcessGroups.add(groupId);
+      if (historical && !historicalProcessDetails.has(turnId) && !historicalProcessLoading.has(turnId)) {
+        count.textContent = "加载中…";
+        void loadHistoricalProcessDetails(turnId);
+      }
+    } else {
+      openAppProcessGroups.delete(groupId);
+    }
+  });
   summary.append(indicator, label, message, count);
   const content = document.createElement("div");
   content.className = "app-process-content";
-  content.append(...items.map(createAppTranscriptCard));
+  content.append(...contentItems.map(createAppTranscriptCard));
   group.append(summary, content);
   return group;
+}
+
+async function loadHistoricalProcessDetails(turnId) {
+  const sessionId = activeSessionId;
+  if (!sessionId || !turnId) return;
+  historicalProcessLoading.add(turnId);
+  try {
+    const response = await fetch(
+      `/api/session-process/${encodeURIComponent(sessionId)}/${encodeURIComponent(turnId)}`,
+      { cache: "no-store" },
+    );
+    if (response.status === 401) {
+      redirectToLogin();
+      return;
+    }
+    const payload = response.ok ? await response.json() : { items: [] };
+    if (activeSessionId !== sessionId) return;
+    const items = (Array.isArray(payload.items) ? payload.items : [])
+      .map(normalizeClientTranscriptItem)
+      .filter(isProcessTranscriptItem);
+    historicalProcessDetails.set(turnId, items);
+  } catch {
+    if (activeSessionId === sessionId) historicalProcessDetails.set(turnId, []);
+  } finally {
+    historicalProcessLoading.delete(turnId);
+    if (activeSessionId === sessionId) renderAppTranscript({ follow: false });
+  }
 }
 
 function isRunningTranscriptItem(item) {

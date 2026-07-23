@@ -1317,6 +1317,20 @@ input {
   word-break: break-word;
 }
 
+.app-transcript-image-link {
+  color: #b8c9ff;
+  overflow-wrap: anywhere;
+  text-decoration: underline;
+  text-decoration-color: rgba(184, 201, 255, 0.42);
+  text-underline-offset: 3px;
+}
+
+.app-transcript-image-link:hover,
+.app-transcript-image-link:focus-visible {
+  color: #e0e7ff;
+  text-decoration-color: currentColor;
+}
+
 .app-transcript-markdown {
   min-width: 0;
   max-width: 100%;

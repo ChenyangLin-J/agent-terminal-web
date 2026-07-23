@@ -41,6 +41,7 @@ import {
   normalizeAccessMode,
   preferredAccessForCodexSession,
 } from "./lib/session-access.js";
+import { viewedImagePath } from "./lib/session-image.js";
 import {
   extractSessionConversationFromJsonl,
   extractSessionPreviewFromJsonl,
@@ -307,6 +308,33 @@ app.get("/open/local", async (req, res) => {
 });
 
 app.use("/api", requireAuth);
+
+app.get("/api/session-image/:sessionId/:itemId", async (req, res) => {
+  const session = sessions.get(String(req.params.sessionId || ""));
+  const filePath = viewedImagePath(session, req.params.itemId);
+  if (!filePath) {
+    res.status(404).send("This image is not available in the current Agent session.");
+    return;
+  }
+
+  try {
+    const realFilePath = await fs.realpath(filePath);
+    const stat = await fs.stat(realFilePath);
+    const presentation = localFilePresentation(realFilePath, stat.size, {
+      maxTextBytes: MAX_LOCAL_TEXT_BYTES,
+      maxPreviewBytes: MAX_LOCAL_PREVIEW_BYTES,
+    });
+    if (!stat.isFile() || presentation.kind !== "inline" || !presentation.mime.startsWith("image/")) {
+      throw new Error("Not a supported image");
+    }
+    res.set("Cache-Control", "private, no-store");
+    res.set("X-Content-Type-Options", "nosniff");
+    res.type(presentation.mime);
+    res.sendFile(realFilePath);
+  } catch {
+    res.status(404).send("This image no longer exists.");
+  }
+});
 
 app.get("/api/projects", async (_req, res) => {
   const entries = await fs.readdir(WORKSPACE_ROOT, { withFileTypes: true });

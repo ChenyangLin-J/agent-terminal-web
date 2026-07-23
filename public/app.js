@@ -3322,7 +3322,16 @@ function createAppTranscriptCard(item) {
   if (item.text) {
     const copy = document.createElement(item.type === "command" ? "code" : "div");
     copy.className = item.type === "command" ? "app-transcript-command-text" : "app-transcript-copy";
-    if (["assistant", "user"].includes(item.type) && globalThis.AgentMarkdown) {
+    if (item.type === "tool" && item.label === "查看图片" && activeSessionId) {
+      const link = document.createElement("a");
+      link.className = "app-transcript-image-link";
+      link.href = `/api/session-image/${encodeURIComponent(activeSessionId)}/${encodeURIComponent(item.id)}`;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.title = "打开图片";
+      link.textContent = item.text;
+      copy.append(link);
+    } else if (["assistant", "user"].includes(item.type) && globalThis.AgentMarkdown) {
       globalThis.AgentMarkdown.render(copy, item.text, appMarkdownRenderer);
     } else {
       copy.textContent = item.text;

@@ -87,6 +87,44 @@ test("older process details stream from outside the recent tail", async (t) => {
   assert.equal(items[0].text, "较早的处理过程");
 });
 
+test("exec orchestration restores nested commands instead of the exec wrapper", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "agent-session-process-exec-"));
+  const file = path.join(directory, "rollout.jsonl");
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const meta = { turn_id: "turn-exec" };
+  const records = [
+    response("custom_tool_call", {
+      id: "exec-item",
+      name: "exec",
+      call_id: "exec-call",
+      input: `const results = await Promise.all([
+        tools.exec_command({cmd:"/bin/bash -lc 'git status --short'",workdir:"/workspace/project"}),
+        tools.view_image({path:"/tmp/preview.png",detail:"original"})
+      ]); for (const result of results) text(result.output);`,
+      internal_chat_message_metadata_passthrough: meta,
+    }),
+    response("custom_tool_call_output", {
+      call_id: "exec-call",
+      output: [
+        { type: "input_text", text: "Script completed\nWall time 0.1 seconds\nOutput:\n" },
+        { type: "input_text", text: " M public/app.js\n" },
+        { type: "input_text", text: "" },
+      ],
+      internal_chat_message_metadata_passthrough: meta,
+    }),
+  ];
+  await fs.writeFile(file, `${records.map(JSON.stringify).join("\n")}\n`);
+
+  const items = await extractSessionProcessFromJsonl(file, "turn-exec");
+
+  assert.deepEqual(items.map((item) => item.type), ["command", "tool"]);
+  assert.equal(items[0].text, "git status --short");
+  assert.equal(items[0].output, "M public/app.js");
+  assert.equal(items[1].label, "查看图片");
+  assert.equal(items[1].text, "/tmp/preview.png");
+  assert.equal(items.some((item) => item.text === "exec"), false);
+});
+
 test("historical process details load only when a restored group is expanded", async () => {
   const [server, app] = await Promise.all([
     fs.readFile(new URL("../server.js", import.meta.url), "utf8"),

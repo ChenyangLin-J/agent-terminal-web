@@ -42,6 +42,7 @@ import {
   preferredAccessForCodexSession,
 } from "./lib/session-access.js";
 import { viewedImagePath } from "./lib/session-image.js";
+import { commandDisplayText } from "./lib/command-display.js";
 import {
   extractSessionConversationFromJsonl,
   extractSessionPreviewFromJsonl,
@@ -2912,8 +2913,9 @@ function appTranscriptFromThreadItem(session, item, context = {}) {
       status: item.status || "",
     };
   }
+  if (item.type === "dynamicToolCall" && appServerToolLeafName(item) === "exec") return null;
   if (["mcpToolCall", "dynamicToolCall", "collabAgentToolCall"].includes(item.type)) {
-    const name = [item.server, item.namespace, item.tool].filter(Boolean).join(" · ") || "工具";
+    const name = appServerToolName(item);
     return {
       ...base,
       type: "tool",
@@ -3255,10 +3257,15 @@ function formatDuration(durationMs) {
 }
 
 function appServerCommandText(item) {
-  if (typeof item.command === "string") return item.command;
-  if (Array.isArray(item.command)) return item.command.join(" ");
-  if (typeof item.cmd === "string") return item.cmd;
-  return "";
+  return commandDisplayText(item.cmd || item.command);
+}
+
+function appServerToolName(item) {
+  return [item.server, item.namespace, item.tool].filter(Boolean).join(" · ") || "工具";
+}
+
+function appServerToolLeafName(item) {
+  return String(item.tool || item.namespace || item.server || "");
 }
 
 function handleAppServerRequest(session, message) {

@@ -18,6 +18,8 @@ test("App Server resume restores structured history and keeps raw text available
   assert.match(server, /item\.type === "userMessage"/);
   assert.match(server, /item\.type === "agentMessage"/);
   assert.match(server, /item\.type === "commandExecution"/);
+  assert.match(server, /item\.type === "dynamicToolCall" && appServerToolLeafName\(item\) === "exec"/);
+  assert.match(server, /return commandDisplayText\(item\.cmd \|\| item\.command\)/);
 
   assert.match(page, /id="app-server-view"/);
   assert.match(app, /terminalTabButton\.textContent = isAppServer \? "对话" : "Terminal"/);

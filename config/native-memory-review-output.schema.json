@@ -20,6 +20,7 @@
         "additionalProperties": false,
         "properties": {
           "action": { "type": "string", "enum": ["create", "update", "retire"] },
+          "mergePendingId": { "type": "string" },
           "targetId": { "type": "string" },
           "scope": { "type": "string", "enum": ["global"] },
           "project": { "type": "string" },
@@ -35,7 +36,7 @@
           "evidenceQuote": { "type": "string" },
           "rationale": { "type": "string" }
         },
-        "required": ["action", "targetId", "scope", "project", "aliases", "category", "text", "confidence", "explicit", "conflict", "sensitive", "evidenceThreadId", "evidenceTitle", "evidenceQuote", "rationale"]
+        "required": ["action", "mergePendingId", "targetId", "scope", "project", "aliases", "category", "text", "confidence", "explicit", "conflict", "sensitive", "evidenceThreadId", "evidenceTitle", "evidenceQuote", "rationale"]
       }
     },
     "projectRules": {
@@ -45,6 +46,7 @@
         "additionalProperties": false,
         "properties": {
           "id": { "type": "string" },
+          "mergePendingId": { "type": "string" },
           "action": { "type": "string", "enum": ["create", "update", "delete"] },
           "project": { "type": "string" },
           "category": { "type": "string" },
@@ -58,7 +60,7 @@
           "evidenceQuote": { "type": "string" },
           "rationale": { "type": "string" }
         },
-        "required": ["id", "action", "project", "category", "text", "before", "confidence", "explicit", "conflict", "evidenceThreadId", "evidenceTitle", "evidenceQuote", "rationale"]
+        "required": ["id", "mergePendingId", "action", "project", "category", "text", "before", "confidence", "explicit", "conflict", "evidenceThreadId", "evidenceTitle", "evidenceQuote", "rationale"]
       }
     },
     "skills": {
@@ -68,6 +70,7 @@
         "additionalProperties": false,
         "properties": {
           "id": { "type": "string" },
+          "mergePendingId": { "type": "string" },
           "name": { "type": "string" },
           "summary": { "type": "string" },
           "trigger": { "type": "string" },
@@ -79,7 +82,7 @@
           "evidenceQuote": { "type": "string" },
           "rationale": { "type": "string" }
         },
-        "required": ["id", "name", "summary", "trigger", "workflow", "verification", "confidence", "evidenceThreadId", "evidenceTitle", "evidenceQuote", "rationale"]
+        "required": ["id", "mergePendingId", "name", "summary", "trigger", "workflow", "verification", "confidence", "evidenceThreadId", "evidenceTitle", "evidenceQuote", "rationale"]
       }
     }
   },

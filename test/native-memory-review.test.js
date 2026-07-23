@@ -53,10 +53,22 @@ test("native review prompt excludes audit-only decisions and requires transcript
     reviewDecisions: [
       { targetType: "native_review", status: "approved", after: { text: "audit-only-marker" } },
       { targetType: "personal_memory", status: "rejected", after: { text: "candidate" } },
+      {
+        id: "pending-native-one",
+        targetType: "personal_memory",
+        targetPath: "Core.md",
+        entryId: "answer-style",
+        action: "create",
+        status: "pending",
+        after: { text: "希望回答具体且有依据。" },
+      },
     ],
   });
   assert.match(prompt, /original user transcript/);
   assert.match(prompt, /candidate/);
+  assert.match(prompt, /pending-native-one/);
+  assert.match(prompt, /希望回答具体且有依据/);
+  assert.match(prompt, /mergePendingId/);
   assert.doesNotMatch(prompt, /audit-only-marker/);
   assert.equal(verifiedNativeCandidate({ evidenceQuote: "我偏好具体并且有依据的回答" }, ["之前说过：我偏好具体并且有依据的回答。"]), true);
   assert.equal(verifiedNativeCandidate({ evidenceQuote: "可以" }, ["可以"]), false);

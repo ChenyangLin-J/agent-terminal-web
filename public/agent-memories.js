@@ -477,6 +477,7 @@
       rejected: "已拒绝",
       reverted: "已撤回",
       conflict: "有冲突",
+      superseded: "已合并",
     }[value] || value;
   }
 

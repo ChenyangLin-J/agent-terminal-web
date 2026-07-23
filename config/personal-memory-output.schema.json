@@ -10,6 +10,7 @@
         "additionalProperties": false,
         "properties": {
           "action": { "type": "string", "enum": ["create", "update", "retire"] },
+          "mergePendingId": { "type": "string" },
           "targetId": { "type": "string" },
           "scope": { "type": "string", "enum": ["global", "project"] },
           "project": { "type": "string" },
@@ -25,6 +26,7 @@
         },
         "required": [
           "action",
+          "mergePendingId",
           "targetId",
           "scope",
           "project",
@@ -47,6 +49,7 @@
         "additionalProperties": false,
         "properties": {
           "id": { "type": "string" },
+          "mergePendingId": { "type": "string" },
           "action": { "type": "string", "enum": ["create", "update", "delete"] },
           "project": { "type": "string" },
           "category": { "type": "string" },
@@ -58,7 +61,7 @@
           "evidenceQuote": { "type": "string" },
           "rationale": { "type": "string" }
         },
-        "required": ["id", "action", "project", "category", "text", "before", "confidence", "explicit", "conflict", "evidenceQuote", "rationale"]
+        "required": ["id", "mergePendingId", "action", "project", "category", "text", "before", "confidence", "explicit", "conflict", "evidenceQuote", "rationale"]
       }
     },
     "skills": {
@@ -68,6 +71,7 @@
         "additionalProperties": false,
         "properties": {
           "id": { "type": "string" },
+          "mergePendingId": { "type": "string" },
           "name": { "type": "string" },
           "summary": { "type": "string" },
           "trigger": { "type": "string" },
@@ -77,7 +81,7 @@
           "evidenceQuote": { "type": "string" },
           "rationale": { "type": "string" }
         },
-        "required": ["id", "name", "summary", "trigger", "workflow", "verification", "confidence", "evidenceQuote", "rationale"]
+        "required": ["id", "mergePendingId", "name", "summary", "trigger", "workflow", "verification", "confidence", "evidenceQuote", "rationale"]
       }
     }
   },

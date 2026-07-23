@@ -271,6 +271,8 @@ test("Agent Web exposes memory review views and authenticated APIs", async () =>
   assert.match(memoryUi, /没有可整理的已完成内容/);
   assert.match(memoryUi, /正在处理这条变更/);
   assert.match(memoryUi, /没有改写目标/);
+  assert.match(memoryUi, /已合并/);
+  assert.match(styles, /\.memory-change-status-superseded/);
   assert.match(memoryUi, /workspace 一级子目录的 AGENTS\.md/);
   assert.match(memoryUi, /showInlineConfirmation/);
   assert.match(memoryUi, /showInlineEditor/);

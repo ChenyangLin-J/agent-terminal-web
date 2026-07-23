@@ -42,7 +42,13 @@ import {
 } from "../lib/home-capture-memory.js";
 import { recordProjectAndSkillProposals } from "../../memory-system/lib/legacy-adapter.js";
 import { readAllMemoryFiles } from "../../memory-system/lib/markdown-memory.js";
-import { knowledgeChange, readKnowledgeChanges, recordKnowledgeChange } from "../../memory-system/lib/change-ledger.js";
+import {
+  knowledgeChange,
+  mergePendingKnowledgeChange,
+  readKnowledgeChanges,
+  recordKnowledgeChange,
+} from "../../memory-system/lib/change-ledger.js";
+import { syncPendingPersonalStore } from "../../memory-system/lib/pending-personal-store.js";
 import { memorySystemPaths } from "../../memory-system/lib/paths.js";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -127,7 +133,7 @@ async function run() {
   await reconcilePersonalMemoryMarkdown(CODEX_HOME);
 
   const threads = listEligibleThreads();
-  const reviewHistory = await readKnowledgeChanges({
+  let reviewHistory = await readKnowledgeChanges({
     codexHome: CODEX_HOME,
     workspaceRoot: WORKSPACE_ROOT,
   });
@@ -141,6 +147,9 @@ async function run() {
     summary.nativeCandidates += nativeReview.pending;
     summary.pending += nativeReview.pending;
     pendingCreated += nativeReview.pending;
+    if (nativeReview.reviewed) {
+      reviewHistory = await readKnowledgeChanges({ codexHome: CODEX_HOME, workspaceRoot: WORKSPACE_ROOT });
+    }
   } catch (error) {
     summary.failed += 1;
     lastError = `Codex 原生记忆对照：${error.message}`.slice(0, 2_000);
@@ -153,6 +162,9 @@ async function run() {
     summary.homeCandidates += homeReview.pending;
     summary.pending += homeReview.pending;
     pendingCreated += homeReview.pending;
+    if (homeReview.reviewed) {
+      reviewHistory = await readKnowledgeChanges({ codexHome: CODEX_HOME, workspaceRoot: WORKSPACE_ROOT });
+    }
   } catch (error) {
     summary.failed += 1;
     lastError = `Home 语音记忆整理：${error.message}`.slice(0, 2_000);
@@ -199,7 +211,7 @@ async function run() {
       const proposals = Array.isArray(extraction.output?.proposals)
         ? extraction.output.proposals.filter((proposal) => proposal?.scope === "global")
         : [];
-      const results = await applyPersonalMemoryProposals(CODEX_HOME, proposals, {
+      const results = await applyOrMergePersonalMemoryProposals(proposals, {
         threadId: thread.id,
         title: thread.title,
         source: thread.source,
@@ -223,6 +235,7 @@ async function run() {
       summary.confirmed += knowledgeProposals.filter((change) => change.status === "auto_applied").length;
       pendingCreated += pendingKnowledge;
       runtime.threads[thread.id] = nextState;
+      reviewHistory = await readKnowledgeChanges({ codexHome: CODEX_HOME, workspaceRoot: WORKSPACE_ROOT });
     } catch (error) {
       summary.failed += 1;
       lastError = `${thread.title || thread.id}: ${error.message}`.slice(0, 2_000);
@@ -336,7 +349,7 @@ async function reviewNativeMemory(reviewDecisions, runtime) {
       source: "codex-native-review",
     };
     if (item.type === "personal") {
-      const results = await applyPersonalMemoryProposals(CODEX_HOME, [{
+      const results = await applyOrMergePersonalMemoryProposals([{
         ...item.candidate,
         scope: "global",
         project: "",
@@ -413,7 +426,7 @@ async function reviewHomeCaptures(reviewDecisions, runtime) {
     const capture = capturesById.get(String(proposal?.evidenceCaptureId || ""));
     if (!capture || !verifiedHomeCaptureProposal(proposal, capture)) continue;
     const itemTypes = [...new Set(capture.items.map((item) => item.type).filter(Boolean))];
-    const results = await applyPersonalMemoryProposals(CODEX_HOME, [{
+    const results = await applyOrMergePersonalMemoryProposals([{
       ...proposal,
       scope: "global",
       project: "",
@@ -432,6 +445,61 @@ async function reviewHomeCaptures(reviewDecisions, runtime) {
     reviewedHomeCaptureState(previousState, batch.captures),
   );
   return { reviewed: batch.captures.length, pending };
+}
+
+async function applyOrMergePersonalMemoryProposals(proposals, source) {
+  const results = [];
+  for (const proposal of Array.isArray(proposals) ? proposals : []) {
+    const mergePendingId = String(proposal?.mergePendingId || "").trim();
+    if (mergePendingId) {
+      const ledger = await readKnowledgeChanges({ codexHome: CODEX_HOME, workspaceRoot: WORKSPACE_ROOT });
+      const pending = ledger.changes.find(
+        (change) =>
+          change.id === mergePendingId &&
+          change.status === "pending" &&
+          change.targetType === "personal_memory",
+      );
+      const action = proposal.action === "retire" ? "delete" : proposal.action === "update" ? "update" : "create";
+      if (!pending || pending.action !== action) {
+        results.push({ action: "merge-skipped", id: mergePendingId, status: "ignored" });
+        continue;
+      }
+      try {
+        const merged = await mergePendingKnowledgeChange(mergePendingId, {
+          targetType: "personal_memory",
+          targetPath: pending.targetPath,
+          entryId: String(proposal.targetId || ""),
+          action,
+          after: action === "delete"
+            ? null
+            : {
+                text: String(proposal.text || ""),
+                category: String(proposal.category || "其他"),
+                sensitive: Boolean(proposal.sensitive),
+              },
+          rationale: String(proposal.rationale || ""),
+          evidence: [{
+            threadId: String(source?.threadId || ""),
+            title: String(source?.title || "未命名 Session"),
+            quote: String(proposal.evidenceQuote || ""),
+          }],
+          confidence: Number(proposal.confidence) || 0,
+          source: String(source?.source || "session-worker"),
+        }, { codexHome: CODEX_HOME, workspaceRoot: WORKSPACE_ROOT });
+        await syncPendingPersonalStore(merged, [], {
+          codexHome: CODEX_HOME,
+          workspaceRoot: WORKSPACE_ROOT,
+        });
+        results.push({ action: "merged-pending", id: merged.id, status: "merged" });
+      } catch (error) {
+        if (error?.code !== "PENDING_CHANGE_MERGE_INVALID" && error?.code !== "KNOWLEDGE_CHANGE_NOT_FOUND") throw error;
+        results.push({ action: "merge-skipped", id: mergePendingId, status: "ignored" });
+      }
+      continue;
+    }
+    results.push(...await applyPersonalMemoryProposals(CODEX_HOME, [proposal], source));
+  }
+  return results;
 }
 
 function homeCaptureTypeLabel(type) {

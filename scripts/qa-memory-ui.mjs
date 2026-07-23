@@ -37,6 +37,10 @@ try {
     assert.equal(await nativeAudit.count(), 1, `${viewport.name}: expected one native memory audit`);
     assert.match(await nativeAudit.textContent(), /已检查/);
     assert.equal(await nativeAudit.locator("button").count(), 0, `${viewport.name}: native audits must be read-only`);
+    const mergedAudit = page.locator(".memory-change-card").filter({ hasText: "已合并至待审批候选" });
+    assert.equal(await mergedAudit.count(), 1, `${viewport.name}: expected one merged pending audit`);
+    assert.match(await mergedAudit.textContent(), /已合并/);
+    assert.equal(await mergedAudit.locator("button").count(), 0, `${viewport.name}: merged audits must be read-only`);
     await nativeAudit.scrollIntoViewIfNeeded();
     await page.screenshot({ path: `/tmp/memory-system-${viewport.name}-native-review.png`, fullPage: true });
     const geometry = await page.evaluate(() => {
@@ -94,6 +98,20 @@ function memoryPayload(view) {
       confidence: 0.88,
     },
     {
+      id: "change-superseded",
+      targetType: "personal_memory",
+      targetPath: "Core.md",
+      entryId: "old-answer-style",
+      action: "create",
+      status: "superseded",
+      before: null,
+      after: { text: "喜欢有依据的回答。", category: "交流偏好" },
+      rationale: "与另一条待审批候选重复，证据已合并。",
+      reviewReason: "已合并至待审批候选 change-update",
+      evidence: [{ threadId: "thread-old", title: "回答偏好", quote: "希望有依据" }],
+      confidence: 0.88,
+    },
+    {
       id: "native-review-one",
       targetType: "native_review",
       targetPath: "/home/ubuntu/.codex/memories",
@@ -127,7 +145,7 @@ function memoryPayload(view) {
       runtime: { initializedAt: "2026-07-21T00:00:00Z", status: "idle", usage: { days: {}, lastAlertedDay: "" }, lastRun: { scanned: 14, eligible: 0, processed: 0, homeCapturesReviewed: 5 } },
     },
     knowledge: {
-      counts: { total: 29, pending: 2, auto_applied: 18, project_rule: 11 },
+      counts: { total: 30, pending: 2, superseded: 1, auto_applied: 18, project_rule: 11 },
       changes: selected,
     },
     projectRules: {

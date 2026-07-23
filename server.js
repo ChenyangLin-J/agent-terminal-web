@@ -3943,7 +3943,7 @@ function knowledgeChangeView(changes, view) {
       result[change.targetType] = (result[change.targetType] || 0) + 1;
       return result;
     },
-    { total: 0, pending: 0, auto_applied: 0, approved: 0, rejected: 0, reverted: 0, conflict: 0, personal_memory: 0, project_rule: 0, skill: 0, native_review: 0 },
+    { total: 0, pending: 0, auto_applied: 0, approved: 0, rejected: 0, reverted: 0, conflict: 0, superseded: 0, personal_memory: 0, project_rule: 0, skill: 0, native_review: 0 },
   );
   const selected = view === "pending"
     ? all.filter((change) => change.status === "pending")

@@ -36,14 +36,26 @@ test("worker reads only user and final-answer events after its watermark", () =>
     },
     conversation,
     existingEntries: [],
-    reviewDecisions: [{
-      targetType: "project_rule",
-      targetPath: "/workspace/home-portal/AGENTS.md",
-      status: "rejected",
-      after: { text: "Home Session 标题保持一致。" },
-      rationale: "系统曾把它当成项目规则。",
-      reviewReason: "这是产品验收标准。",
-    }],
+    reviewDecisions: [
+      {
+        targetType: "project_rule",
+        targetPath: "/workspace/home-portal/AGENTS.md",
+        status: "rejected",
+        after: { text: "Home Session 标题保持一致。" },
+        rationale: "系统曾把它当成项目规则。",
+        reviewReason: "这是产品验收标准。",
+      },
+      {
+        id: "pending-core-one",
+        targetType: "personal_memory",
+        targetPath: "Core.md",
+        entryId: "knowledge-habit",
+        action: "create",
+        status: "pending",
+        after: { category: "工作习惯", text: "习惯把知识放在脑中。" },
+        evidence: [{ threadId: "earlier", quote: "我都放脑子里" }],
+      },
+    ],
   });
   assert.match(prompt, /untrusted data/);
   assert.match(prompt, /"memoryProjectMode":"manual"/);
@@ -61,6 +73,9 @@ test("worker reads only user and final-answer events after its watermark", () =>
   assert.match(prompt, /Home Session 标题保持一致/);
   assert.match(prompt, /系统曾把它当成项目规则/);
   assert.match(prompt, /这是产品验收标准/);
+  assert.match(prompt, /pending-core-one/);
+  assert.match(prompt, /习惯把知识放在脑中/);
+  assert.match(prompt, /mergePendingId/);
 });
 
 test("worker ignores synthetic probes and records usage without imposing a cap", () => {

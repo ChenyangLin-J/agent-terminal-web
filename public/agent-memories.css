@@ -417,7 +417,8 @@
 }
 
 .memory-change-status-rejected,
-.memory-change-status-reverted {
+.memory-change-status-reverted,
+.memory-change-status-superseded {
   color: #aeb8ca;
   background: #242b37;
 }

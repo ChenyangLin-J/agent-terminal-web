@@ -10,6 +10,7 @@
         "additionalProperties": false,
         "properties": {
           "action": { "type": "string", "enum": ["create", "update", "retire"] },
+          "mergePendingId": { "type": "string" },
           "targetId": { "type": "string" },
           "category": { "type": "string" },
           "text": { "type": "string" },
@@ -20,7 +21,7 @@
           "evidenceQuote": { "type": "string" },
           "rationale": { "type": "string" }
         },
-        "required": ["action", "targetId", "category", "text", "confidence", "conflict", "sensitive", "evidenceCaptureId", "evidenceQuote", "rationale"]
+        "required": ["action", "mergePendingId", "targetId", "category", "text", "confidence", "conflict", "sensitive", "evidenceCaptureId", "evidenceQuote", "rationale"]
       }
     }
   },

@@ -31,9 +31,23 @@ test("Home capture memory reviews completed voice captures incrementally", async
 
 test("Home capture prompt keeps tasks in Home and verifies exact evidence", () => {
   const capture = { id: "voice-1", createdAt: "", rawText: "我希望长期学习藏语，但不想设置任何学习 KPI。", items: [{ type: "thought", markdown: "原文" }] };
-  const prompt = buildHomeCaptureMemoryPrompt({ captures: [capture] });
+  const prompt = buildHomeCaptureMemoryPrompt({
+    captures: [capture],
+    reviewDecisions: [{
+      id: "pending-tibetan-one",
+      targetType: "personal_memory",
+      targetPath: "Core.md",
+      entryId: "tibetan-learning",
+      action: "create",
+      status: "pending",
+      after: { category: "近期学习", text: "正在长期学习藏语。" },
+    }],
+  });
   assert.match(prompt, /A task remains a Home task/);
   assert.match(prompt, /requires user approval/);
+  assert.match(prompt, /pending-tibetan-one/);
+  assert.match(prompt, /正在长期学习藏语/);
+  assert.match(prompt, /mergePendingId/);
   assert.equal(verifiedHomeCaptureProposal({ evidenceCaptureId: "voice-1", evidenceQuote: "长期学习藏语，但不想设置任何学习 KPI" }, capture), true);
   assert.equal(verifiedHomeCaptureProposal({ evidenceCaptureId: "voice-2", evidenceQuote: "长期学习藏语，但不想设置任何学习 KPI" }, capture), false);
   assert.equal(verifiedHomeCaptureProposal({ evidenceCaptureId: "voice-1", evidenceQuote: "买牛奶" }, capture), false);

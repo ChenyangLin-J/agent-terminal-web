@@ -73,6 +73,84 @@ test("uploads remain separate from prompt text and render as removable attachmen
   });
 });
 
+test("submission can wait until an in-flight upload becomes an attachment", async (t) => {
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  await page.setContent(`
+    <button id="attach"></button>
+    <input id="files" type="file" multiple>
+    <section id="composer"></section>
+    <div id="attachments" class="hidden"></div>
+    <div id="status"></div>
+  `);
+  await page.addScriptTag({ path: fileURLToPath(new URL("../public/agent-upload.js", import.meta.url)) });
+
+  const result = await page.evaluate(async () => {
+    let completeUpload;
+    class DelayedUploadRequest extends EventTarget {
+      upload = new EventTarget();
+      status = 200;
+      responseText = JSON.stringify({
+        files: [
+          {
+            path: "/home/ubuntu/workspace/uploads/2026-07-25/lesson.pdf",
+            originalName: "lesson.pdf",
+            storedName: "lesson.pdf",
+            size: 42,
+            mime: "application/pdf",
+          },
+        ],
+      });
+
+      open() {}
+
+      send() {
+        completeUpload = () => this.dispatchEvent(new Event("load"));
+      }
+    }
+    window.XMLHttpRequest = DelayedUploadRequest;
+
+    const controller = window.AgentUpload.create({
+      attachButton: document.querySelector("#attach"),
+      fileInput: document.querySelector("#files"),
+      composer: document.querySelector("#composer"),
+      attachmentsHost: document.querySelector("#attachments"),
+      setUploadStatus: (message) => {
+        document.querySelector("#status").textContent = message;
+      },
+      redirectToLogin: () => {},
+    });
+    controller.install();
+
+    const upload = controller.uploadFiles([new File(["lesson"], "lesson.pdf", { type: "application/pdf" })]);
+    const waiting = controller.waitForUploads();
+    const beforeResponse = {
+      attachmentCount: controller.getAttachments().length,
+      attachDisabled: document.querySelector("#attach").disabled,
+    };
+    completeUpload();
+    const uploadsReady = await waiting;
+    await upload;
+
+    return {
+      beforeResponse,
+      uploadsReady,
+      attachmentCount: controller.getAttachments().length,
+      attachmentName: controller.getAttachments()[0]?.originalName,
+      attachDisabled: document.querySelector("#attach").disabled,
+    };
+  });
+
+  assert.deepEqual(result, {
+    beforeResponse: { attachmentCount: 0, attachDisabled: true },
+    uploadsReady: true,
+    attachmentCount: 1,
+    attachmentName: "lesson.pdf",
+    attachDisabled: false,
+  });
+});
+
 test("attachment submissions use native App Server inputs and validated upload paths", async () => {
   const [server, app, upload] = await Promise.all([
     readFile(new URL("../server.js", import.meta.url), "utf8"),
@@ -81,8 +159,12 @@ test("attachment submissions use native App Server inputs and validated upload p
   ]);
 
   assert.doesNotMatch(upload, /请读取这个文件（原始文件名/);
+  assert.match(app, /await uploadController\.waitForUploads\(\)/);
+  assert.ok(app.indexOf("await uploadController.waitForUploads()") < app.indexOf("uploadController.getAttachments()"));
   assert.match(app, /data: prompt,\s+attachments,/);
   assert.match(server, /normalizeSubmittedAttachments\(message\.attachments\)/);
+  assert.match(server, /attachmentCount: attachments\.length/);
+  assert.match(server, /event: "upload-complete"|logAgentEvent\("upload-complete"/);
   assert.match(server, /isPathInside\(uploadsRoot, filePath\)/);
   assert.match(server, /\{ type: "localImage", path: attachment\.path \}/);
   assert.match(server, /\{ type: "mention", name: attachment\.originalName, path: attachment\.path \}/);

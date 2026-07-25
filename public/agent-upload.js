@@ -9,10 +9,12 @@
   }) {
     const maxPendingAttachments = 5;
     let pendingAttachments = [];
+    const activeUploads = new Set();
 
     return {
       install,
       uploadFiles,
+      waitForUploads,
       getAttachments,
       clearAttachments,
       restoreAttachments,
@@ -27,14 +29,24 @@
       installComposerDragUpload();
     }
 
-    async function uploadFiles(fileList) {
+    function uploadFiles(fileList) {
       const files = [...(fileList || [])];
-      if (!files.length) return;
+      if (!files.length) return Promise.resolve(true);
 
+      const upload = performUpload(files);
+      activeUploads.add(upload);
+      setUploading(true);
+      void upload.finally(() => {
+        activeUploads.delete(upload);
+        setUploading(activeUploads.size > 0);
+      });
+      return upload;
+    }
+
+    async function performUpload(files) {
       const form = new FormData();
       for (const file of files) form.append("files", file);
 
-      setUploading(true);
       const progress = createUploadProgress(files);
       progress.start();
 
@@ -43,7 +55,7 @@
 
         if (response.status === 401) {
           redirectToLogin();
-          return;
+          return false;
         }
 
         const data = response.data;
@@ -53,12 +65,22 @@
         setUploadStatus(`Attached ${(data.files || []).length} file${(data.files || []).length === 1 ? "" : "s"}.`, {
           clear: true,
         });
+        return true;
       } catch (error) {
         setUploadStatus(error.message || "Upload failed.");
+        return false;
       } finally {
         progress.stop();
-        setUploading(false);
       }
+    }
+
+    async function waitForUploads() {
+      let successful = true;
+      while (activeUploads.size) {
+        const results = await Promise.all([...activeUploads]);
+        successful = results.every(Boolean) && successful;
+      }
+      return successful;
     }
 
     function uploadForm(form, progress) {

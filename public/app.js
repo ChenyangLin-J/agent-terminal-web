@@ -160,6 +160,7 @@ let terminalHistoryRevision = null;
 let terminalHistoryFlushTimer = null;
 let terminalHistoryUiReady = false;
 let uploadStatusTimer = null;
+let promptSubmissionPending = false;
 let liveSessionsByCodexId = new Map();
 let archivedSessionsExpanded = false;
 let latestTurnState = {
@@ -1026,33 +1027,45 @@ function openSocket(params, options = {}) {
   });
 }
 
-function submitPrompt(deliveryMode = "auto") {
-  const prompt = promptInput.value.trim();
-  const attachments = uploadController.getAttachments();
-  if (!prompt && !attachments.length) return;
-  if (!attachments.length && activeTransport === "app-server" && runAppComposerCommand(prompt)) return;
-  if (notificationTarget.app === "agent") {
-    void ensureAgentPushSubscription({ requestPermission: true }).catch(logPushRegistrationError);
-  }
-  if (
-    send({
-      type: "submit",
-      data: prompt,
-      attachments,
-      deliveryMode,
-      skills: activeTransport === "app-server" ? extractSkillMentions(prompt) : [],
-      notificationApp: notificationTarget.app,
-      notificationDeviceId: pushDeviceId,
-    })
-  ) {
-    lastSubmittedPrompt = prompt;
-    lastSubmittedAttachments = attachments;
-    promptInput.value = "";
-    uploadController.clearAttachments();
-    hideComposerSuggestions();
-    setUploadStatus("正在发送…");
-  } else {
-    setUploadStatus("连接恢复中，文本已保留。");
+async function submitPrompt(deliveryMode = "auto") {
+  if (promptSubmissionPending) return;
+  promptSubmissionPending = true;
+  try {
+    const uploadsReady = await uploadController.waitForUploads();
+    if (!uploadsReady) {
+      setUploadStatus("附件上传失败，文字和已成功的附件都未发送，请重试上传。");
+      return;
+    }
+
+    const prompt = promptInput.value.trim();
+    const attachments = uploadController.getAttachments();
+    if (!prompt && !attachments.length) return;
+    if (!attachments.length && activeTransport === "app-server" && runAppComposerCommand(prompt)) return;
+    if (notificationTarget.app === "agent") {
+      void ensureAgentPushSubscription({ requestPermission: true }).catch(logPushRegistrationError);
+    }
+    if (
+      send({
+        type: "submit",
+        data: prompt,
+        attachments,
+        deliveryMode,
+        skills: activeTransport === "app-server" ? extractSkillMentions(prompt) : [],
+        notificationApp: notificationTarget.app,
+        notificationDeviceId: pushDeviceId,
+      })
+    ) {
+      lastSubmittedPrompt = prompt;
+      lastSubmittedAttachments = attachments;
+      promptInput.value = "";
+      uploadController.clearAttachments();
+      hideComposerSuggestions();
+      setUploadStatus("正在发送…");
+    } else {
+      setUploadStatus("连接恢复中，文本已保留。");
+    }
+  } finally {
+    promptSubmissionPending = false;
   }
 }
 

@@ -1476,7 +1476,10 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
         const requirementText = normalized || attachmentRequirementText(attachments);
         rememberNotificationTarget(session, message.notificationApp, message.notificationDeviceId);
         renewSessionRetention(session);
-        logControlMessage(session, ws, "submit", requirementText);
+        logControlMessage(session, ws, "submit", requirementText, {
+          attachmentCount: attachments.length,
+          attachmentBytes: attachments.reduce((total, attachment) => total + attachment.size, 0),
+        });
         if (!session.title) session.title = cleanTitle(requirementText) || "New Codex session";
         const prompt = prepareSessionPrompt(session, normalized);
         const skillNames = requestedAppSkillNames(prompt.text, message.skills);
@@ -1774,7 +1777,7 @@ function closeDuplicateClient(session, ws) {
   }
 }
 
-function logControlMessage(session, ws, kind, data) {
+function logControlMessage(session, ws, kind, data, fields = {}) {
   logAgentEvent("client-control", {
     webSessionId: session.id,
     codexSessionId: session.sessionId,
@@ -1782,6 +1785,7 @@ function logControlMessage(session, ws, kind, data) {
     kind,
     dataBytes: Buffer.byteLength(String(data || ""), "utf8"),
     clients: session.clients.size,
+    ...fields,
   });
 }
 
@@ -1955,6 +1959,10 @@ async function handleUpload(req, res) {
         return;
       }
       responded = true;
+      logAgentEvent("upload-complete", {
+        fileCount: savedFiles.length,
+        totalBytes: savedFiles.reduce((total, file) => total + file.size, 0),
+      });
       res.json({ files: savedFiles });
     } catch (error) {
       await fail(400, `Upload failed: ${error.message}`);

@@ -180,6 +180,7 @@ app.post("/internal/codex-notify", async (req, res) => {
   persistCompletedSessionPreview(session, event["last-assistant-message"]);
   completeTrackedTurn(session, String(event["turn-id"] || ""));
   session.lastActivityAt = new Date().toISOString();
+  resetDetachedCleanupAfterWork(session);
   persistRestorableWebSession(session);
   broadcast(session, "status", publicSession(session));
   personalMemoryScheduler.schedule(threadId || session.id);
@@ -1803,6 +1804,26 @@ function scheduleCleanup(session) {
     expiresAt,
   });
   session.cleanupTimer = setTimeout(() => {
+    session.cleanupTimer = null;
+    if (session.clients.size > 0) {
+      renewSessionRetention(session);
+      logAgentEvent("cleanup-cancelled", {
+        webSessionId: session.id,
+        codexSessionId: session.sessionId,
+        reason: "client-reconnected",
+      });
+      return;
+    }
+    if (!session.exited && sessionHasActiveWork(session)) {
+      session.detachedAt = null;
+      persistRestorableWebSession(session);
+      logAgentEvent("cleanup-deferred", {
+        webSessionId: session.id,
+        codexSessionId: session.sessionId,
+        reason: "active-work",
+      });
+      return;
+    }
     if (!session.exited) {
       logAgentEvent("terminal-kill", {
         webSessionId: session.id,
@@ -1828,6 +1849,20 @@ function renewSessionRetention(session) {
   }
 }
 
+function sessionHasActiveWork(session) {
+  return Boolean(
+    session?.turnState?.active ||
+      session?.appServer?.activeTurnId ||
+      session?.pendingStartupPrompts?.length,
+  );
+}
+
+function resetDetachedCleanupAfterWork(session) {
+  if (session.clients.size > 0 || session.exited || sessionHasActiveWork(session)) return;
+  renewSessionRetention(session);
+  scheduleCleanup(session);
+}
+
 function validSessionTimestamp(value) {
   const timestamp = String(value || "").trim();
   return timestamp && Number.isFinite(Date.parse(timestamp)) ? new Date(timestamp).toISOString() : null;
@@ -1847,6 +1882,7 @@ function detachedExpiresAt(record) {
 }
 
 function persistedSessionExpired(record, now = Date.now()) {
+  if (record?.turnState?.active) return false;
   const expiresAt = detachedExpiresAt(record);
   return expiresAt ? Date.parse(expiresAt) <= now : true;
 }
@@ -3145,6 +3181,7 @@ function handleAppServerNotification(session, message) {
     completeTrackedTurn(session, turnId, { stopped });
     if (turnId) session.personalMemoryCitationsByTurn.delete(turnId);
     session.turnInterruptPending = false;
+    resetDetachedCleanupAfterWork(session);
     appendSessionOutput(
       session,
       stopped ? "\r\n\x1b[33m■ Turn stopped\x1b[0m\r\n" : "\r\n\x1b[32m✓ Turn completed\x1b[0m\r\n",

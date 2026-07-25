@@ -85,6 +85,37 @@ setInterval(() => {}, 1000);
   assert.equal(await sessionIsLive(agentPort, secondStatus.payload.id), true, output);
   await delay(300);
   assert.equal(await sessionIsLive(agentPort, secondStatus.payload.id), false, output);
+
+  const working = await connect(`ws://127.0.0.1:${agentPort}/terminal?cwd=.&clientId=working-client`);
+  const workingStatus = await working.next((message) => message.type === "status");
+  await working.next((message) => message.type === "replay");
+  working.ws.send(JSON.stringify({ type: "submit", data: "keep working while detached" }));
+  await working.next((message) => message.type === "control-ack" && message.payload.kind === "submit");
+  working.ws.close();
+  await waitFor(() => working.ws.readyState === WebSocket.CLOSED, 1000);
+
+  await delay(retentionMs + 200);
+  assert.equal(await sessionIsLive(agentPort, workingStatus.payload.id), true, output);
+  assert.match(output, /"event":"cleanup-deferred".*"reason":"active-work"/);
+
+  const completed = await fetch(`http://127.0.0.1:${agentPort}/internal/codex-notify`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      webSessionId: workingStatus.payload.id,
+      event: {
+        type: "agent-turn-complete",
+        "turn-id": "turn-working",
+        "last-assistant-message": "Finished in the background.",
+      },
+    }),
+  });
+  assert.equal(completed.status, 200);
+
+  await delay(600);
+  assert.equal(await sessionIsLive(agentPort, workingStatus.payload.id), true, output);
+  await delay(300);
+  assert.equal(await sessionIsLive(agentPort, workingStatus.payload.id), false, output);
 });
 
 async function startSession(port, clientId) {

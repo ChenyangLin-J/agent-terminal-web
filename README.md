@@ -153,7 +153,7 @@ Private environment values live in:
 /home/ubuntu/.config/private-web.env
 ```
 
-## External integrations
+## External integrations and shared MCP providers
 
 The authenticated Agent home includes an `集成` manager for external tool credentials.
 Credentials are write-only in the browser: a configured value can be replaced or deleted,
@@ -166,8 +166,8 @@ Integration credentials are stored outside the repository:
 ```
 
 The directory is mode `0700` and each credential file is mode `0600`. Codex does not
-receive the integration key in its parent environment. Agent Web exposes the integration
-to local Codex App Servers through a loopback-only Streamable HTTP MCP endpoint:
+receive the integration key in its parent environment. Agent Web exposes local providers
+to Codex App Servers through loopback-only Streamable HTTP MCP endpoints:
 
 ```toml
 [mcp_servers.amap]
@@ -175,12 +175,29 @@ url = "http://127.0.0.1:3030/internal/mcp/amap"
 enabled = true
 startup_timeout_sec = 10
 tool_timeout_sec = 60
+
+[mcp_servers.playwright]
+url = "http://127.0.0.1:3030/internal/mcp/playwright"
+enabled = true
+startup_timeout_sec = 10
+tool_timeout_sec = 120
 ```
 
 Connecting or listing tools does not start the Amap provider. The first Amap tool call
 starts one provider shared by all Agent sessions, and it exits after 60 seconds without
 another call. Replacing or deleting the credential closes the shared provider immediately.
 Provider results and errors are recursively redacted before they return to Codex.
+
+Playwright follows the same shared lifecycle. Tool discovery uses a versioned manifest;
+the first actual browser call starts Browser Hand-off and one Playwright provider shared
+by all Agent sessions. Browser calls are serialized because they mutate one shared browser
+state. The provider exits after five minutes without a tool call, while Browser Hand-off
+uses its own no-client idle policy so an active human takeover is preserved.
+
+The hidden Catalog App Server, which lists and searches native Codex threads, launches
+with MCP disabled and exits after an idle interval. See
+[`docs/shared-mcp-providers.md`](docs/shared-mcp-providers.md) for the lifecycle and the
+required checklist for future local MCP providers.
 
 Auth service:
 

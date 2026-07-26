@@ -58,6 +58,7 @@ import {
   saveIntegrationCredential,
 } from "./lib/integrations.js";
 import { createAmapMcpProxy } from "./lib/amap-mcp-proxy.js";
+import { createPlaywrightMcpProxy } from "./lib/playwright-mcp-proxy.js";
 
 const AGENT_TIME_ZONE = "Asia/Shanghai";
 process.env.TZ = AGENT_TIME_ZONE;
@@ -124,6 +125,10 @@ const CODEX_NOTIFY_SCRIPT = path.join(__dirname, "scripts", "codex-notify.js");
 const CODEX_GUARD_BIN = path.join(__dirname, "scripts", "codex-guard-bin");
 const AGENT_NOTIFY_URL = process.env.AGENT_NOTIFY_URL || `http://${HOST}:${PORT}/internal/codex-notify`;
 const PERSONAL_MEMORY_SETTLE_MS = Math.max(60_000, Number(process.env.PERSONAL_MEMORY_SETTLE_MS) || 60_000);
+const CATALOG_APP_SERVER_IDLE_MS = Math.max(
+  1_000,
+  Number(process.env.AGENT_CATALOG_IDLE_MS) || 60_000,
+);
 const HOME_PUSH_URL = process.env.HOME_PUSH_URL || "http://127.0.0.1:3050/internal/push";
 const HOME_PUSH_SUBSCRIBE_URL = process.env.HOME_PUSH_SUBSCRIBE_URL || `${HOME_PUSH_URL}/subscriptions`;
 const HOME_VAPID_PUBLIC_KEY = process.env.HOME_VAPID_PUBLIC_KEY || "";
@@ -157,6 +162,8 @@ const sessions = new Map();
 const integrationMutationAttempts = new Map();
 let catalogAppServerClient = null;
 let catalogAppServerStart = null;
+let catalogAppServerIdleTimer = null;
+let catalogAppServerActiveUses = 0;
 const agentInstanceId = cryptoRandomId();
 const personalMemoryScheduler = createPersonalMemoryScheduler({
   delayMs: PERSONAL_MEMORY_SETTLE_MS,
@@ -165,6 +172,9 @@ const personalMemoryScheduler = createPersonalMemoryScheduler({
 });
 const amapMcpProxy = createAmapMcpProxy({
   integrationRoot: AGENT_INTEGRATIONS_DIR,
+  logger: logAgentEvent,
+});
+const playwrightMcpProxy = createPlaywrightMcpProxy({
   logger: logAgentEvent,
 });
 
@@ -265,6 +275,30 @@ app.delete("/internal/mcp/amap", (req, res) => {
     return;
   }
   amapMcpProxy.handleUnsupported(req, res);
+});
+
+app.post("/internal/mcp/playwright", async (req, res) => {
+  if (!isDirectLoopbackRequest(req)) {
+    res.sendStatus(404);
+    return;
+  }
+  await playwrightMcpProxy.handlePost(req, res);
+});
+
+app.get("/internal/mcp/playwright", (req, res) => {
+  if (!isDirectLoopbackRequest(req)) {
+    res.sendStatus(404);
+    return;
+  }
+  playwrightMcpProxy.handleUnsupported(req, res);
+});
+
+app.delete("/internal/mcp/playwright", (req, res) => {
+  if (!isDirectLoopbackRequest(req)) {
+    res.sendStatus(404);
+    return;
+  }
+  playwrightMcpProxy.handleUnsupported(req, res);
 });
 
 app.get("/internal/recent-sessions", async (req, res) => {
@@ -5911,8 +5945,15 @@ function nativeThreadCatalogEnabled() {
 }
 
 async function withStandaloneAppServer(run) {
-  const client = await sharedCatalogAppServer();
-  return run(client);
+  cancelCatalogAppServerIdleStop();
+  catalogAppServerActiveUses += 1;
+  try {
+    const client = await sharedCatalogAppServer();
+    return await run(client);
+  } finally {
+    catalogAppServerActiveUses -= 1;
+    scheduleCatalogAppServerIdleStop();
+  }
 }
 
 async function sharedCatalogAppServer() {
@@ -5923,6 +5964,7 @@ async function sharedCatalogAppServer() {
     const client = new CodexAppServerClient({
       cwd: WORKSPACE_ROOT,
       command: process.env.CODEX_APP_SERVER_COMMAND || "codex",
+      args: ["app-server", "-c", "mcp_servers={}"],
       env: codexEnvironmentForWeb(`catalog-${cryptoRandomId()}`),
     });
     client.on("exit", () => {
@@ -5937,6 +5979,35 @@ async function sharedCatalogAppServer() {
   } finally {
     catalogAppServerStart = null;
   }
+}
+
+function cancelCatalogAppServerIdleStop() {
+  if (!catalogAppServerIdleTimer) return;
+  clearTimeout(catalogAppServerIdleTimer);
+  catalogAppServerIdleTimer = null;
+}
+
+function scheduleCatalogAppServerIdleStop() {
+  if (
+    catalogAppServerActiveUses ||
+    catalogAppServerIdleTimer ||
+    !catalogAppServerClient
+  ) {
+    return;
+  }
+  catalogAppServerIdleTimer = setTimeout(() => {
+    catalogAppServerIdleTimer = null;
+    if (catalogAppServerActiveUses) {
+      scheduleCatalogAppServerIdleStop();
+      return;
+    }
+    const client = catalogAppServerClient;
+    catalogAppServerClient = null;
+    if (!client || client.closed) return;
+    client.close();
+    logAgentEvent("catalog-app-server-stopped", { reason: "idle" });
+  }, CATALOG_APP_SERVER_IDLE_MS);
+  catalogAppServerIdleTimer.unref?.();
 }
 
 async function setPersistedThreadName(threadId, title) {

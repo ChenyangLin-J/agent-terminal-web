@@ -42,10 +42,12 @@ const appSessionTaskControl = document.querySelector("#app-session-task-control"
 const appSessionTaskState = document.querySelector("#app-session-task-state");
 const appSessionTaskStop = document.querySelector("#app-session-task-stop");
 const archiveSessionButton = document.querySelector("#archive-session");
+const sessionRestartAgentButton = document.querySelector("#session-restart-agent");
 const killSessionButton = document.querySelector("#kill-session");
 const sessionMenu = document.querySelector("#session-menu");
 const mobileDisconnectButton = document.querySelector("#mobile-disconnect");
 const mobileArchiveSessionButton = document.querySelector("#mobile-archive-session");
+const mobileRestartAgentButton = document.querySelector("#mobile-restart-agent");
 const mobileKillSessionButton = document.querySelector("#mobile-kill-session");
 const attachFileButton = document.querySelector("#attach-file");
 const voiceInputButton = document.querySelector("#voice-input");
@@ -269,6 +271,8 @@ appSessionMemoriesButton.addEventListener("click", openMemoryManager);
 appSessionTaskControl.addEventListener("click", interruptCurrentTurn);
 archiveSessionButton.addEventListener("click", archiveCurrentSession);
 mobileArchiveSessionButton.addEventListener("click", archiveCurrentSession);
+sessionRestartAgentButton.addEventListener("click", restartAgentWeb);
+mobileRestartAgentButton.addEventListener("click", restartAgentWeb);
 killSessionButton.addEventListener("click", endSession);
 mobileKillSessionButton.addEventListener("click", endSession);
 document.addEventListener("click", (event) => {
@@ -341,11 +345,11 @@ async function logout() {
 }
 
 async function restartAgentWeb() {
+  closeSessionMenu();
   const confirmed = window.confirm("重启 Agent Web？所有页面会短暂断连，正在运行的任务可能中断。");
   if (!confirmed) return;
 
-  restartAgentButton.disabled = true;
-  restartAgentLabel.textContent = "准备重启";
+  setRestartAgentControls(true, "准备重启");
   try {
     const previousInstance = await readAgentInstance();
     const response = await fetch(AGENT_RESTART_ENDPOINT, {
@@ -355,15 +359,21 @@ async function restartAgentWeb() {
     });
     if (!response.ok) throw new Error(`restart request failed (${response.status})`);
 
-    restartAgentLabel.textContent = "正在重启";
+    setRestartAgentControls(true, "正在重启");
     const recovered = await waitForAgentRestart(previousInstance);
     if (!recovered) throw new Error("Agent did not return in time");
     window.location.reload();
   } catch (error) {
-    restartAgentButton.disabled = false;
-    restartAgentLabel.textContent = "重启";
+    setRestartAgentControls(false, "重启");
     window.alert(`重启失败：${error.message}`);
   }
+}
+
+function setRestartAgentControls(disabled, label) {
+  restartAgentButton.disabled = disabled;
+  restartAgentLabel.textContent = label;
+  sessionRestartAgentButton.disabled = disabled;
+  mobileRestartAgentButton.disabled = disabled;
 }
 
 async function readAgentInstance() {

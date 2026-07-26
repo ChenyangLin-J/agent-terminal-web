@@ -12,12 +12,13 @@ test("the active Agent session can be archived from the responsive session heade
 
   assert.match(
     page,
-    /id="disconnect"[\s\S]*>离开<\/button>[\s\S]*id="archive-session"[\s\S]*>归档<\/button>[\s\S]*id="kill-session"[\s\S]*>结束<\/button>/,
+    /id="disconnect"[\s\S]*>离开<\/button>[\s\S]*id="archive-session"[\s\S]*>归档<\/button>[\s\S]*id="session-restart-agent"[\s\S]*>重启<\/button>[\s\S]*id="kill-session"[\s\S]*>结束<\/button>/,
   );
   assert.match(app, /archiveSessionButton\.addEventListener\("click", archiveCurrentSession\)/);
   assert.match(page, /id="session-menu"[\s\S]*<summary[^>]*>···<\/summary>/);
   assert.match(page, /id="mobile-disconnect"[\s\S]*>离开<\/button>/);
   assert.match(page, /id="mobile-archive-session"[\s\S]*>归档<\/button>/);
+  assert.match(page, /id="mobile-restart-agent"[\s\S]*>重启<\/button>/);
   assert.match(page, /id="mobile-kill-session"[\s\S]*>结束<\/button>/);
   assert.match(styles, /@media \(max-width: 560px\) \{[\s\S]*\.session-controls > button \{[\s\S]*display: none/);
   assert.match(styles, /@media \(max-width: 560px\) \{[\s\S]*\.session-menu \{[\s\S]*display: block/);

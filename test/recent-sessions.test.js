@@ -133,19 +133,25 @@ test("recent sessions expose resumable links to local Home callers", async (t) =
   const live = data.sessions.find((session) => session.id === liveSessionId);
   assert.equal(custom.title, "个人网站调整");
   assert.equal(custom.project, "personal-site");
+  assert.equal(custom.current, false);
   assert.equal(custom.live, false);
   assert.equal(custom.webSessionId, "");
   assert.equal(custom.lastResult, "个人网站已经调整完成。");
   assert.equal(custom.lastCompletedAt, "2026-07-15T09:00:00.000Z");
-  assert.equal(generated.title, "讨论一下自动标题");
+  assert.equal(generated.title, "过期的 Live Session");
+  assert.equal(generated.current, true);
   assert.equal(generated.live, false);
+  assert.equal(generated.released, true);
+  assert.equal(generated.webSessionId, "web-session-expired");
   assert.equal(live.title, "Agent 当前展示标题");
-  assert.equal(live.live, true);
+  assert.equal(live.current, true);
+  assert.equal(live.live, false);
+  assert.equal(live.released, true);
   assert.equal(live.webSessionId, "web-session-live-title");
   assert.match(output, /Detached session TTL: 30 minutes/);
 
   const persistedSessions = JSON.parse(await fs.readFile(path.join(codexHome, "agent-web-sessions.json"), "utf8"));
-  assert.equal(persistedSessions["web-session-expired"], undefined);
+  assert.equal(persistedSessions["web-session-expired"].released, true);
 
   const proxiedResponse = await fetch(`http://127.0.0.1:${port}/internal/recent-sessions`, {
     headers: { "x-forwarded-for": "127.0.0.1" },

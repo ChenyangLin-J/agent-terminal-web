@@ -16,7 +16,9 @@ test("the default Agent home is a two-destination Session control center", () =>
   assert.match(page, /id="open-new-session"[\s\S]*新建/);
   assert.match(page, /data-session-filter="attention"/);
   assert.match(page, /data-session-filter="history"/);
-  assert.equal((page.match(/data-summary-filter=/g) || []).length, 4);
+  assert.equal((page.match(/data-summary-filter=/g) || []).length, 5);
+  assert.match(page, /data-summary-filter="unread"[\s\S]*新结果/);
+  assert.match(page, /data-summary-filter="ready"[\s\S]*空闲/);
   assert.match(app, /function setControlCenterFilter\(filter\)/);
 });
 
@@ -25,6 +27,8 @@ test("control center cards derive attention and progress from real Session state
   assert.match(app, /session\?\.turnState\?\.interrupted/);
   assert.match(app, /session\?\.turnState\?\.active/);
   assert.match(app, /pendingServerRequestCount/);
+  assert.match(app, /hasUnreadResult[\s\S]*kind: "unread"[\s\S]*label: "新结果"/);
+  assert.match(app, /kind: "ready", state: "waiting", label: "空闲"/);
   assert.match(app, /function liveSessionCurrentTask\(session/);
   assert.match(app, /turnState\?\.requirements/);
   assert.doesNotMatch(app, /Math\.random\(\).*progress/);

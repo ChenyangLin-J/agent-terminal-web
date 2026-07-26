@@ -68,13 +68,31 @@ Memories 目前仍是实验功能。自动记忆适合召回背景与经验；�
 ## Mobile Flow
 
 1. Open the site.
-2. Pick a live session to reconnect, or start a new session.
-3. Pick a live session, saved Codex session, or start a new session.
-4. Dictate or type into the prompt textarea.
-5. Tap `Send`; while a task is active, use `追加当前` for the same task or `下一轮` for a separate task.
-6. Switch to `Text` when mobile text selection is needed.
+2. Pick a current session, saved Codex session, or start a new session.
+3. Dictate or type into the prompt textarea.
+4. Tap `Send`; while a task is active, use `追加当前` for the same task or `下一轮` for a separate task.
+5. Switch to `Text` when mobile text selection is needed.
 
-Detached live sessions are kept for 30 minutes. The deadline survives service restarts, and reconnecting only to restore the page does not extend it; meaningful user input starts a fresh retention window. Terminal sessions use tmux when enabled; App Server sessions persist their thread id and can reconnect after a service restart.
+Detached App Server runtimes are kept for 30 minutes. The deadline survives
+service restarts, and reconnecting only to restore the page does not extend it;
+meaningful user input starts a fresh retention window. After the deadline,
+Agent Web releases the runtime but keeps the Session under `当前 Session` as
+`已暂停`. Runtime release never moves a Session into history. The user-facing
+organization is explicit:
+
+- `结束` stops the runtime and moves the Session to `最近历史`.
+- `归档` stops the runtime and moves the Session to `已归档 Session`.
+- Restoring a paused or historical Session keeps the Codex thread context.
+
+The control center also keeps execution and reading state separate. `新结果`
+means the latest completed turn has not yet been viewed; opening the Session
+and reaching its latest transcript persists that turn as viewed. `空闲` means
+the latest result was viewed and no task currently needs work. Session times
+advance only for thread-scoped work, not for shared App Server account or rate
+limit notifications.
+
+Terminal sessions use tmux when enabled; App Server sessions persist their
+thread id and can reconnect after a service restart.
 
 ## Resume
 

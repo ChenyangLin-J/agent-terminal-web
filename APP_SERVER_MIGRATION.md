@@ -29,8 +29,15 @@ process model when an operational rollback is needed.
 - If a follow-up reaches the server just after completion, its text is retained and starts as a new turn instead of being lost.
 - Notifications and server-initiated approval requests are routed only to the
   client whose `threadId` matches the protocol message.
+- Threadless shared notifications never advance an individual Session's
+  activity timestamp.
 - A shared connection failure marks affected turns as interrupted; opening a
   Session again creates a fresh connection and resumes its persisted thread.
+- Idle runtime release is independent from user organization: it leaves the
+  Session in the current list as paused. Only explicit `结束` or `归档` actions
+  move it out of the current list.
+- The latest completed and viewed turn ids are persisted separately so the
+  control center can distinguish `新结果` from a viewed, idle Session.
 
 The browser renders agent text, reasoning summaries, command output, file changes, turn state, and errors as readable terminal output. Command and file approvals, permission requests, and text questions appear as an explicit decision card. Voice input, uploads, push notifications, session titles, archive, Text view, and Home deep links continue to use the shared web UI.
 

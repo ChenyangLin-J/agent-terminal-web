@@ -231,8 +231,10 @@ app.post("/internal/codex-notify", async (req, res) => {
     rememberAgentSessionAccess(threadId, session.access);
   }
   persistCompletedSessionPreview(session, event["last-assistant-message"]);
-  completeTrackedTurn(session, String(event["turn-id"] || ""));
+  const completedTurnId = cleanTurnId(event["turn-id"]);
+  completeTrackedTurn(session, completedTurnId);
   session.lastActivityAt = new Date().toISOString();
+  rememberAgentSessionCompletion(threadId || session.sessionId, completedTurnId, session.lastActivityAt);
   resetDetachedCleanupAfterWork(session);
   persistRestorableWebSession(session);
   broadcast(session, "status", publicSession(session));
@@ -999,6 +1001,28 @@ app.put("/api/codex-sessions/:id/archive", async (req, res) => {
   }
 });
 
+app.post("/api/codex-sessions/:id/viewed", (req, res) => {
+  const id = String(req.params.id || "").trim();
+  const turnId = cleanTurnId(req.body?.turnId);
+
+  if (!isValidSessionId(id)) {
+    res.status(400).json({ error: "Invalid session id." });
+    return;
+  }
+  if (!turnId) {
+    res.status(400).json({ error: "A completed turn id is required." });
+    return;
+  }
+
+  const state = rememberAgentSessionViewed(id, turnId);
+  for (const session of sessions.values()) {
+    if (!session.exited && session.sessionId === id) {
+      broadcast(session, "status", publicSession(session));
+    }
+  }
+  res.json({ id, ...state });
+});
+
 app.get("/api/git-status", async (req, res) => {
   const cwd = resolveWorkspacePath(String(req.query.cwd || "."));
   if (!cwd) {
@@ -1688,7 +1712,7 @@ async function initializeAppServerSession(session, launch) {
     });
     rememberAgentSessionMemoryRouting(session);
     session.ready = true;
-    session.lastActivityAt = new Date().toISOString();
+    session.released = false;
     appendSessionOutput(session, "\r\n\x1b[36mApp Server ready. Follow-ups are bound to an exact turn.\x1b[0m\r\n");
     persistRestorableWebSession(session);
     broadcast(session, "app-transcript", publicAppTranscript(session));
@@ -1726,7 +1750,7 @@ function restoreTmuxSession(id) {
 
   const record = readPersistedWebSessions()[id];
   if (!record) return null;
-  if (persistedSessionExpired(record)) {
+  if (!record.released && persistedSessionExpired(record)) {
     removePersistedWebSession(id);
     return null;
   }
@@ -1848,18 +1872,23 @@ function listDetachedSessions() {
 
   for (const [id, record] of Object.entries(records)) {
     if (sessions.has(id) || !isValidWebSessionId(id)) continue;
-    if (persistedSessionExpired(record)) {
+    const transport = record.transport === APP_SERVER_TRANSPORT ? APP_SERVER_TRANSPORT : "terminal";
+    if (transport === APP_SERVER_TRANSPORT && record.sessionId && !record.released) {
+      record.released = true;
+      recordsChanged = true;
+    }
+    if (!record.released && persistedSessionExpired(record)) {
       delete records[id];
       recordsChanged = true;
       continue;
     }
-    const transport = record.transport === APP_SERVER_TRANSPORT ? APP_SERVER_TRANSPORT : "terminal";
     const tmuxName = cleanTmuxName(record.tmuxName || tmuxNameForWebSession(id));
     if (transport === "terminal" && (!USE_TMUX_SESSIONS || !tmuxName || !tmuxHasSession(tmuxName))) continue;
     if (transport === APP_SERVER_TRANSPORT && !record.sessionId) continue;
 
     const cwd = persistedWorkspacePath(record.cwd);
     if (!cwd) continue;
+    const resultState = agentSessionResultState(record.sessionId, record.turnState?.lastCompletedTurnId);
 
     items.push({
       id,
@@ -1885,10 +1914,12 @@ function listDetachedSessions() {
       rows: 30,
       connectedClients: 0,
       detachedExpiresAt: detachedExpiresAt(record),
+      released: Boolean(record.released),
       exited: false,
       exitCode: null,
       signal: null,
       turnState: publicTurnState(restoreTurnState(record.turnState)),
+      ...resultState,
     });
   }
 
@@ -2461,6 +2492,7 @@ function scheduleCleanup(session) {
   });
   session.cleanupTimer = setTimeout(() => {
     session.cleanupTimer = null;
+    let runtimeReleased = false;
     if (session.clients.size > 0) {
       renewSessionRetention(session);
       logAgentEvent("cleanup-cancelled", {
@@ -2481,18 +2513,25 @@ function scheduleCleanup(session) {
       return;
     }
     if (!session.exited) {
-      logAgentEvent("terminal-kill", {
+      const releasesAppRuntime = session.transport === APP_SERVER_TRANSPORT && session.sessionId;
+      logAgentEvent(releasesAppRuntime ? "session-runtime-release" : "terminal-kill", {
         webSessionId: session.id,
         codexSessionId: session.sessionId,
         reason: "detached-ttl",
       });
-      killSessionTerminal(session);
+      if (releasesAppRuntime) {
+        releaseAppServerSessionRuntime(session);
+        runtimeReleased = true;
+      } else {
+        killSessionTerminal(session);
+      }
     }
     sessions.delete(session.id);
-    removePersistedWebSession(session.id);
+    if (!runtimeReleased) removePersistedWebSession(session.id);
     logAgentEvent("session-cleanup", {
       webSessionId: session.id,
       codexSessionId: session.sessionId,
+      runtimeReleased,
     });
   }, delayMs);
 }
@@ -4751,13 +4790,13 @@ function trimAppTranscriptValue(value, limit) {
 function handleAppServerNotification(session, message) {
   if (session.exited) return;
   const { method, params = {} } = message;
-  session.lastActivityAt = new Date().toISOString();
 
   if (handleRealtimeNotification(session, method, params)) return;
   const notificationThreadId = String(
     params.threadId || (method === "thread/started" ? params.thread?.id : "") || "",
   );
   if (notificationThreadId && session.sessionId && notificationThreadId !== session.sessionId) return;
+  if (notificationThreadId) session.lastActivityAt = new Date().toISOString();
 
   if (method === "thread/started" && params.thread?.id) {
     session.sessionId = params.thread.id;
@@ -4853,7 +4892,7 @@ function handleAppServerNotification(session, message) {
     if (transcriptItem) upsertAppTranscriptItem(session, transcriptItem);
     renderAppServerItemCompleted(session, params.item);
   } else if (method === "turn/completed") {
-    const turnId = params.turn?.id || "";
+    const turnId = cleanTurnId(params.turn?.id);
     const turnStatus = String(params.turn?.status || "").toLowerCase();
     const stopped = Boolean(
       ["interrupted", "cancelled", "canceled"].includes(turnStatus) ||
@@ -4861,6 +4900,7 @@ function handleAppServerNotification(session, message) {
     );
     if (!stopped) persistCompletedSessionPreview(session, session.lastAssistantMessage);
     completeTrackedTurn(session, turnId, { stopped });
+    if (!stopped) rememberAgentSessionCompletion(session.sessionId, turnId, session.lastActivityAt);
     if (turnId) session.personalMemoryCitationsByTurn.delete(turnId);
     session.turnInterruptPending = false;
     resetDetachedCleanupAfterWork(session);
@@ -4998,7 +5038,10 @@ function appServerToolLeafName(item) {
 function handleAppServerRequest(session, message) {
   const requestId = String(message.id ?? "");
   if (!requestId) return;
+  session.lastActivityAt = new Date().toISOString();
   session.pendingServerRequests.set(requestId, message);
+  persistRestorableWebSession(session);
+  broadcast(session, "status", publicSession(session));
   broadcast(session, "agent-request", publicAppServerRequest(message));
 }
 
@@ -5381,6 +5424,7 @@ function outputReplay(session, afterRevision) {
 }
 
 function publicSession(session) {
+  const resultState = agentSessionResultState(session.sessionId, session.turnState?.lastCompletedTurnId);
   return {
     id: session.id,
     cwd: session.cwd,
@@ -5411,6 +5455,7 @@ function publicSession(session) {
       session.clients.size === 0
         ? detachedExpiresAt({ ...session, detachedAt: session.detachedAt || new Date().toISOString() })
         : null,
+    released: Boolean(session.released),
     exited: session.exited,
     exitCode: session.exitCode,
     signal: session.signal,
@@ -5429,6 +5474,7 @@ function publicSession(session) {
       realtimeV3: session.transport === APP_SERVER_TRANSPORT,
     },
     turnState: publicTurnState(session.turnState),
+    ...resultState,
   };
 }
 
@@ -5500,6 +5546,20 @@ function killSessionTerminal(session) {
   session.terminal.kill();
 }
 
+function releaseAppServerSessionRuntime(session) {
+  closeSideChat(session);
+  session.realtime = restoreRealtimeState();
+  session.ready = false;
+  session.released = true;
+  session.exited = true;
+  session.exitCode = 0;
+  session.signal = null;
+  persistWebSession(session);
+  releaseAgentAppServerClient(session.appServer);
+  broadcast(session, "status", publicSession(session));
+  for (const client of session.clients) client.close();
+}
+
 function tmuxNameForWebSession(id) {
   return cleanTmuxName(`codex-agent-${id}`);
 }
@@ -5560,6 +5620,7 @@ function persistWebSession(session) {
     startedAt: session.startedAt,
     lastActivityAt: session.lastActivityAt,
     detachedAt: validSessionTimestamp(session.detachedAt),
+    released: Boolean(session.released),
     turnState: publicTurnState(session.turnState),
   };
   writePersistedWebSessions(records);
@@ -5606,6 +5667,72 @@ function readAgentSessionSettings() {
   } catch {
     return {};
   }
+}
+
+function cleanTurnId(value) {
+  return String(value || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9_.:-]/g, "")
+    .slice(0, 160);
+}
+
+function validIsoTimestamp(value) {
+  const timestamp = String(value || "").trim();
+  return timestamp && Number.isFinite(Date.parse(timestamp)) ? new Date(timestamp).toISOString() : "";
+}
+
+function agentSessionResultState(sessionId, currentCompletedTurnId = "", savedSetting = null) {
+  const saved =
+    savedSetting && typeof savedSetting === "object"
+      ? savedSetting
+      : isValidSessionId(sessionId)
+        ? readAgentSessionSettings()[sessionId] || {}
+        : {};
+  const trackedCompletedTurnId = cleanTurnId(saved.lastCompletedTurnId);
+  const lastCompletedTurnId = trackedCompletedTurnId || cleanTurnId(currentCompletedTurnId);
+  const lastViewedTurnId = cleanTurnId(saved.lastViewedTurnId);
+  return {
+    lastCompletedTurnId,
+    lastCompletedAt: validIsoTimestamp(saved.lastCompletedAt),
+    lastViewedTurnId,
+    lastViewedAt: validIsoTimestamp(saved.lastViewedAt),
+    hasUnreadResult: Boolean(trackedCompletedTurnId && trackedCompletedTurnId !== lastViewedTurnId),
+  };
+}
+
+function rememberAgentSessionCompletion(sessionId, turnId, completedAt = new Date().toISOString()) {
+  const cleanedTurnId = cleanTurnId(turnId);
+  if (!isValidSessionId(sessionId) || !cleanedTurnId) return agentSessionResultState(sessionId);
+  const settings = readAgentSessionSettings();
+  settings[sessionId] = {
+    ...(settings[sessionId] || {}),
+    access: normalizeAccessMode(settings[sessionId]?.access),
+    lastCompletedTurnId: cleanedTurnId,
+    lastCompletedAt: validIsoTimestamp(completedAt) || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  writeAgentSessionSettings(settings);
+  return agentSessionResultState(sessionId, cleanedTurnId);
+}
+
+function rememberAgentSessionViewed(sessionId, turnId, viewedAt = new Date().toISOString()) {
+  const cleanedTurnId = cleanTurnId(turnId);
+  if (!isValidSessionId(sessionId) || !cleanedTurnId) return agentSessionResultState(sessionId);
+  const settings = readAgentSessionSettings();
+  const existing = settings[sessionId] || {};
+  const lastCompletedTurnId = cleanTurnId(existing.lastCompletedTurnId);
+  if (lastCompletedTurnId && lastCompletedTurnId !== cleanedTurnId) {
+    return agentSessionResultState(sessionId);
+  }
+  settings[sessionId] = {
+    ...existing,
+    access: normalizeAccessMode(existing.access),
+    lastViewedTurnId: cleanedTurnId,
+    lastViewedAt: validIsoTimestamp(viewedAt) || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  writeAgentSessionSettings(settings);
+  return agentSessionResultState(sessionId, cleanedTurnId);
 }
 
 function rememberAgentSessionAccess(sessionId, access) {
@@ -5667,6 +5794,10 @@ function writeAgentSessionSettings(settings) {
             forkedFromTitle: cleanCustomTitle(setting.forkedFromTitle),
             parentThreadId: isValidSessionId(setting.parentThreadId) ? String(setting.parentThreadId) : "",
             parentThreadTitle: cleanCustomTitle(setting.parentThreadTitle),
+            lastCompletedTurnId: cleanTurnId(setting.lastCompletedTurnId),
+            lastCompletedAt: validIsoTimestamp(setting.lastCompletedAt),
+            lastViewedTurnId: cleanTurnId(setting.lastViewedTurnId),
+            lastViewedAt: validIsoTimestamp(setting.lastViewedAt),
           },
         ])
         .sort(([a], [b]) => a.localeCompare(b)),
@@ -5930,6 +6061,7 @@ async function listCodexSessionsFromFiles({ archived }) {
     meta.access = normalizeAccessMode(
       sessionSettings[meta.id]?.access || persistedByCodexId.get(meta.id)?.access,
     );
+    Object.assign(meta, agentSessionResultState(meta.id, "", sessionSettings[meta.id]));
     if (Boolean(meta.archived) === archived) items.push(meta);
   }
 
@@ -5996,6 +6128,7 @@ function nativeThreadSessionMeta(thread, { archived, customTitles, persistedByCo
   const sidecarTitle = cleanCustomTitle(customTitles[id]);
   const generatedTitle = cleanTitle(thread?.preview) || "Untitled session";
   const updatedAt = unixSecondsToIso(thread?.updatedAt) || unixSecondsToIso(thread?.createdAt) || new Date(0).toISOString();
+  const resultState = agentSessionResultState(id, "", sessionSettings[id]);
   return {
     id,
     title: name || sidecarTitle || generatedTitle,
@@ -6018,6 +6151,7 @@ function nativeThreadSessionMeta(thread, { archived, customTitles, persistedByCo
     ),
     agentNickname: String(thread?.agentNickname || ""),
     agentRole: String(thread?.agentRole || ""),
+    ...resultState,
   };
 }
 
@@ -6232,7 +6366,9 @@ async function listRecentAgentSessions(limit = 40) {
         title,
         project,
         updatedAt,
-        live: Boolean(liveSession),
+        current: Boolean(liveSession),
+        live: Boolean(liveSession && !liveSession.released),
+        released: Boolean(liveSession?.released),
         webSessionId: liveSession?.id || "",
         transport: liveSession?.transport || "terminal",
         access: normalizeAccessMode(liveSession?.access || session.access || persisted?.access),

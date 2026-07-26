@@ -11,6 +11,7 @@ const controlCenterMenu = document.querySelector("#control-center-menu");
 const controlCenterFilters = document.querySelector("#control-center-filters");
 const controlAttentionCount = document.querySelector("#control-attention-count");
 const controlRunningCount = document.querySelector("#control-running-count");
+const controlUnreadCount = document.querySelector("#control-unread-count");
 const controlReadyCount = document.querySelector("#control-ready-count");
 const controlHistoryCount = document.querySelector("#control-history-count");
 const controlLiveCount = document.querySelector("#control-live-count");
@@ -287,6 +288,8 @@ let restoredAppHistoryLoading = false;
 let appTranscriptInitialRestorePending = false;
 let appReadingPositionSaveTimer = null;
 let appTranscriptHasUnseenContent = false;
+let lastMarkedViewedTurnId = "";
+let markViewedRequestPending = false;
 let pendingAppReadingRestore = null;
 let pendingEditFork = null;
 let sessionTitleRenameSaving = false;
@@ -741,7 +744,7 @@ function renderLiveSessions(sessions) {
   updateControlCenterSummary();
 
   if (!uniqueSessions.length) {
-    const message = empty("当前没有活跃 Session。新建或恢复后，它会出现在这里。");
+    const message = empty("当前没有 Session。新建或恢复后，它会出现在这里。");
     message.classList.add("control-center-empty");
     sessionsList.append(message);
     applyControlCenterFilter();
@@ -751,7 +754,8 @@ function renderLiveSessions(sessions) {
   const groups = [
     { kind: "attention", label: "需要你处理", note: "优先看" },
     { kind: "running", label: "正在运行", note: "持续更新" },
-    { kind: "ready", label: "已完成一轮", note: "随时继续" },
+    { kind: "unread", label: "新结果", note: "尚未查看" },
+    { kind: "ready", label: "空闲", note: "已查看 · 暂无下一步" },
     { kind: "released", label: "已暂停", note: "上下文已保留" },
   ];
 
@@ -780,7 +784,14 @@ function renderLiveSessions(sessions) {
           description: liveSessionCurrentTask(session, presentation),
           meta: liveSessionMeta(session, presentation),
           kind: group.kind,
-          action: group.kind === "attention" ? "处理" : group.kind === "running" ? "查看" : "继续",
+          action:
+            group.kind === "attention"
+              ? "处理"
+              : group.kind === "running" || group.kind === "unread"
+                ? "查看"
+                : group.kind === "released"
+                  ? "恢复"
+                  : "打开",
           onClick: () => openSessionFromList(liveSessionOpenParams(session)),
         }),
       );
@@ -823,10 +834,13 @@ function liveSessionPresentation(session) {
   if (session?.turnState?.interrupted) {
     return { kind: "attention", state: "interrupted", label: "需要继续", pendingRequestCount: 0 };
   }
-  if (session?.exited || session?.released || session?.suspended) {
-    return { kind: "released", state: "released", label: "已释放", pendingRequestCount: 0 };
-  }
   if (session?.ready === false) {
+    if (session?.released || session?.suspended) {
+      if (session?.hasUnreadResult) {
+        return { kind: "unread", state: "unread", label: "新结果", pendingRequestCount: 0 };
+      }
+      return { kind: "released", state: "released", label: "已暂停", pendingRequestCount: 0 };
+    }
     return { kind: "running", state: "restoring", label: "恢复中", pendingRequestCount: 0 };
   }
   if (session?.turnState?.active || session?.turnState?.stopping) {
@@ -837,7 +851,10 @@ function liveSessionPresentation(session) {
       pendingRequestCount: 0,
     };
   }
-  return { kind: "ready", state: "waiting", label: "可继续", pendingRequestCount: 0 };
+  if (session?.hasUnreadResult) {
+    return { kind: "unread", state: "unread", label: "新结果", pendingRequestCount: 0 };
+  }
+  return { kind: "ready", state: "waiting", label: "空闲", pendingRequestCount: 0 };
 }
 
 function liveSessionCurrentTask(session, presentation = liveSessionPresentation(session)) {
@@ -852,12 +869,13 @@ function liveSessionCurrentTask(session, presentation = liveSessionPresentation(
   if (current?.text) return String(current.text).replace(/\s+/g, " ").trim();
   if (presentation.kind === "running") return "任务正在运行，等待下一次进度更新。";
   if (presentation.kind === "attention") return "上次任务需要你的操作，进入 Session 后可以继续。";
-  if (presentation.kind === "released") return "运行资源已释放；会话上下文仍然保留。";
-  return "当前没有运行中的任务，可以直接继续对话。";
+  if (presentation.kind === "unread") return "Agent 已完成最新一轮，进入 Session 查看结果。";
+  if (presentation.kind === "released") return "运行资源已释放；仍属于当前 Session，恢复后可以继续。";
+  return "你已查看最新结果，目前没有运行中的任务。";
 }
 
 function liveSessionMeta(session, presentation = liveSessionPresentation(session)) {
-  const parts = [formatLaunch(session), formatTime(session.lastActivityAt)];
+  const parts = [formatLaunch(session), session.lastActivityAt ? `任务更新 ${formatTime(session.lastActivityAt)}` : ""];
   if (presentation.pendingRequestCount) parts.unshift(`${presentation.pendingRequestCount} 个待处理`);
   else if (session?.turnState?.queuedTurns?.length) parts.unshift(`${session.turnState.queuedTurns.length} 条排队`);
   else if (session?.connectedClients > 0) parts.unshift(`${session.connectedClients} 个页面`);
@@ -894,7 +912,7 @@ function renderSavedCodexSessions(sessions) {
         title: session.title || "Untitled session",
         subtitle: displayProject(session.project),
         description: "历史上下文已保存，可以恢复后继续。",
-        meta: [formatTime(session.updatedAt)],
+        meta: [session.updatedAt ? `更新于 ${formatTime(session.updatedAt)}` : ""],
         kind: "history",
         action: "恢复",
         onClick: () => openResumeEngineDialog(session),
@@ -967,7 +985,7 @@ function toggleNewSessionPanel(open) {
 }
 
 function updateControlCenterSummary() {
-  const counts = { attention: 0, running: 0, ready: 0, released: 0 };
+  const counts = { attention: 0, running: 0, unread: 0, ready: 0, released: 0 };
   for (const session of liveSessionsCache) {
     const kind = liveSessionPresentation(session).kind;
     if (Object.prototype.hasOwnProperty.call(counts, kind)) counts[kind] += 1;
@@ -976,10 +994,11 @@ function updateControlCenterSummary() {
   const historyCount = nonLiveSaved + archivedSessionsCache.length;
   controlAttentionCount.textContent = String(counts.attention);
   controlRunningCount.textContent = String(counts.running);
-  controlReadyCount.textContent = String(counts.ready);
+  controlUnreadCount.textContent = String(counts.unread);
+  controlReadyCount.textContent = String(counts.ready + counts.released);
   controlHistoryCount.textContent = String(historyCount);
-  controlLiveCount.textContent = `${liveSessionsCache.length} 个活跃`;
-  sessionSwitcherCount.textContent = `${liveSessionsCache.length} 个活跃`;
+  controlLiveCount.textContent = `${liveSessionsCache.length} 个当前`;
+  sessionSwitcherCount.textContent = `${liveSessionsCache.length} 个当前`;
   navAttentionCount.textContent = String(counts.attention);
   navAttentionCount.classList.toggle("hidden", counts.attention === 0);
 }
@@ -1025,7 +1044,9 @@ function applyControlCenterFilter() {
 }
 
 function setControlCenterFilter(filter) {
-  activeControlCenterFilter = ["attention", "running", "ready", "history"].includes(filter) ? filter : "all";
+  activeControlCenterFilter = ["attention", "running", "unread", "ready", "history"].includes(filter)
+    ? filter
+    : "all";
   for (const option of controlCenterFilters.querySelectorAll("[data-session-filter]")) {
     const active = option.dataset.sessionFilter === activeControlCenterFilter;
     option.classList.toggle("active", active);
@@ -1052,14 +1073,15 @@ function renderSessionSwitcher() {
   });
 
   if (!visible.length) {
-    sessionSwitcherList.append(empty(query ? "没有匹配的 Session。" : "当前没有活跃 Session。"));
+    sessionSwitcherList.append(empty(query ? "没有匹配的 Session。" : "当前没有 Session。"));
     return;
   }
 
   const groups = [
     { kind: "attention", label: "需要你" },
     { kind: "running", label: "运行中" },
-    { kind: "ready", label: "可继续" },
+    { kind: "unread", label: "新结果" },
+    { kind: "ready", label: "空闲" },
     { kind: "released", label: "已暂停" },
   ];
   for (const group of groups) {
@@ -1613,6 +1635,8 @@ function openSocket(params, options = {}) {
     restoredAppHistoryLoading = false;
     appTranscriptInitialRestorePending = activeTransport === "app-server";
     appTranscriptHasUnseenContent = false;
+    lastMarkedViewedTurnId = "";
+    markViewedRequestPending = false;
     pendingAppReadingRestore = null;
     pendingEditFork = null;
     renderEditForkBanner();
@@ -1711,6 +1735,7 @@ function openSocket(params, options = {}) {
     }
     if (message.type === "app-transcript") {
       replaceAppTranscript(message.payload);
+      scheduleLatestResultViewedCheck();
       return;
     }
     if (message.type === "app-transcript-upsert") {
@@ -3111,11 +3136,13 @@ function installClientEventLogging() {
     }
     refreshTerminalDisplay();
     ensureVisibleConnection("visibility-visible", { probe: true });
+    scheduleLatestResultViewedCheck();
   });
   window.addEventListener("pageshow", (event) => {
     logClientEvent("pageshow", { persisted: event.persisted });
     refreshTerminalDisplay();
     ensureVisibleConnection("pageshow", { probe: true });
+    scheduleLatestResultViewedCheck();
   });
   window.addEventListener("pagehide", (event) => {
     saveActiveSessionSnapshot();
@@ -3275,6 +3302,10 @@ function currentReconnectParams() {
 
 function endSession() {
   closeSessionMenu();
+  const message = latestTurnState.active
+    ? "结束这个 Session？当前任务会停止，Session 会移到最近历史，之后仍可恢复。"
+    : "结束这个 Session？它会移到最近历史，之后仍可恢复。";
+  if (!window.confirm(message)) return;
   send({ type: "kill" });
   detach(true);
 }
@@ -3481,6 +3512,7 @@ function renderStatus(status) {
   renderTurnState(status.turnState);
   void voiceInputController.offerStoredRecovery();
   syncPrimarySessionView();
+  scheduleLatestResultViewedCheck();
   if (activeTransport === "app-server" && appTranscriptItems.length) {
     renderAppTranscript({ follow: isAppTranscriptAtBottom() });
   }
@@ -3626,6 +3658,7 @@ function showSessionScreen() {
   void loadLiveSessions();
   sessionsTimer = window.setInterval(loadLiveSessions, 10_000);
   fitTerminal();
+  scheduleLatestResultViewedCheck();
 }
 
 function syncPrimaryNavigation(screen) {
@@ -3988,6 +4021,7 @@ function finishHistorySync(mode, rawChars) {
   historySyncStartedAt = 0;
   if (activeTransport === "terminal" && rawChars > 1_000) hideTerminalSessionPreview();
   saveActiveSessionSnapshot();
+  scheduleLatestResultViewedCheck();
 }
 
 function currentSocketConnectionState() {
@@ -5072,6 +5106,7 @@ function followAppTranscriptIfNeeded(shouldFollow) {
     appTranscriptHasUnseenContent = false;
     syncAppTranscriptLatestButton();
     scheduleAppReadingPositionSave();
+    void markLatestResultViewed();
   });
 }
 
@@ -5081,14 +5116,67 @@ function scrollAppTranscriptToBottom({ smooth = false } = {}) {
   appTranscriptHasUnseenContent = false;
   syncAppTranscriptLatestButton();
   scheduleAppReadingPositionSave();
+  scheduleLatestResultViewedCheck();
 }
 
 function handleAppTranscriptScroll() {
   if (isAppTranscriptAtBottom()) {
     appTranscriptHasUnseenContent = false;
     syncAppTranscriptLatestButton();
+    scheduleLatestResultViewedCheck();
   }
   scheduleAppReadingPositionSave();
+}
+
+function scheduleLatestResultViewedCheck() {
+  requestAnimationFrame(() => void markLatestResultViewed());
+}
+
+async function markLatestResultViewed() {
+  const sessionId = String(activeSessionParams.sessionId || "").trim();
+  const turnId = String(latestTurnState.lastCompletedTurnId || "").trim();
+  const latestResultVisible =
+    activeTransport === "app-server"
+      ? isAppTranscriptAtBottom()
+      : activeTransport === "terminal" && !historySyncPending && isTerminalAtBottom();
+  if (
+    !sessionId ||
+    !turnId ||
+    lastMarkedViewedTurnId === turnId ||
+    markViewedRequestPending ||
+    sessionScreen.classList.contains("hidden") ||
+    document.visibilityState !== "visible" ||
+    !latestResultVisible
+  ) {
+    return;
+  }
+
+  markViewedRequestPending = true;
+  lastMarkedViewedTurnId = turnId;
+  try {
+    const response = await fetch(`/api/codex-sessions/${encodeURIComponent(sessionId)}/viewed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ turnId }),
+    });
+    if (response.status === 401) {
+      redirectToLogin();
+      return;
+    }
+    if (!response.ok) throw new Error("view state was not saved");
+    const live = liveSessionsCache.find((session) => session.sessionId === sessionId);
+    if (live && live.lastCompletedTurnId === turnId) {
+      live.lastViewedTurnId = turnId;
+      live.hasUnreadResult = false;
+      updateControlCenterSummary();
+      renderSessionSwitcher();
+    }
+  } catch {
+    if (lastMarkedViewedTurnId === turnId) lastMarkedViewedTurnId = "";
+  } finally {
+    markViewedRequestPending = false;
+    if (latestTurnState.lastCompletedTurnId !== turnId) scheduleLatestResultViewedCheck();
+  }
 }
 
 function markAppTranscriptUnseen() {
@@ -5237,6 +5325,7 @@ function ensureTerminal() {
   terminal.onData((data) => {
     send({ type: "input", data });
   });
+  terminal.onScroll(() => scheduleLatestResultViewedCheck());
   installTerminalTouchScroll();
 }
 
@@ -5290,10 +5379,10 @@ function redirectToLogin(loginUrl = "") {
 }
 
 function formatLaunch(status) {
-  const transport = status.transport === "app-server" ? "app server · " : "";
-  if (status.sessionId) return `${transport}resumed`;
-  if (status.mode === "resume-last") return `${transport}resume last`;
-  return `${transport}new session`;
+  const transport = status.transport === "app-server" ? "App Server · " : "Terminal · ";
+  if (status.sessionId) return `${transport}恢复`;
+  if (status.mode === "resume-last") return `${transport}恢复最近`;
+  return `${transport}新建`;
 }
 
 function formatTime(value) {

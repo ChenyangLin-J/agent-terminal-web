@@ -3198,7 +3198,7 @@ input {
 
 .control-center-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 14px;
 }
@@ -3254,6 +3254,10 @@ input {
 
 .control-center-summary [data-summary-kind="running"] strong {
   color: #5edbd0;
+}
+
+.control-center-summary [data-summary-kind="unread"] strong {
+  color: #8eb5ff;
 }
 
 .session-search {
@@ -3455,6 +3459,11 @@ input {
   box-shadow: 0 0 12px rgb(94 219 208 / 34%);
 }
 
+.control-session-group-unread > header strong i {
+  background: #8eb5ff;
+  box-shadow: 0 0 12px rgb(142 181 255 / 34%);
+}
+
 .control-session-group-ready > header strong i {
   background: #73d99e;
 }
@@ -3551,6 +3560,10 @@ input {
   box-shadow: inset 3px 0 #f5be65;
 }
 
+.session-card[data-session-kind="unread"] {
+  box-shadow: inset 3px 0 #8eb5ff;
+}
+
 .session-card[data-session-kind="attention"] .session-card-actions button:last-child {
   border-color: #715b35;
   color: #f5ca7e;
@@ -3561,6 +3574,11 @@ input {
 .session-live-status[data-state="interrupted"] {
   background: rgb(245 190 101 / 13%);
   color: #f3c873;
+}
+
+.session-live-status[data-state="unread"] {
+  background: rgb(142 181 255 / 13%);
+  color: #a9c6ff;
 }
 
 .session-live-status[data-state="released"] {
@@ -3720,6 +3738,10 @@ input {
 .session-switcher-item[data-state="attention"] .session-switcher-dot,
 .session-switcher-item[data-state="interrupted"] .session-switcher-dot {
   background: #f5be65;
+}
+
+.session-switcher-item[data-state="unread"] .session-switcher-dot {
+  background: #8eb5ff;
 }
 
 .session-switcher-item[data-state="released"] .session-switcher-dot {
@@ -3918,12 +3940,11 @@ input {
   }
 
   .control-center-summary {
-    grid-template-columns: repeat(4, minmax(76px, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 7px;
-    margin-right: -14px;
-    padding-right: 14px;
-    overflow-x: auto;
-    scrollbar-width: none;
+    margin-right: 0;
+    padding-right: 0;
+    overflow: visible;
   }
 
   .control-center-summary::-webkit-scrollbar {
@@ -3948,8 +3969,9 @@ input {
   }
 
   .control-center-filters {
-    overflow-x: auto;
-    scrollbar-width: none;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    overflow: visible;
   }
 
   .control-center-filters::-webkit-scrollbar {
@@ -3957,7 +3979,7 @@ input {
   }
 
   .control-center-filters button {
-    flex: 0 0 auto;
+    min-width: 0;
   }
 
   .session-search #session-search-results {

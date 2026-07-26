@@ -36,7 +36,7 @@
       }
     </style>
     <link rel="stylesheet" href="/vendor/xterm-css/xterm.css?v=20260625-5" />
-    <link rel="stylesheet" href="/styles.css?v=20260726-control-center-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260726-control-center-2" />
     <link rel="stylesheet" href="/session-focus-mode.css?v=20260720-app-toolbar-1" />
     <link rel="stylesheet" href="/thinking-session.css?v=20260716-1" />
     <link rel="stylesheet" href="/agent-memories.css?v=20260723-pending-merge-1" />
@@ -98,26 +98,26 @@
         </header>
 
         <section class="control-center-summary" aria-label="Session 状态概览">
-          <article data-summary-kind="attention">
+          <button type="button" data-summary-kind="attention" data-summary-filter="attention">
             <span>需要你</span>
             <strong id="control-attention-count">0</strong>
             <small>权限 / 决策 / 中断</small>
-          </article>
-          <article data-summary-kind="running">
+          </button>
+          <button type="button" data-summary-kind="running" data-summary-filter="running">
             <span>进行中</span>
             <strong id="control-running-count">0</strong>
             <small>持续有变化</small>
-          </article>
-          <article data-summary-kind="ready">
+          </button>
+          <button type="button" data-summary-kind="ready" data-summary-filter="ready">
             <span>可继续</span>
             <strong id="control-ready-count">0</strong>
             <small>已完成一轮</small>
-          </article>
-          <article data-summary-kind="history">
+          </button>
+          <button type="button" data-summary-kind="history" data-summary-filter="history">
             <span>历史</span>
             <strong id="control-history-count">0</strong>
             <small>保存与归档</small>
-          </article>
+          </button>
         </section>
 
         <section class="session-search" aria-label="Search Codex sessions">
@@ -642,7 +642,7 @@
     <script src="/agent-upload.js?v=20260725-attachment-wait-1"></script>
     <script src="/agent-voice-input.js?v=20260717-recovery-2"></script>
     <script src="/agent-realtime.js?v=20260726-1"></script>
-    <script src="/app.js?v=20260726-control-center-1"></script>
+    <script src="/app.js?v=20260726-control-center-2"></script>
     <script src="/session-focus-mode.js?v=20260716-app-chrome-1"></script>
   </body>
 </html>

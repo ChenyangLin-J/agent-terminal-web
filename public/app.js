@@ -14,6 +14,7 @@ const controlRunningCount = document.querySelector("#control-running-count");
 const controlReadyCount = document.querySelector("#control-ready-count");
 const controlHistoryCount = document.querySelector("#control-history-count");
 const controlLiveCount = document.querySelector("#control-live-count");
+const controlSummaryButtons = document.querySelectorAll("[data-summary-filter]");
 const projectSelect = document.querySelector("#project");
 const launchModeSelect = document.querySelector("#launch-mode");
 const transportSelect = document.querySelector("#transport");
@@ -340,11 +341,13 @@ closeNewSessionButton.addEventListener("click", () => toggleNewSessionPanel(fals
 controlCenterFilters.addEventListener("click", (event) => {
   const button = event.target.closest("[data-session-filter]");
   if (!button) return;
-  activeControlCenterFilter = button.dataset.sessionFilter || "all";
-  for (const option of controlCenterFilters.querySelectorAll("[data-session-filter]")) {
-    option.classList.toggle("active", option === button);
-  }
-  applyControlCenterFilter();
+  setControlCenterFilter(button.dataset.sessionFilter || "all");
+});
+for (const button of controlSummaryButtons) {
+  button.addEventListener("click", () => setControlCenterFilter(button.dataset.summaryFilter || "all"));
+}
+controlCenterMenu.addEventListener("click", (event) => {
+  if (event.target.closest("button")) controlCenterMenu.removeAttribute("open");
 });
 connectButton.addEventListener("click", () => startSession());
 startThinkButton.addEventListener("click", startThinkSession);
@@ -1021,6 +1024,21 @@ function applyControlCenterFilter() {
   }
 }
 
+function setControlCenterFilter(filter) {
+  activeControlCenterFilter = ["attention", "running", "ready", "history"].includes(filter) ? filter : "all";
+  for (const option of controlCenterFilters.querySelectorAll("[data-session-filter]")) {
+    const active = option.dataset.sessionFilter === activeControlCenterFilter;
+    option.classList.toggle("active", active);
+    option.setAttribute("aria-pressed", String(active));
+  }
+  for (const button of controlSummaryButtons) {
+    const active = button.dataset.summaryFilter === activeControlCenterFilter;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  }
+  applyControlCenterFilter();
+}
+
 function renderSessionSwitcher() {
   const query = sessionSwitcherSearch.value.trim().toLocaleLowerCase();
   sessionSwitcherList.replaceChildren();
@@ -1538,21 +1556,11 @@ function openInitialSessionFromUrl() {
 }
 
 function openSessionFromList(params) {
-  if (shouldOpenSessionInCurrentPage()) {
-    window.history.pushState(null, "", sessionUrl(params));
-    openSocket(params);
-    return;
-  }
-
-  openSessionTab(params);
+  openSessionInCurrentPage(params);
 }
 
 function openSessionTab(params) {
   window.open(sessionUrl(params), "_blank", "noopener");
-}
-
-function shouldOpenSessionInCurrentPage() {
-  return window.matchMedia("(max-width: 820px), (pointer: coarse)").matches;
 }
 
 function sessionUrl(params) {
@@ -3611,6 +3619,7 @@ function showSessionScreen() {
   startScreen.classList.add("hidden");
   sessionScreen.classList.remove("hidden");
   setSessionPageMode(true);
+  document.body.classList.toggle("app-server-session", activeTransport === "app-server");
   syncPrimaryNavigation("session");
   closeTextView();
   window.clearInterval(sessionsTimer);

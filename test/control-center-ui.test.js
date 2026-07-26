@@ -16,6 +16,8 @@ test("the default Agent home is a two-destination Session control center", () =>
   assert.match(page, /id="open-new-session"[\s\S]*新建/);
   assert.match(page, /data-session-filter="attention"/);
   assert.match(page, /data-session-filter="history"/);
+  assert.equal((page.match(/data-summary-filter=/g) || []).length, 4);
+  assert.match(app, /function setControlCenterFilter\(filter\)/);
 });
 
 test("control center cards derive attention and progress from real Session state", () => {
@@ -42,5 +44,26 @@ test("desktop, Pad, and phone keep the same navigation responsibilities", () => 
   assert.match(
     styles,
     /body\.session-active \.session-screen \{[\s\S]*height: calc\(100dvh - 66px - env\(safe-area-inset-bottom\)\)/,
+  );
+});
+
+test("Session navigation and menus remain reversible in one page", () => {
+  assert.match(app, /function openSessionFromList\(params\) \{\s*openSessionInCurrentPage\(params\);\s*\}/);
+  assert.doesNotMatch(app, /function shouldOpenSessionInCurrentPage/);
+  assert.match(
+    app,
+    /function showSessionScreen\(\)[\s\S]*document\.body\.classList\.toggle\("app-server-session", activeTransport === "app-server"\)/,
+  );
+  assert.match(
+    app,
+    /controlCenterMenu\.addEventListener\("click"[\s\S]*controlCenterMenu\.removeAttribute\("open"\)/,
+  );
+  assert.match(
+    styles,
+    /@media \(max-width: 520px\)[\s\S]*\.app-server-session \.app-session-tools \{\s*overflow: visible;/,
+  );
+  assert.match(
+    styles,
+    /@media \(max-width: 520px\)[\s\S]*\.app-session-more-menu \{[\s\S]*position: absolute;[\s\S]*bottom: calc\(100% \+ 8px\)/,
   );
 });

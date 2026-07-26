@@ -647,6 +647,7 @@ app.put("/api/codex-sessions/:id/title", async (req, res) => {
 app.put("/api/codex-sessions/:id/archive", async (req, res) => {
   const id = String(req.params.id || "").trim();
   const archived = Boolean(req.body?.archived);
+  const endLiveSession = archived && Boolean(req.body?.endLiveSession);
 
   if (!isValidSessionId(id)) {
     res.status(400).json({ error: "Invalid session id." });
@@ -654,6 +655,11 @@ app.put("/api/codex-sessions/:id/archive", async (req, res) => {
   }
 
   try {
+    if (endLiveSession) {
+      for (const session of sessions.values()) {
+        if (!session.exited && session.sessionId === id) killSessionTerminal(session);
+      }
+    }
     await setSessionArchived(id, archived);
     res.json({ id, archived });
   } catch (error) {

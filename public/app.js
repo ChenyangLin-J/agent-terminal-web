@@ -41,7 +41,12 @@ const appSessionMemoryProjects = document.querySelector("#app-session-memory-pro
 const appSessionTaskControl = document.querySelector("#app-session-task-control");
 const appSessionTaskState = document.querySelector("#app-session-task-state");
 const appSessionTaskStop = document.querySelector("#app-session-task-stop");
+const archiveSessionButton = document.querySelector("#archive-session");
 const killSessionButton = document.querySelector("#kill-session");
+const sessionMenu = document.querySelector("#session-menu");
+const mobileDisconnectButton = document.querySelector("#mobile-disconnect");
+const mobileArchiveSessionButton = document.querySelector("#mobile-archive-session");
+const mobileKillSessionButton = document.querySelector("#mobile-kill-session");
 const attachFileButton = document.querySelector("#attach-file");
 const voiceInputButton = document.querySelector("#voice-input");
 const sendPromptButton = document.querySelector("#send-prompt");
@@ -238,6 +243,10 @@ resumeEngineDialog.addEventListener("click", (event) => {
 });
 backButton.addEventListener("click", showStartScreen);
 disconnectButton.addEventListener("click", detach);
+mobileDisconnectButton.addEventListener("click", () => {
+  closeSessionMenu();
+  detach();
+});
 terminalTabButton.addEventListener("click", closeTextView);
 textTabButton.addEventListener("click", openTextView);
 pageUpButton.addEventListener("click", () => scrollTerminalPage(-1));
@@ -258,7 +267,13 @@ sendPermissionsButton.addEventListener("click", () => command("/permissions"));
 appSessionPermissionsButton.addEventListener("click", () => runAppCommand("/permissions"));
 appSessionMemoriesButton.addEventListener("click", openMemoryManager);
 appSessionTaskControl.addEventListener("click", interruptCurrentTurn);
+archiveSessionButton.addEventListener("click", archiveCurrentSession);
+mobileArchiveSessionButton.addEventListener("click", archiveCurrentSession);
 killSessionButton.addEventListener("click", endSession);
+mobileKillSessionButton.addEventListener("click", endSession);
+document.addEventListener("click", (event) => {
+  if (sessionMenu.open && !sessionMenu.contains(event.target)) closeSessionMenu();
+});
 terminalSessionPreviewDismiss.addEventListener("click", hideTerminalSessionPreview);
 appCommandClose.addEventListener("click", () => appCommandDialog.close());
 appCommandDialog.addEventListener("click", (event) => {
@@ -709,6 +724,50 @@ async function archiveCodexSession(session, archived) {
     return;
   }
   await Promise.all([loadSavedCodexSessions(), loadArchivedCodexSessions()]);
+}
+
+async function archiveCurrentSession() {
+  closeSessionMenu();
+  const sessionId = String(activeSessionParams.sessionId || "").trim();
+  if (!sessionId) {
+    window.alert("Session 尚未建立完成，暂时无法归档。");
+    return;
+  }
+
+  const message = latestTurnState.active
+    ? "归档这个 Session？当前任务会停止，历史记录会移入归档，之后仍可恢复。"
+    : "归档这个 Session？历史记录会移入归档，之后仍可恢复。";
+  if (!window.confirm(message)) return;
+
+  setArchiveSessionDisabled(true);
+  try {
+    const response = await fetch(`/api/codex-sessions/${encodeURIComponent(sessionId)}/archive`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived: true, endLiveSession: true }),
+    });
+    if (response.status === 401) {
+      redirectToLogin();
+      return;
+    }
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || "归档失败");
+    }
+    detach(true);
+  } catch (error) {
+    setArchiveSessionDisabled(false);
+    window.alert(`归档失败：${error.message}`);
+  }
+}
+
+function closeSessionMenu() {
+  sessionMenu.removeAttribute("open");
+}
+
+function setArchiveSessionDisabled(disabled) {
+  archiveSessionButton.disabled = disabled;
+  mobileArchiveSessionButton.disabled = disabled;
 }
 
 function empty(text) {
@@ -2109,6 +2168,7 @@ function currentReconnectParams() {
 }
 
 function endSession() {
+  closeSessionMenu();
   send({ type: "kill" });
   detach(true);
 }
@@ -2398,7 +2458,10 @@ function setConnectedState(state) {
   sendStatusButton.disabled = !connected;
   sendPermissionsButton.disabled = !connected;
   appSessionPermissionsButton.disabled = activeTransport !== "app-server" || !connected;
-  killSessionButton.disabled = !["connected", "starting", "loading"].includes(state);
+  const canManageSession = ["connected", "starting", "loading"].includes(state);
+  setArchiveSessionDisabled(!activeSessionParams.sessionId || !canManageSession);
+  killSessionButton.disabled = !canManageSession;
+  mobileKillSessionButton.disabled = !canManageSession;
 }
 
 function showStartScreen() {

@@ -715,6 +715,70 @@ input {
   gap: 8px;
 }
 
+.session-menu {
+  position: relative;
+  display: none;
+}
+
+.session-menu summary {
+  display: flex;
+  width: 44px;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #343945;
+  border-radius: 8px;
+  background: #171b24;
+  color: #f2f4f8;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  list-style: none;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.session-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.session-menu[open] summary {
+  border-color: #52627b;
+  background: #202632;
+}
+
+.session-menu-panel {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 7px);
+  right: 0;
+  display: grid;
+  width: 132px;
+  gap: 5px;
+  padding: 6px;
+  border: 1px solid #343945;
+  border-radius: 10px;
+  background: #11151d;
+  box-shadow: 0 14px 32px rgb(0 0 0 / 42%);
+}
+
+.session-menu-panel button {
+  width: 100%;
+  min-height: 40px;
+  text-align: left;
+}
+
+@media (max-width: 560px) {
+  .session-controls > button {
+    display: none;
+  }
+
+  .session-menu {
+    display: block;
+  }
+}
+
 .view-tabs {
   grid-area: tabs;
   display: grid;

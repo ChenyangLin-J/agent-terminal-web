@@ -36,7 +36,7 @@
       }
     </style>
     <link rel="stylesheet" href="/vendor/xterm-css/xterm.css?v=20260625-5" />
-    <link rel="stylesheet" href="/styles.css?v=20260723-process-loading-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260726-current-archive-1" />
     <link rel="stylesheet" href="/session-focus-mode.css?v=20260720-app-toolbar-1" />
     <link rel="stylesheet" href="/thinking-session.css?v=20260716-1" />
     <link rel="stylesheet" href="/agent-memories.css?v=20260723-pending-merge-1" />
@@ -139,7 +139,16 @@
           </div>
           <div class="session-controls">
             <button id="disconnect" type="button" title="离开页面，Codex 保持运行">离开</button>
+            <button id="archive-session" type="button" title="结束运行并将 Session 移入归档" disabled>归档</button>
             <button id="kill-session" class="danger" type="button" title="结束整个 Codex Session">结束</button>
+            <details id="session-menu" class="session-menu">
+              <summary aria-label="打开 Session 操作菜单" title="Session 操作">···</summary>
+              <div class="session-menu-panel">
+                <button id="mobile-disconnect" type="button">离开</button>
+                <button id="mobile-archive-session" type="button" disabled>归档</button>
+                <button id="mobile-kill-session" class="danger" type="button">结束</button>
+              </div>
+            </details>
           </div>
         </header>
 
@@ -357,7 +366,7 @@
     <script src="/shared/voice-capture-widget.js?v=20260717-recovery-3"></script>
     <script src="/agent-upload.js?v=20260725-attachment-wait-1"></script>
     <script src="/agent-voice-input.js?v=20260717-recovery-2"></script>
-    <script src="/app.js?v=20260726-history-image-1"></script>
+    <script src="/app.js?v=20260726-current-archive-1"></script>
     <script src="/session-focus-mode.js?v=20260716-app-chrome-1"></script>
   </body>
 </html>

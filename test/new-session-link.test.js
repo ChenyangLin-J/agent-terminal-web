@@ -14,5 +14,5 @@ test("URL shortcut starts a new workspace session explicitly", () => {
   assert.match(appSource, /!sessionId \? accessModeSelect\.value \|\| DEFAULT_ACCESS_MODE : ""/);
   assert.match(pageSource, /<option value="app-server" selected>App Server（默认）<\/option>/);
   assert.match(pageSource, /<option value="full" selected>全部允许（默认，高风险）<\/option>/);
-  assert.match(pageSource, /app\.js\?v=20260727-session-state-1/);
+  assert.match(pageSource, /app\.js\?v=20260727-session-state-2/);
 });

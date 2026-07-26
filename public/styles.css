@@ -292,62 +292,6 @@ input {
   min-width: 0;
 }
 
-.session-card .session-live-status {
-  display: inline-flex;
-  width: max-content;
-  flex: 0 0 auto;
-  gap: 5px;
-  align-items: center;
-  margin-top: 0;
-  padding: 2px 7px;
-  overflow: visible;
-  border-radius: 999px;
-  background: rgba(133, 151, 174, 0.12);
-  color: #aab7c6;
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1.4;
-}
-
-.session-live-status::before {
-  width: 6px;
-  height: 6px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: currentColor;
-  content: "";
-}
-
-.session-live-status[data-state="running"] {
-  background: rgba(105, 128, 255, 0.16);
-  color: #a8b5ff;
-}
-
-.session-live-status[data-state="running"]::before {
-  animation: session-status-pulse 1.45s ease-in-out infinite;
-}
-
-.session-live-status[data-state="waiting"] {
-  background: rgba(67, 181, 151, 0.14);
-  color: #83d7c0;
-}
-
-.session-live-status[data-state="restoring"] {
-  color: #b8bec9;
-}
-
-.session-live-status[data-state="interrupted"] {
-  background: rgba(223, 111, 91, 0.15);
-  color: #f0a08e;
-}
-
-@keyframes session-status-pulse {
-  50% {
-    opacity: 0.34;
-    transform: scale(0.72);
-  }
-}
-
 .session-card-actions {
   display: flex;
   flex-wrap: wrap;
@@ -3298,24 +3242,20 @@ input {
 
 .control-center-filters {
   display: flex;
-  gap: 3px;
-  padding: 3px;
-  border: 1px solid #29313e;
-  border-radius: 10px;
-  background: #0c1016;
+  justify-content: flex-end;
 }
 
 .control-center-filters button {
   min-height: 31px;
-  padding: 5px 10px;
-  border-color: transparent;
-  color: #7f8b9f;
-  background: transparent;
+  padding: 5px 11px;
+  color: #aab4c4;
+  background: #151b24;
   white-space: nowrap;
 }
 
 .control-center-filters button.active {
   color: #edf1f7;
+  border-color: #3a4658;
   background: #252d3a;
 }
 
@@ -3570,21 +3510,6 @@ input {
   background: #251e14;
 }
 
-.session-live-status[data-state="attention"],
-.session-live-status[data-state="interrupted"] {
-  background: rgb(245 190 101 / 13%);
-  color: #f3c873;
-}
-
-.session-live-status[data-state="unread"] {
-  background: rgb(142 181 255 / 13%);
-  color: #a9c6ff;
-}
-
-.session-live-status[data-state="released"] {
-  color: #8691a2;
-}
-
 .control-center-history .sessions-list {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
@@ -3657,12 +3582,6 @@ input {
 .session-switcher > header span {
   color: #6f7c90;
   font-size: 10px;
-}
-
-.session-switcher > header button {
-  min-height: 31px;
-  padding: 4px 8px;
-  font-size: 11px;
 }
 
 .session-switcher > label {
@@ -3961,6 +3880,7 @@ input {
 
   .session-search {
     display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 7px;
   }
 
@@ -3969,8 +3889,8 @@ input {
   }
 
   .control-center-filters {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    display: flex;
+    justify-content: flex-end;
     overflow: visible;
   }
 
@@ -3979,7 +3899,7 @@ input {
   }
 
   .control-center-filters button {
-    min-width: 0;
+    min-width: max-content;
   }
 
   .session-search #session-search-results {

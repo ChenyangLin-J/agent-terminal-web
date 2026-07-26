@@ -150,7 +150,6 @@ const threadSearchSubmit = document.querySelector("#thread-search-submit");
 const threadSearchResults = document.querySelector("#thread-search-results");
 const threadSearchClose = document.querySelector("#thread-search-close");
 const sessionSwitcher = document.querySelector("#session-switcher");
-const sessionSwitcherCenterButton = document.querySelector("#session-switcher-center");
 const sessionSwitcherNewButton = document.querySelector("#session-switcher-new");
 const sessionSwitcherSearch = document.querySelector("#session-switcher-search");
 const sessionSwitcherList = document.querySelector("#session-switcher-list");
@@ -344,6 +343,9 @@ closeNewSessionButton.addEventListener("click", () => toggleNewSessionPanel(fals
 controlCenterFilters.addEventListener("click", (event) => {
   const button = event.target.closest("[data-session-filter]");
   if (!button) return;
+  sessionSearchInput.value = "";
+  sessionSearchResults.classList.add("hidden");
+  sessionSearchResults.replaceChildren();
   setControlCenterFilter(button.dataset.sessionFilter || "all");
 });
 for (const button of controlSummaryButtons) {
@@ -366,6 +368,7 @@ sessionSearchInput.addEventListener("keydown", (event) => {
 sessionSearchInput.addEventListener("input", () => {
   if (!sessionSearchInput.value.trim()) sessionSearchResults.classList.add("hidden");
   applyControlCenterFilter();
+  syncControlCenterFilterReset();
 });
 resumeAccessMode.addEventListener("change", renderResumeAccessWarning);
 resumeWithTerminal.addEventListener("click", () => resumePendingSession("terminal"));
@@ -375,7 +378,6 @@ resumeEngineDialog.addEventListener("click", (event) => {
   if (event.target === resumeEngineDialog) closeResumeEngineDialog();
 });
 backButton.addEventListener("click", showStartScreen);
-sessionSwitcherCenterButton.addEventListener("click", showStartScreen);
 sessionSwitcherNewButton.addEventListener("click", () => {
   showStartScreen();
   toggleNewSessionPanel(true);
@@ -779,9 +781,8 @@ function renderLiveSessions(sessions) {
       list.append(
         sessionCard({
           title: session.title || "New Codex session",
-          status: presentation,
           subtitle: displayProject(session.project),
-          description: liveSessionCurrentTask(session, presentation),
+          description: liveSessionCurrentTask(session),
           meta: liveSessionMeta(session, presentation),
           kind: group.kind,
           action:
@@ -857,7 +858,7 @@ function liveSessionPresentation(session) {
   return { kind: "ready", state: "waiting", label: "空闲", pendingRequestCount: 0 };
 }
 
-function liveSessionCurrentTask(session, presentation = liveSessionPresentation(session)) {
+function liveSessionCurrentTask(session) {
   const requirements = [
     ...(Array.isArray(session?.turnState?.requirements) ? session.turnState.requirements : []),
     ...(Array.isArray(session?.turnState?.queuedTurns) ? session.turnState.queuedTurns : []),
@@ -867,15 +868,12 @@ function liveSessionCurrentTask(session, presentation = liveSessionPresentation(
       ["working", "queued", "interrupted"].includes(String(requirement?.status || "")),
     ) || [...requirements].reverse().find((requirement) => String(requirement?.text || "").trim());
   if (current?.text) return String(current.text).replace(/\s+/g, " ").trim();
-  if (presentation.kind === "running") return "任务正在运行，等待下一次进度更新。";
-  if (presentation.kind === "attention") return "上次任务需要你的操作，进入 Session 后可以继续。";
-  if (presentation.kind === "unread") return "Agent 已完成最新一轮，进入 Session 查看结果。";
-  if (presentation.kind === "released") return "运行资源已释放；仍属于当前 Session，恢复后可以继续。";
-  return "你已查看最新结果，目前没有运行中的任务。";
+  return "";
 }
 
 function liveSessionMeta(session, presentation = liveSessionPresentation(session)) {
-  const parts = [formatLaunch(session), session.lastActivityAt ? `任务更新 ${formatTime(session.lastActivityAt)}` : ""];
+  const parts = [session.lastActivityAt ? `任务更新 ${formatTime(session.lastActivityAt)}` : ""];
+  if (session?.transport && session.transport !== "app-server") parts.unshift("Terminal");
   if (presentation.pendingRequestCount) parts.unshift(`${presentation.pendingRequestCount} 个待处理`);
   else if (session?.turnState?.queuedTurns?.length) parts.unshift(`${session.turnState.queuedTurns.length} 条排队`);
   else if (session?.connectedClients > 0) parts.unshift(`${session.connectedClients} 个页面`);
@@ -911,7 +909,6 @@ function renderSavedCodexSessions(sessions) {
       sessionCard({
         title: session.title || "Untitled session",
         subtitle: displayProject(session.project),
-        description: "历史上下文已保存，可以恢复后继续。",
         meta: [session.updatedAt ? `更新于 ${formatTime(session.updatedAt)}` : ""],
         kind: "history",
         action: "恢复",
@@ -945,7 +942,6 @@ function renderArchivedCodexSessions(sessions) {
       sessionCard({
         title: session.title || "Untitled session",
         subtitle: displayProject(session.project),
-        description: "已归档，不会出现在常用 Session 中。",
         meta: [`归档于 ${formatTime(session.archivedAt || session.updatedAt)}`],
         kind: "history",
         action: "恢复",
@@ -1057,7 +1053,13 @@ function setControlCenterFilter(filter) {
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
   }
+  syncControlCenterFilterReset();
   applyControlCenterFilter();
+}
+
+function syncControlCenterFilterReset() {
+  const hasFilter = activeControlCenterFilter !== "all" || Boolean(sessionSearchInput.value.trim());
+  controlCenterFilters.classList.toggle("hidden", !hasFilter);
 }
 
 function renderSessionSwitcher() {
@@ -1109,7 +1111,7 @@ function renderSessionSwitcher() {
       const title = document.createElement("strong");
       title.textContent = session.title || "New Codex session";
       const status = document.createElement("small");
-      status.textContent = `${presentation.label} · ${formatTime(session.lastActivityAt)}`;
+      status.textContent = formatTime(session.lastActivityAt);
       copy.append(title, status);
       button.append(dot, copy);
       button.addEventListener("click", () => openSessionInCurrentPage(liveSessionOpenParams(session)));
@@ -1157,7 +1159,6 @@ function resumePendingSession(transport) {
 
 function sessionCard({
   title,
-  status,
   subtitle,
   description = "",
   meta: metaItems = [],
@@ -1181,14 +1182,6 @@ function sessionCard({
   const titleLabel = document.createElement("strong");
   titleLabel.textContent = title;
   titleRow.append(titleLabel);
-  if (status?.label) {
-    const statusLabel = document.createElement("span");
-    statusLabel.className = "session-live-status";
-    statusLabel.dataset.state = status.state || "waiting";
-    statusLabel.setAttribute("aria-label", `状态：${status.label}`);
-    statusLabel.textContent = status.label;
-    titleRow.append(statusLabel);
-  }
   const subtitleLabel = document.createElement("span");
   subtitleLabel.className = "session-card-project";
   subtitleLabel.textContent = subtitle;
@@ -3582,7 +3575,7 @@ function setConnectedState(state) {
     exited: "已停止",
   };
   const transport = activeTransport === "app-server" ? "App Server · " : "Terminal · ";
-  const access = activeAccessMode ? ` · ${appAccessLabel(activeAccessMode)}` : "";
+  const access = activeTransport === "terminal" && activeAccessMode ? ` · ${appAccessLabel(activeAccessMode)}` : "";
   const stateLabel = connectionStates[state] || state;
   statusEls.connection.textContent = `${transport}${stateLabel}${access}`;
   const terminalCanAcceptInput =

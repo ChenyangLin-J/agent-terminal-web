@@ -29,12 +29,17 @@ test("Agent Web exposes native search, persistent names, branching, subagent nav
   assert.match(page, /id="thread-search-dialog"/);
   assert.match(page, /id="edit-fork-banner"/);
   assert.match(page, /id="app-session-agents"/);
+  assert.match(page, /id="app-session-more"/);
   assert.match(app, /function searchSavedSessions\(\)/);
   assert.match(app, /function searchCurrentThread\(\)/);
   assert.match(app, /"编辑并分支"/);
   assert.match(app, /"从这里分支"/);
+  assert.match(app, /const canBranch = item\.type === "user"/);
+  assert.doesNotMatch(app, /const canFork =[\s\S]*item\.type === "assistant"/);
   assert.match(app, /function renderAppSubagents/);
   assert.match(app, /"打开主 Agent"/);
   assert.match(styles, /\.thread-search-dialog/);
   assert.match(styles, /\.app-transcript-item-actions/);
+  assert.match(styles, /\.app-transcript-item\.has-transcript-actions:hover \.app-transcript-item-actions/);
+  assert.match(styles, /\.app-session-more-menu/);
 });

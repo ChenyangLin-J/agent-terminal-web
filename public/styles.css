@@ -1623,6 +1623,7 @@ input {
 }
 
 .app-transcript-item {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 7px;
@@ -2005,17 +2006,19 @@ input {
 }
 
 .app-server-session .app-session-tools {
+  position: relative;
   display: flex;
   gap: 8px;
   min-width: 0;
-  overflow-x: auto;
+  overflow: visible;
   padding: 7px 10px;
   background: #10141c;
   border-top: 1px solid #252a35;
   border-bottom: 1px solid #252a35;
 }
 
-.app-session-tools button {
+.app-session-tools button,
+.app-session-more > summary {
   display: inline-flex;
   gap: 8px;
   align-items: center;
@@ -2025,11 +2028,58 @@ input {
   background: #151a23;
 }
 
-.app-session-tools button > span {
+.app-session-more {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.app-session-more > summary {
+  min-height: 36px;
+  border: 1px solid #343945;
+  border-radius: 8px;
+  color: #f2f4f8;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.app-session-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.app-session-more[open] > summary {
+  border-color: #53627a;
+  background: #202735;
+}
+
+.app-session-more-menu {
+  position: absolute;
+  z-index: 20;
+  right: 0;
+  bottom: calc(100% + 8px);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(118px, 1fr));
+  gap: 7px;
+  width: min(280px, calc(100vw - 20px));
+  padding: 8px;
+  border: 1px solid #394355;
+  border-radius: 12px;
+  background: #10151e;
+  box-shadow: 0 -14px 38px rgb(0 0 0 / 42%);
+}
+
+.app-session-more-menu button {
+  justify-content: space-between;
+  width: 100%;
+}
+
+.app-session-tools button > span,
+.app-session-more > summary > span {
   color: #9ca6b8;
 }
 
-.app-session-tools button strong {
+.app-session-tools button strong,
+.app-session-more > summary strong {
   display: inline-flex;
   gap: 6px;
   align-items: center;
@@ -2104,16 +2154,12 @@ input {
 @media (max-width: 520px) {
   .app-server-session .app-session-tools {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1.7fr) repeat(3, minmax(0, 1fr));
     gap: 6px;
-    overflow-x: visible;
   }
 
-  #app-session-task-control {
-    grid-column: span 2;
-  }
-
-  .app-session-tools button {
+  .app-session-tools > button,
+  .app-session-more > summary {
     justify-content: center;
     min-width: 0;
     padding: 6px 7px;
@@ -2122,18 +2168,21 @@ input {
 
   .task-control-caption,
   #app-session-permissions span,
-  #app-session-agents strong,
-  #app-session-tree strong,
-  #app-session-side-chat strong,
-  #app-session-realtime strong,
-  #app-session-memories strong {
+  #app-session-memories strong,
+  .app-session-more > summary strong {
     display: none;
   }
 
-  .app-session-tools button strong {
+  .app-session-tools > button strong {
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .app-session-more-menu {
+    position: fixed;
+    right: 10px;
+    bottom: calc(164px + env(safe-area-inset-bottom));
   }
 }
 
@@ -2661,9 +2710,31 @@ input {
 }
 
 .app-transcript-item-actions {
+  position: absolute;
+  z-index: 3;
+  top: 7px;
+  right: 9px;
   display: inline-flex;
   gap: 6px;
-  margin-left: auto;
+  padding: 3px;
+  border: 1px solid #334055;
+  border-radius: 9px;
+  background: rgba(15, 21, 31, 0.96);
+  box-shadow: 0 7px 20px rgb(0 0 0 / 30%);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-3px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.app-transcript-item.has-transcript-actions:hover .app-transcript-item-actions,
+.app-transcript-item.has-transcript-actions:focus-within .app-transcript-item-actions,
+.app-transcript-item.actions-visible .app-transcript-item-actions {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
 }
 
 .app-transcript-item-actions button,
@@ -2764,8 +2835,9 @@ input {
   }
 
   .app-transcript-item-actions {
-    width: 100%;
-    margin-left: 0;
+    width: auto;
+    max-width: calc(100% - 18px);
+    overflow-x: auto;
   }
 
   .app-branch-banner,

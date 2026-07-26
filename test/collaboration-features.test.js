@@ -12,6 +12,7 @@ test("Agent Web exposes dedicated Multi-Agent, thread tree, side chat, and Realt
   ]);
 
   for (const id of [
+    "app-session-more",
     "app-session-agents",
     "app-session-tree",
     "app-session-side-chat",
@@ -23,7 +24,7 @@ test("Agent Web exposes dedicated Multi-Agent, thread tree, side chat, and Realt
   ]) {
     assert.match(page, new RegExp(`id="${id}"`));
   }
-  assert.match(page, /agent-realtime\.js\?v=20260726-1[\s\S]*app\.js\?v=20260726-collaboration-1/);
+  assert.match(page, /agent-realtime\.js\?v=20260726-1[\s\S]*app\.js\?v=20260726-session-ui-1/);
   assert.match(client, /type: "subagent-stop"/);
   assert.match(client, /type: "session-tree"/);
   assert.match(client, /type: "side-chat-submit"/);
@@ -35,6 +36,7 @@ test("Agent Web exposes dedicated Multi-Agent, thread tree, side chat, and Realt
   assert.match(styles, /\.thread-tree-list/);
   assert.match(styles, /\.side-chat-transcript/);
   assert.match(styles, /\.realtime-transcript/);
+  assert.match(styles, /\.app-session-more-menu/);
   assert.match(server, /sandbox: "read-only"/);
   assert.match(server, /ephemeral: true/);
   assert.match(server, /version: "v3"/);

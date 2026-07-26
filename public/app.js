@@ -49,6 +49,7 @@ const appSessionAgentsButton = document.querySelector("#app-session-agents");
 const appSessionTreeButton = document.querySelector("#app-session-tree");
 const appSessionSideChatButton = document.querySelector("#app-session-side-chat");
 const appSessionRealtimeButton = document.querySelector("#app-session-realtime");
+const appSessionMore = document.querySelector("#app-session-more");
 const archiveSessionButton = document.querySelector("#archive-session");
 const restartSessionButton = document.querySelector("#restart-session");
 const killSessionButton = document.querySelector("#kill-session");
@@ -341,9 +342,19 @@ sendStatusButton.addEventListener("click", () => command("/status"));
 sendPermissionsButton.addEventListener("click", () => command("/permissions"));
 appSessionPermissionsButton.addEventListener("click", () => runAppCommand("/permissions"));
 appSessionMemoriesButton.addEventListener("click", openMemoryManager);
-appSessionAgentsButton.addEventListener("click", openSubagentList);
-appSessionTreeButton.addEventListener("click", openThreadTree);
-appSessionSideChatButton.addEventListener("click", openSideChat);
+appSessionAgentsButton.addEventListener("click", () => {
+  closeAppSessionMoreMenu();
+  openSubagentList();
+});
+appSessionTreeButton.addEventListener("click", () => {
+  closeAppSessionMoreMenu();
+  openThreadTree();
+});
+appSessionSideChatButton.addEventListener("click", () => {
+  closeAppSessionMoreMenu();
+  openSideChat();
+});
+appSessionRealtimeButton.addEventListener("click", closeAppSessionMoreMenu);
 appSessionTaskControl.addEventListener("click", interruptCurrentTurn);
 archiveSessionButton.addEventListener("click", archiveCurrentSession);
 mobileArchiveSessionButton.addEventListener("click", archiveCurrentSession);
@@ -353,6 +364,12 @@ killSessionButton.addEventListener("click", endSession);
 mobileKillSessionButton.addEventListener("click", endSession);
 document.addEventListener("click", (event) => {
   if (sessionMenu.open && !sessionMenu.contains(event.target)) closeSessionMenu();
+  if (appSessionMore.open && !appSessionMore.contains(event.target)) closeAppSessionMoreMenu();
+  if (window.matchMedia("(hover: none)").matches) {
+    for (const visible of appServerTranscript.querySelectorAll(".app-transcript-item.actions-visible")) {
+      if (!visible.contains(event.target)) visible.classList.remove("actions-visible");
+    }
+  }
 });
 terminalSessionPreviewDismiss.addEventListener("click", hideTerminalSessionPreview);
 appTranscriptLatestButton.addEventListener("click", () => scrollAppTranscriptToBottom({ smooth: true }));
@@ -941,6 +958,10 @@ async function archiveCurrentSession() {
 
 function closeSessionMenu() {
   sessionMenu.removeAttribute("open");
+}
+
+function closeAppSessionMoreMenu() {
+  appSessionMore.removeAttribute("open");
 }
 
 function setArchiveSessionDisabled(disabled) {
@@ -4256,7 +4277,19 @@ function createAppTranscriptCard(item) {
     header.append(meta);
   }
   const actions = createTranscriptItemActions(item);
-  if (actions) header.append(actions);
+  if (actions) {
+    header.append(actions);
+    card.classList.add("has-transcript-actions");
+    card.addEventListener("click", (event) => {
+      if (!window.matchMedia("(hover: none)").matches) return;
+      if (event.target.closest(".app-transcript-item-actions, button, a, details, summary")) return;
+      const show = !card.classList.contains("actions-visible");
+      for (const visible of appServerTranscript.querySelectorAll(".app-transcript-item.actions-visible")) {
+        visible.classList.remove("actions-visible");
+      }
+      card.classList.toggle("actions-visible", show);
+    });
+  }
   card.append(header);
 
   if (item.text) {
@@ -4316,29 +4349,22 @@ function createAppTranscriptCard(item) {
 
 function createTranscriptItemActions(item) {
   if (!item.turnId || item.turnId === "session-preview") return null;
-  const canEdit = item.type === "user" && !(latestTurnState.active && latestTurnState.turnId === item.turnId);
-  const canFork =
-    item.type === "assistant" &&
-    item.phase === "final_answer" &&
-    !(latestTurnState.active && latestTurnState.turnId === item.turnId);
-  if (!canEdit && !canFork) return null;
+  const canBranch = item.type === "user" && !(latestTurnState.active && latestTurnState.turnId === item.turnId);
+  if (!canBranch) return null;
 
   const actions = document.createElement("span");
   actions.className = "app-transcript-item-actions";
-  if (canEdit) {
-    const edit = document.createElement("button");
-    edit.type = "button";
-    edit.textContent = "编辑并分支";
-    edit.addEventListener("click", () => beginEditAndFork(item));
-    actions.append(edit);
-  }
-  if (canFork) {
-    const fork = document.createElement("button");
-    fork.type = "button";
-    fork.textContent = "从这里分支";
-    fork.addEventListener("click", () => void forkFromTurn(item));
-    actions.append(fork);
-  }
+  const edit = document.createElement("button");
+  edit.type = "button";
+  edit.textContent = "编辑并分支";
+  edit.title = "修改这条 Prompt，并在新的分支中继续";
+  edit.addEventListener("click", () => beginEditAndFork(item));
+  const fork = document.createElement("button");
+  fork.type = "button";
+  fork.textContent = "从这里分支";
+  fork.title = "保留这一轮问答，从本轮结束处创建新的 Session";
+  fork.addEventListener("click", () => void forkFromTurn(item));
+  actions.append(edit, fork);
   return actions;
 }
 

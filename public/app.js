@@ -46,6 +46,9 @@ const appSessionTaskControl = document.querySelector("#app-session-task-control"
 const appSessionTaskState = document.querySelector("#app-session-task-state");
 const appSessionTaskStop = document.querySelector("#app-session-task-stop");
 const appSessionAgentsButton = document.querySelector("#app-session-agents");
+const appSessionTreeButton = document.querySelector("#app-session-tree");
+const appSessionSideChatButton = document.querySelector("#app-session-side-chat");
+const appSessionRealtimeButton = document.querySelector("#app-session-realtime");
 const archiveSessionButton = document.querySelector("#archive-session");
 const restartSessionButton = document.querySelector("#restart-session");
 const killSessionButton = document.querySelector("#kill-session");
@@ -92,6 +95,33 @@ const appCommandTitle = document.querySelector("#app-command-title");
 const appCommandContent = document.querySelector("#app-command-content");
 const appCommandActions = document.querySelector("#app-command-actions");
 const appCommandClose = document.querySelector("#app-command-close");
+const agentManagerDialog = document.querySelector("#agent-manager-dialog");
+const agentManagerRefresh = document.querySelector("#agent-manager-refresh");
+const agentManagerClose = document.querySelector("#agent-manager-close");
+const agentManagerNote = document.querySelector("#agent-manager-note");
+const agentManagerList = document.querySelector("#agent-manager-list");
+const threadTreeDialog = document.querySelector("#thread-tree-dialog");
+const threadTreeRefresh = document.querySelector("#thread-tree-refresh");
+const threadTreeClose = document.querySelector("#thread-tree-close");
+const threadTreeNote = document.querySelector("#thread-tree-note");
+const threadTreeContent = document.querySelector("#thread-tree-content");
+const sideChatDialog = document.querySelector("#side-chat-dialog");
+const sideChatDismiss = document.querySelector("#side-chat-dismiss");
+const sideChatClose = document.querySelector("#side-chat-close");
+const sideChatStatus = document.querySelector("#side-chat-status");
+const sideChatTranscript = document.querySelector("#side-chat-transcript");
+const sideChatInput = document.querySelector("#side-chat-input");
+const sideChatStop = document.querySelector("#side-chat-stop");
+const sideChatSend = document.querySelector("#side-chat-send");
+const realtimeDialog = document.querySelector("#realtime-dialog");
+const realtimeDismiss = document.querySelector("#realtime-dismiss");
+const realtimeStart = document.querySelector("#realtime-start");
+const realtimeStop = document.querySelector("#realtime-stop");
+const realtimeFallback = document.querySelector("#realtime-fallback");
+const realtimeVoice = document.querySelector("#realtime-voice");
+const realtimeStatus = document.querySelector("#realtime-status");
+const realtimeTranscript = document.querySelector("#realtime-transcript");
+const realtimeError = document.querySelector("#realtime-error");
 const threadSearchDialog = document.querySelector("#thread-search-dialog");
 const threadSearchInput = document.querySelector("#thread-search-input");
 const threadSearchSubmit = document.querySelector("#thread-search-submit");
@@ -210,6 +240,7 @@ let activeMemoryProjectSource = "global";
 let activeSessionReady = true;
 let activeStartupQueueSupported = false;
 let activeTurnInterruptSupported = false;
+let activeSessionCapabilities = {};
 let activeForkedFromId = "";
 let activeForkedFromTitle = "";
 let activeParentThreadId = "";
@@ -232,6 +263,7 @@ let cachedSessionPreview = null;
 let sessionPreviewRequestSequence = 0;
 let terminalPreviewAllowed = false;
 let terminalOutputWhilePreviewChars = 0;
+let agentManagerRefreshTimer = null;
 let appSkills = [];
 let appSkillsRequested = false;
 let suggestionItems = [];
@@ -310,6 +342,8 @@ sendPermissionsButton.addEventListener("click", () => command("/permissions"));
 appSessionPermissionsButton.addEventListener("click", () => runAppCommand("/permissions"));
 appSessionMemoriesButton.addEventListener("click", openMemoryManager);
 appSessionAgentsButton.addEventListener("click", openSubagentList);
+appSessionTreeButton.addEventListener("click", openThreadTree);
+appSessionSideChatButton.addEventListener("click", openSideChat);
 appSessionTaskControl.addEventListener("click", interruptCurrentTurn);
 archiveSessionButton.addEventListener("click", archiveCurrentSession);
 mobileArchiveSessionButton.addEventListener("click", archiveCurrentSession);
@@ -326,6 +360,31 @@ appServerView.addEventListener("scroll", handleAppTranscriptScroll, { passive: t
 appCommandClose.addEventListener("click", () => appCommandDialog.close());
 appCommandDialog.addEventListener("click", (event) => {
   if (event.target === appCommandDialog) appCommandDialog.close();
+});
+agentManagerRefresh.addEventListener("click", requestSubagentList);
+agentManagerClose.addEventListener("click", () => agentManagerDialog.close());
+agentManagerDialog.addEventListener("click", (event) => {
+  if (event.target === agentManagerDialog) agentManagerDialog.close();
+});
+agentManagerDialog.addEventListener("close", stopAgentManagerRefresh);
+threadTreeRefresh.addEventListener("click", requestThreadTree);
+threadTreeClose.addEventListener("click", () => threadTreeDialog.close());
+threadTreeDialog.addEventListener("click", (event) => {
+  if (event.target === threadTreeDialog) threadTreeDialog.close();
+});
+sideChatDismiss.addEventListener("click", () => sideChatDialog.close());
+sideChatDialog.addEventListener("click", (event) => {
+  if (event.target === sideChatDialog) sideChatDialog.close();
+});
+sideChatSend.addEventListener("click", submitSideChat);
+sideChatStop.addEventListener("click", () => send({ type: "side-chat-stop" }));
+sideChatClose.addEventListener("click", closeSideChat);
+sideChatInput.addEventListener("keydown", (event) => {
+  if (event.isComposing) return;
+  if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+    event.preventDefault();
+    submitSideChat();
+  }
 });
 threadSearchClose.addEventListener("click", () => threadSearchDialog.close());
 threadSearchDialog.addEventListener("click", (event) => {
@@ -370,6 +429,21 @@ const voiceInputController = window.AgentVoiceInput.create({
   getRecoveryContext: () => activeSessionId || activeSessionParams.sessionId || "",
 });
 voiceInputController.install();
+const realtimeController = window.AgentRealtime.create({
+  launchButton: appSessionRealtimeButton,
+  dialog: realtimeDialog,
+  dismissButton: realtimeDismiss,
+  startButton: realtimeStart,
+  stopButton: realtimeStop,
+  fallbackButton: realtimeFallback,
+  voiceSelect: realtimeVoice,
+  statusElement: realtimeStatus,
+  transcriptElement: realtimeTranscript,
+  errorElement: realtimeError,
+  send,
+  fallbackToDictation: () => voiceInputController.start(),
+});
+realtimeController.install();
 installPageDownLongPress();
 installClientEventLogging();
 
@@ -1122,6 +1196,7 @@ function openSocket(params, options = {}) {
   activeSessionReady = activeTransport !== "app-server";
   activeStartupQueueSupported = false;
   activeTurnInterruptSupported = false;
+  activeSessionCapabilities = {};
   syncAppSessionToolbar();
   document.body.classList.toggle("app-server-session", activeTransport === "app-server");
   clearAgentRequest();
@@ -1205,6 +1280,18 @@ function openSocket(params, options = {}) {
     }
     if (message.type === "app-skills") {
       receiveAppSkills(message.payload);
+      return;
+    }
+    if (message.type === "side-chat-state") {
+      renderSideChat(message.payload);
+      return;
+    }
+    if (message.type === "side-chat-error") {
+      renderSideChatError(message.payload);
+      return;
+    }
+    if (String(message.type || "").startsWith("realtime-")) {
+      realtimeController.handleMessage(message.type, message.payload);
       return;
     }
     if (message.type === "agent-request") {
@@ -1538,6 +1625,10 @@ function renderAppCommandResult(payload = {}) {
     renderAppSubagents(payload);
     return;
   }
+  if (payload.kind === "thread-tree") {
+    renderThreadTree(payload);
+    return;
+  }
   if (payload.kind === "inventory") {
     showAppCommandDialog({
       title: payload.title || "Inventory",
@@ -1608,33 +1699,254 @@ function renderAppCommandResult(payload = {}) {
 }
 
 function openSubagentList() {
-  showAppCommandDialog({ title: "Subagents", content: "正在读取子 Agent 线程…" });
+  agentManagerNote.textContent = "正在读取当前 Session 的子 Agent…";
+  agentManagerList.replaceChildren();
+  if (!agentManagerDialog.open) agentManagerDialog.showModal();
+  requestSubagentList();
+  stopAgentManagerRefresh();
+  agentManagerRefreshTimer = window.setInterval(requestSubagentList, 4_000);
+}
+
+function requestSubagentList() {
+  agentManagerRefresh.disabled = true;
   if (!send({ type: "subagents-list" })) {
-    showAppCommandDialog({ title: "Subagents", content: "连接恢复中，请稍后重试。" });
+    agentManagerRefresh.disabled = false;
+    agentManagerNote.textContent = "连接恢复中，请稍后重试。";
   }
+}
+
+function stopAgentManagerRefresh() {
+  if (!agentManagerRefreshTimer) return;
+  window.clearInterval(agentManagerRefreshTimer);
+  agentManagerRefreshTimer = null;
 }
 
 function renderAppSubagents(payload = {}) {
   const agents = Array.isArray(payload.agents) ? payload.agents : [];
-  showAppCommandDialog({
-    title: payload.title || "Subagents",
-    rows: agents.map((agent) => [
-      [agent.nickname, agent.role].filter(Boolean).join(" · ") || agent.name || "子 Agent",
-      `${agent.status || "未知"} · ${formatTime(agent.updatedAt)}`,
-    ]),
-    note: payload.note || "",
-    actions: agents.map((agent) => ({
-      label: `打开 ${agent.nickname || agent.name || "子 Agent"}`,
-      action: () =>
+  agentManagerRefresh.disabled = false;
+  agentManagerNote.textContent = payload.note || "";
+  if (!agents.length) {
+    agentManagerList.replaceChildren(createFeatureEmpty("当前 Session 还没有子 Agent。"));
+    return;
+  }
+  agentManagerList.replaceChildren(...agents.map(createAgentCard));
+}
+
+function createAgentCard(agent) {
+  const card = document.createElement("article");
+  card.className = "agent-card";
+  const header = document.createElement("header");
+  const title = document.createElement("div");
+  title.className = "agent-card-title";
+  const name = document.createElement("strong");
+  name.textContent = [agent.nickname, agent.role].filter(Boolean).join(" · ") || agent.name || "子 Agent";
+  const description = document.createElement("span");
+  description.textContent = agent.roleDescription || agent.name || "Codex 子 Agent";
+  title.append(name, description);
+  const status = document.createElement("span");
+  status.className = "agent-status";
+  status.dataset.state = agent.statusType || "";
+  status.textContent = agent.state ? `${agent.status || "未知"} · ${agent.state}` : agent.status || "未知";
+  header.append(title, status);
+
+  const metadata = document.createElement("div");
+  metadata.className = "agent-card-meta";
+  const model = [agent.model, agent.reasoningEffort].filter(Boolean).join(" · ");
+  for (const value of [model, agent.project, formatTime(agent.updatedAt)].filter(Boolean)) {
+    const label = document.createElement("span");
+    label.textContent = value;
+    metadata.append(label);
+  }
+  const prompt = document.createElement("p");
+  prompt.className = "agent-card-prompt";
+  prompt.textContent = agent.prompt || agent.stateMessage || "没有可显示的委派 Prompt。";
+
+  const actions = document.createElement("div");
+  actions.className = "agent-card-actions";
+  const open = document.createElement("button");
+  open.type = "button";
+  open.textContent = "打开线程";
+  open.addEventListener("click", () =>
+    openSessionTab({
+      cwd: agent.project || activeSessionParams.cwd || ".",
+      sessionId: agent.id,
+      title: agent.name || agent.nickname || "子 Agent",
+      transport: "app-server",
+      access: activeAccessMode,
+    }),
+  );
+  actions.append(open);
+  if (agent.canStop) {
+    const stop = document.createElement("button");
+    stop.type = "button";
+    stop.className = "danger";
+    stop.textContent = "停止 Agent";
+    stop.addEventListener("click", () => {
+      stop.disabled = true;
+      stop.textContent = "正在停止…";
+      if (!send({ type: "subagent-stop", threadId: agent.id })) {
+        stop.disabled = false;
+        stop.textContent = "停止 Agent";
+      }
+    });
+    actions.append(stop);
+  }
+  card.append(header, metadata, prompt, actions);
+  return card;
+}
+
+function openThreadTree() {
+  threadTreeNote.textContent = "正在读取分支与 Agent 关系…";
+  threadTreeContent.replaceChildren();
+  if (!threadTreeDialog.open) threadTreeDialog.showModal();
+  requestThreadTree();
+}
+
+function requestThreadTree() {
+  threadTreeRefresh.disabled = true;
+  if (!send({ type: "session-tree" })) {
+    threadTreeRefresh.disabled = false;
+    threadTreeNote.textContent = "连接恢复中，请稍后重试。";
+  }
+}
+
+function renderThreadTree(payload = {}) {
+  const nodes = Array.isArray(payload.nodes) ? payload.nodes : [];
+  threadTreeRefresh.disabled = false;
+  threadTreeNote.textContent = payload.note || "";
+  if (!nodes.length) {
+    threadTreeContent.replaceChildren(createFeatureEmpty("没有找到当前 Session 的关系信息。"));
+    return;
+  }
+  const children = new Map();
+  for (const node of nodes) {
+    const parentId = nodes.some((candidate) => candidate.id === node.parentId) ? node.parentId : "";
+    if (!children.has(parentId)) children.set(parentId, []);
+    children.get(parentId).push(node);
+  }
+  for (const entries of children.values()) {
+    entries.sort((left, right) => new Date(left.updatedAt || 0) - new Date(right.updatedAt || 0));
+  }
+  const list = document.createElement("ul");
+  list.className = "thread-tree-list";
+  appendThreadTreeNodes(list, children, "", new Set());
+  threadTreeContent.replaceChildren(list);
+}
+
+function appendThreadTreeNodes(host, children, parentId, visited) {
+  for (const node of children.get(parentId) || []) {
+    if (visited.has(node.id)) continue;
+    visited.add(node.id);
+    const item = document.createElement("li");
+    const row = document.createElement("div");
+    row.className = "thread-tree-node";
+    row.dataset.current = String(Boolean(node.current));
+    const main = document.createElement("button");
+    main.type = "button";
+    main.className = "thread-tree-node-main";
+    const title = document.createElement("strong");
+    title.textContent = node.current ? `${node.name} · 当前` : node.name;
+    const detail = document.createElement("span");
+    detail.textContent = [
+      [node.nickname, node.role].filter(Boolean).join(" · "),
+      node.status,
+      node.archived ? "已归档" : "",
+      formatTime(node.updatedAt),
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    main.append(title, detail);
+    if (!node.current) {
+      main.addEventListener("click", () =>
         openSessionTab({
-          cwd: agent.project || activeSessionParams.cwd || ".",
-          sessionId: agent.id,
-          title: agent.name || agent.nickname || "子 Agent",
+          cwd: node.project || activeSessionParams.cwd || ".",
+          sessionId: node.id,
+          title: node.name,
           transport: "app-server",
           access: activeAccessMode,
         }),
-    })),
-  });
+      );
+    }
+    const relation = document.createElement("span");
+    relation.className = "thread-relation";
+    relation.textContent = { agent: "Agent", branch: "分支", root: "根" }[node.relation] || node.relation || "";
+    row.append(main, relation);
+    item.append(row);
+    if (children.has(node.id)) {
+      const nested = document.createElement("ul");
+      appendThreadTreeNodes(nested, children, node.id, visited);
+      item.append(nested);
+    }
+    host.append(item);
+  }
+}
+
+function createFeatureEmpty(text) {
+  const empty = document.createElement("p");
+  empty.className = "feature-empty";
+  empty.textContent = text;
+  return empty;
+}
+
+function openSideChat() {
+  if (!sideChatDialog.open) sideChatDialog.showModal();
+  send({ type: "side-chat-open" });
+  requestAnimationFrame(() => sideChatInput.focus());
+}
+
+function submitSideChat() {
+  const data = sideChatInput.value.trim();
+  if (!data) return;
+  if (!send({ type: "side-chat-submit", data })) {
+    renderSideChatError({ message: "连接恢复中，请稍后重试。" });
+    return;
+  }
+  sideChatInput.value = "";
+  sideChatSend.disabled = true;
+  sideChatStatus.textContent = "正在创建只读临时分支…";
+}
+
+function closeSideChat() {
+  send({ type: "side-chat-close" });
+  sideChatDialog.close();
+}
+
+function renderSideChat(payload = {}) {
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  const labels = {
+    closed: "独立于主任务，发送后创建只读临时分支",
+    starting: "正在创建只读临时分支…",
+    idle: "临时分支空闲",
+    working: "Codex 正在回答侧问…",
+    stopping: "正在停止回答…",
+    failed: payload.error || "临时侧问失败",
+  };
+  sideChatStatus.textContent = labels[payload.status] || payload.status || labels.closed;
+  sideChatStop.disabled = !payload.active || payload.status === "stopping";
+  sideChatSend.disabled = Boolean(payload.active) || payload.status === "starting";
+  sideChatInput.disabled = Boolean(payload.active) || payload.status === "starting";
+  const shouldFollow =
+    sideChatTranscript.scrollHeight - sideChatTranscript.scrollTop - sideChatTranscript.clientHeight < 80;
+  if (!items.length) {
+    sideChatTranscript.replaceChildren(createFeatureEmpty("这里的问答不会进入主 Session，也不能修改文件。"));
+  } else {
+    sideChatTranscript.replaceChildren(
+      ...items.map((item) => {
+        const message = document.createElement("article");
+        message.className = "side-chat-message";
+        message.dataset.role = item.role || "notice";
+        message.textContent = item.text || (item.status === "inProgress" ? "正在回答…" : "…");
+        return message;
+      }),
+    );
+  }
+  if (shouldFollow) sideChatTranscript.scrollTop = sideChatTranscript.scrollHeight;
+}
+
+function renderSideChatError(payload = {}) {
+  sideChatStatus.textContent = payload.message || "临时侧问失败。";
+  sideChatSend.disabled = false;
+  sideChatInput.disabled = false;
 }
 
 function openThreadSearch() {
@@ -2688,6 +3000,7 @@ function renderStatus(status) {
   activeSessionReady = status.ready !== false;
   activeStartupQueueSupported = Boolean(status.capabilities?.startupQueue);
   activeTurnInterruptSupported = Boolean(status.capabilities?.interruptTurn);
+  activeSessionCapabilities = status.capabilities || {};
   activeForkedFromId = String(status.forkedFromId || "");
   activeForkedFromTitle = String(status.forkedFromTitle || "");
   activeParentThreadId = String(status.parentThreadId || "");
@@ -2803,7 +3116,15 @@ function setConnectedState(state) {
   sendStatusButton.disabled = !connected;
   sendPermissionsButton.disabled = !connected;
   appSessionPermissionsButton.disabled = activeTransport !== "app-server" || !connected;
-  appSessionAgentsButton.disabled = activeTransport !== "app-server" || !connected;
+  appSessionAgentsButton.disabled =
+    activeTransport !== "app-server" || !connected || !activeSessionCapabilities.subagents;
+  appSessionTreeButton.disabled =
+    activeTransport !== "app-server" || !connected || !activeSessionCapabilities.threadTree;
+  appSessionSideChatButton.disabled =
+    activeTransport !== "app-server" || !connected || !activeSessionCapabilities.sideChat;
+  realtimeController.setEnabled(
+    activeTransport === "app-server" && connected && Boolean(activeSessionCapabilities.realtimeV3),
+  );
   searchCurrentSessionButton.disabled = activeTransport !== "app-server" || !connected;
   mobileSearchCurrentSessionButton.disabled = activeTransport !== "app-server" || !connected;
   const canManageSession = ["connected", "starting", "loading"].includes(state);

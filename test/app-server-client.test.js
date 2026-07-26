@@ -192,6 +192,73 @@ test("app-server client exposes native search, fork, and subagent thread listing
   assert.ok(fake.received.some((message) => message.method === "thread/fork"));
 });
 
+test("app-server client exposes Realtime V3 and targeted Agent interruption", async (t) => {
+  const fake = createFakeAppServer();
+  const client = new CodexAppServerClient({ spawnImpl: () => fake.child, requestTimeoutMs: 1_000 });
+  t.after(() => client.close());
+
+  await client.start();
+  await client.startThread();
+  const voices = await client.listRealtimeVoices();
+  await client.startRealtime({
+    version: "v3",
+    voice: "marin",
+    outputModality: "audio",
+    transport: { type: "websocket" },
+  });
+  await client.appendRealtimeAudio({
+    data: "AAA=",
+    sampleRate: 24_000,
+    numChannels: 1,
+    samplesPerChannel: 1,
+    itemId: null,
+  });
+  await client.appendRealtimeText("补充说明");
+  await client.stopRealtime();
+  await client.interruptThreadTurn("child-thread", "child-turn");
+
+  assert.deepEqual(voices.voices.v2, ["marin", "cedar"]);
+  assert.deepEqual(
+    fake.received.find((message) => message.method === "thread/realtime/start").params,
+    {
+      threadId: "thread-1",
+      version: "v3",
+      voice: "marin",
+      outputModality: "audio",
+      transport: { type: "websocket" },
+    },
+  );
+  assert.deepEqual(
+    fake.received.find((message) => message.method === "thread/realtime/appendText").params,
+    { threadId: "thread-1", text: "补充说明", role: "user" },
+  );
+  assert.ok(
+    fake.received.some(
+      (message) =>
+        message.method === "turn/interrupt" &&
+        message.params.threadId === "child-thread" &&
+        message.params.turnId === "child-turn",
+    ),
+  );
+});
+
+test("subagent turn notifications do not replace the main thread active turn", async (t) => {
+  const fake = createFakeAppServer();
+  const client = new CodexAppServerClient({ spawnImpl: () => fake.child, requestTimeoutMs: 1_000 });
+  t.after(() => client.close());
+
+  await client.start();
+  await client.startThread();
+  await client.startTurn("Main task");
+  assert.equal(client.activeTurnId, "turn-1");
+
+  fake.send({ method: "turn/started", params: { threadId: "child-thread", turn: { id: "child-turn" } } });
+  fake.send({ method: "turn/completed", params: { threadId: "child-thread", turn: { id: "child-turn" } } });
+  await tick();
+
+  assert.equal(client.activeTurnId, "turn-1");
+});
+
 function createFakeAppServer({ completeTurnImmediately = false } = {}) {
   const child = new EventEmitter();
   const stdout = new PassThrough();
@@ -352,6 +419,26 @@ function createFakeAppServer({ completeTurnImmediately = false } = {}) {
     }
     if (message.method === "thread/goal/get") {
       send({ id: message.id, result: { goal: { objective: "Ship it" } } });
+      return;
+    }
+    if (message.method === "thread/realtime/listVoices") {
+      send({
+        id: message.id,
+        result: {
+          voices: { v1: ["alloy"], v2: ["marin", "cedar"], defaultV1: "alloy", defaultV2: "marin" },
+        },
+      });
+      return;
+    }
+    if (
+      [
+        "thread/realtime/start",
+        "thread/realtime/appendAudio",
+        "thread/realtime/appendText",
+        "thread/realtime/stop",
+      ].includes(message.method)
+    ) {
+      send({ id: message.id, result: {} });
       return;
     }
     if (message.method === "turn/start") {

@@ -36,7 +36,7 @@
       }
     </style>
     <link rel="stylesheet" href="/vendor/xterm-css/xterm.css?v=20260625-5" />
-    <link rel="stylesheet" href="/styles.css?v=20260726-history-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260726-collaboration-1" />
     <link rel="stylesheet" href="/session-focus-mode.css?v=20260720-app-toolbar-1" />
     <link rel="stylesheet" href="/thinking-session.css?v=20260716-1" />
     <link rel="stylesheet" href="/agent-memories.css?v=20260723-pending-merge-1" />
@@ -227,7 +227,19 @@
           </button>
           <button id="app-session-agents" type="button" title="查看当前 Session 的子 Agent">
             <span>Agents</span>
-            <strong>查看</strong>
+            <strong>管理</strong>
+          </button>
+          <button id="app-session-tree" type="button" title="查看 Session 分支与 Agent 关系">
+            <span>关系</span>
+            <strong>分支树</strong>
+          </button>
+          <button id="app-session-side-chat" type="button" title="打开不影响主任务的只读临时对话">
+            <span>侧问</span>
+            <strong>临时</strong>
+          </button>
+          <button id="app-session-realtime" type="button" title="实验性 Realtime V3 实时语音">
+            <span>语音</span>
+            <strong>实时</strong>
           </button>
           <button
             id="app-session-memories"
@@ -346,6 +358,95 @@
       </form>
     </dialog>
 
+    <dialog id="agent-manager-dialog" class="feature-dialog" aria-labelledby="agent-manager-title">
+      <section class="feature-dialog-shell">
+        <header>
+          <div>
+            <span>Multi-Agent V2</span>
+            <h2 id="agent-manager-title">Agent 管理</h2>
+          </div>
+          <div class="feature-dialog-header-actions">
+            <button id="agent-manager-refresh" type="button">刷新</button>
+            <button id="agent-manager-close" class="dialog-close" type="button" aria-label="关闭">×</button>
+          </div>
+        </header>
+        <p id="agent-manager-note" class="feature-dialog-note">正在读取当前 Session 的子 Agent…</p>
+        <div id="agent-manager-list" class="agent-manager-list" aria-live="polite"></div>
+      </section>
+    </dialog>
+
+    <dialog id="thread-tree-dialog" class="feature-dialog" aria-labelledby="thread-tree-title">
+      <section class="feature-dialog-shell">
+        <header>
+          <div>
+            <span>Session lineage</span>
+            <h2 id="thread-tree-title">Session 关系</h2>
+          </div>
+          <div class="feature-dialog-header-actions">
+            <button id="thread-tree-refresh" type="button">刷新</button>
+            <button id="thread-tree-close" class="dialog-close" type="button" aria-label="关闭">×</button>
+          </div>
+        </header>
+        <p id="thread-tree-note" class="feature-dialog-note">正在读取分支与 Agent 关系…</p>
+        <div id="thread-tree-content" class="thread-tree-content" aria-live="polite"></div>
+      </section>
+    </dialog>
+
+    <dialog id="side-chat-dialog" class="feature-dialog side-chat-dialog" aria-labelledby="side-chat-title">
+      <section class="feature-dialog-shell">
+        <header>
+          <div>
+            <span>Ephemeral · Read-only</span>
+            <h2 id="side-chat-title">临时侧问</h2>
+          </div>
+          <button id="side-chat-dismiss" class="dialog-close" type="button" aria-label="收起">×</button>
+        </header>
+        <div class="side-chat-summary">
+          <span id="side-chat-status">独立于主任务，关闭后不保留</span>
+          <button id="side-chat-close" class="danger" type="button">结束并清除</button>
+        </div>
+        <div id="side-chat-transcript" class="side-chat-transcript" aria-live="polite"></div>
+        <label class="side-chat-composer">
+          <span>只读侧问</span>
+          <textarea id="side-chat-input" rows="3" placeholder="例如：先解释一下刚才提到的协议，不要修改文件。"></textarea>
+        </label>
+        <div class="feature-dialog-actions">
+          <button id="side-chat-stop" type="button" disabled>停止回答</button>
+          <button id="side-chat-send" class="primary" type="button">发送侧问</button>
+        </div>
+      </section>
+    </dialog>
+
+    <dialog id="realtime-dialog" class="feature-dialog realtime-dialog" aria-labelledby="realtime-title">
+      <section class="feature-dialog-shell">
+        <header>
+          <div>
+            <span>Experimental · Realtime V3</span>
+            <h2 id="realtime-title">实时语音对话</h2>
+          </div>
+          <button id="realtime-dismiss" class="dialog-close" type="button" aria-label="收起">×</button>
+        </header>
+        <div class="realtime-controls">
+          <label>
+            <span>声音</span>
+            <select id="realtime-voice">
+              <option value="marin">marin</option>
+            </select>
+          </label>
+          <strong id="realtime-status" data-state="idle">尚未开始</strong>
+        </div>
+        <div id="realtime-transcript" class="realtime-transcript" aria-live="polite">
+          <p class="feature-empty">开始后可直接说话，Codex 会用语音回应。</p>
+        </div>
+        <p id="realtime-error" class="realtime-error hidden"></p>
+        <div class="feature-dialog-actions realtime-actions">
+          <button id="realtime-fallback" type="button">改用语音转文字</button>
+          <button id="realtime-stop" type="button" disabled>停止</button>
+          <button id="realtime-start" class="primary" type="button">开始实时对话</button>
+        </div>
+      </section>
+    </dialog>
+
     <dialog id="thread-search-dialog" class="thread-search-dialog" aria-labelledby="thread-search-title">
       <form method="dialog">
         <header>
@@ -424,7 +525,8 @@
     <script src="/shared/voice-capture-widget.js?v=20260717-recovery-3"></script>
     <script src="/agent-upload.js?v=20260725-attachment-wait-1"></script>
     <script src="/agent-voice-input.js?v=20260717-recovery-2"></script>
-    <script src="/app.js?v=20260726-history-1"></script>
+    <script src="/agent-realtime.js?v=20260726-1"></script>
+    <script src="/app.js?v=20260726-collaboration-1"></script>
     <script src="/session-focus-mode.js?v=20260716-app-chrome-1"></script>
   </body>
 </html>

@@ -109,6 +109,11 @@ const APP_HISTORY_PAGE_LIMIT = 10;
 const APP_SEARCH_RESULT_LIMIT = 30;
 const APP_SEARCH_HYDRATE_PAGE_LIMIT = 25;
 const APP_SEARCH_HYDRATE_MAX_TURNS = 250;
+const APP_THREAD_TREE_PAGE_LIMIT = 100;
+const APP_THREAD_TREE_MAX_THREADS = 800;
+const REALTIME_AUDIO_MAX_BASE64_CHARS = 196_608;
+const REALTIME_SAMPLE_RATE_MIN = 8_000;
+const REALTIME_SAMPLE_RATE_MAX = 48_000;
 const MAX_APP_TRANSCRIPT_ITEMS = 4_000;
 const MAX_APP_TRANSCRIPT_TEXT = 200_000;
 const MAX_APP_TRANSCRIPT_DETAIL = 40_000;
@@ -126,6 +131,18 @@ const APP_SERVER_TRANSPORT = "app-server";
 const FULL_ACCESS_MODE = "full";
 const THINK_SESSION_PURPOSE = "think";
 const THINKING_SKILL_INVOCATION = "$thinking-partner";
+const APP_THREAD_SOURCE_KINDS = [
+  "cli",
+  "vscode",
+  "exec",
+  "appServer",
+  "subAgent",
+  "subAgentReview",
+  "subAgentCompact",
+  "subAgentThreadSpawn",
+  "subAgentOther",
+  "unknown",
+];
 const AGENT_WEB_DEVELOPER_INSTRUCTIONS = [
   "Agent Web service safety:",
   "- Never stop, restart, kill, or otherwise terminate agent-terminal-web.service from this Codex session, including through systemctl or an absolute executable path.",
@@ -1431,6 +1448,7 @@ function createAppServerSession(cwd, launch, restored = {}) {
     pendingStartupPrompts: [],
     pendingPersonalMemoryCitations: [],
     personalMemoryCitationsByTurn: new Map(),
+    collabAgentMetadata: new Map(),
     submittedAttachmentMetadata: new Map(),
     streamedItemIds: new Set(),
     lastAssistantMessage: "",
@@ -1440,6 +1458,8 @@ function createAppServerSession(cwd, launch, restored = {}) {
     restoredHistoryHasMore: false,
     restoredHistoryCursor: null,
     restoredHistoryLoading: false,
+    sideChat: null,
+    realtime: restoreRealtimeState(),
     appSkills: null,
     appTokenUsage: null,
     appModel: String(restored.appModel || ""),
@@ -1772,6 +1792,8 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
   send(ws, "status", publicSession(session));
   if (session.transport === APP_SERVER_TRANSPORT) {
     send(ws, "app-transcript", publicAppTranscript(session));
+    send(ws, "side-chat-state", publicSideChatState(session.sideChat));
+    send(ws, "realtime-state", publicRealtimeState(session.realtime));
     for (const request of session.pendingServerRequests.values()) {
       send(ws, "agent-request", publicAppServerRequest(request));
     }
@@ -1825,6 +1847,10 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
     }
 
     if (message.type === "submit" && typeof message.data === "string") {
+      if (session.transport === APP_SERVER_TRANSPORT && realtimeBusy(session.realtime)) {
+        send(ws, "error", { message: "实时语音正在使用当前 Session，请先结束语音对话。", preservePrompt: true });
+        return;
+      }
       const normalized = message.data.trim();
       let attachments;
       try {
@@ -1979,6 +2005,87 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
       void sendAppServerSubagents(session, ws).catch((error) => {
         send(ws, "error", { message: `子 Agent 列表暂时不可用：${error.message}` });
       });
+      return;
+    }
+
+    if (message.type === "subagent-stop" && session.transport === APP_SERVER_TRANSPORT) {
+      void stopAppServerSubagent(session, String(message.threadId || ""))
+        .then((result) => {
+          send(ws, "control-ack", { kind: "subagent-stop", receivedAt: Date.now(), ...result });
+          return sendAppServerSubagents(session, ws);
+        })
+        .catch((error) => send(ws, "error", { message: `子 Agent 没有停止：${error.message}` }));
+      return;
+    }
+
+    if (message.type === "session-tree" && session.transport === APP_SERVER_TRANSPORT) {
+      void sendAppServerThreadTree(session, ws).catch((error) => {
+        send(ws, "error", { message: `Session 关系图暂时不可用：${error.message}` });
+      });
+      return;
+    }
+
+    if (message.type === "side-chat-open" && session.transport === APP_SERVER_TRANSPORT) {
+      send(ws, "side-chat-state", publicSideChatState(session.sideChat));
+      return;
+    }
+
+    if (message.type === "side-chat-submit" && session.transport === APP_SERVER_TRANSPORT) {
+      const text = String(message.data || "").trim();
+      if (!text) {
+        send(ws, "error", { message: "临时侧问不能为空。" });
+        return;
+      }
+      renewSessionRetention(session);
+      void submitSideChatPrompt(session, text)
+        .then((result) => send(ws, "control-ack", { kind: "side-chat-submit", receivedAt: Date.now(), ...result }))
+        .catch((error) => send(ws, "side-chat-error", { message: `临时侧问失败：${error.message}` }));
+      return;
+    }
+
+    if (message.type === "side-chat-stop" && session.transport === APP_SERVER_TRANSPORT) {
+      void stopSideChat(session)
+        .then(() => send(ws, "control-ack", { kind: "side-chat-stop", receivedAt: Date.now() }))
+        .catch((error) => send(ws, "side-chat-error", { message: `临时侧问没有停止：${error.message}` }));
+      return;
+    }
+
+    if (message.type === "side-chat-close" && session.transport === APP_SERVER_TRANSPORT) {
+      closeSideChat(session);
+      send(ws, "control-ack", { kind: "side-chat-close", receivedAt: Date.now() });
+      return;
+    }
+
+    if (message.type === "realtime-voices" && session.transport === APP_SERVER_TRANSPORT) {
+      void sendRealtimeVoices(session, ws).catch((error) => {
+        send(ws, "realtime-error", { message: `实时语音列表不可用：${error.message}` });
+      });
+      return;
+    }
+
+    if (message.type === "realtime-start" && session.transport === APP_SERVER_TRANSPORT) {
+      renewSessionRetention(session);
+      void startRealtimeConversation(session, message.voice)
+        .then(() => send(ws, "control-ack", { kind: "realtime-start", receivedAt: Date.now() }))
+        .catch((error) => failRealtimeConversation(session, error));
+      return;
+    }
+
+    if (message.type === "realtime-audio" && session.transport === APP_SERVER_TRANSPORT) {
+      try {
+        if (session.realtime?.status !== "live") throw new Error("实时对话还没有进入连接状态。");
+        const audio = normalizeRealtimeAudioChunk(message.audio);
+        void session.appServer.appendRealtimeAudio(audio).catch((error) => failRealtimeConversation(session, error));
+      } catch (error) {
+        failRealtimeConversation(session, error);
+      }
+      return;
+    }
+
+    if (message.type === "realtime-stop" && session.transport === APP_SERVER_TRANSPORT) {
+      void stopRealtimeConversation(session)
+        .then(() => send(ws, "control-ack", { kind: "realtime-stop", receivedAt: Date.now() }))
+        .catch((error) => failRealtimeConversation(session, error));
       return;
     }
 
@@ -2277,7 +2384,9 @@ function sessionHasActiveWork(session) {
   return Boolean(
     session?.turnState?.active ||
       session?.appServer?.activeTurnId ||
-      session?.pendingStartupPrompts?.length,
+      session?.pendingStartupPrompts?.length ||
+      session?.sideChat?.active ||
+      realtimeBusy(session?.realtime),
   );
 }
 
@@ -3495,28 +3604,641 @@ async function editAndForkAppServerSession(session, { beforeTurnId, editedText, 
 async function sendAppServerSubagents(session, ws) {
   const response = await session.appServer.listThreads({
     ancestorThreadId: session.sessionId,
-    limit: APP_SEARCH_RESULT_LIMIT,
+    limit: APP_THREAD_TREE_PAGE_LIMIT,
     sortKey: "updated_at",
     sortDirection: "desc",
     useStateDbOnly: true,
   });
-  const agents = (Array.isArray(response?.data) ? response.data : []).map((thread) => ({
-    id: String(thread?.id || ""),
-    name: cleanCustomTitle(thread?.name) || cleanTitle(thread?.preview) || "子 Agent",
-    nickname: String(thread?.agentNickname || ""),
-    role: String(thread?.agentRole || ""),
-    status: threadStatusLabel(thread?.status),
-    updatedAt: unixSecondsToIso(thread?.updatedAt),
-    project: projectFromCwd(String(thread?.cwd || session.cwd)),
-  }));
+  const profiles = await readAgentRoleProfiles();
+  const threads = Array.isArray(response?.data) ? response.data : [];
+  const agents = await Promise.all(
+    threads.map(async (thread) => {
+      const id = String(thread?.id || "");
+      const metadata = session.collabAgentMetadata.get(id) || {};
+      const profile = profiles.get(String(thread?.agentRole || "")) || {};
+      let activeTurnId = "";
+      if (String(thread?.status?.type || "") === "active") {
+        const liveThread = await session.appServer.readThread({ threadId: id, includeTurns: true }).catch(() => null);
+        activeTurnId = activeTurnFromThread(liveThread)?.id || "";
+      }
+      return {
+        id,
+        name: cleanCustomTitle(thread?.name) || cleanTitle(thread?.preview) || "子 Agent",
+        nickname: String(thread?.agentNickname || ""),
+        role: String(thread?.agentRole || ""),
+        roleDescription: String(profile.description || ""),
+        status: threadStatusLabel(thread?.status),
+        statusType: String(thread?.status?.type || ""),
+        state: String(metadata.state || ""),
+        stateMessage: String(metadata.stateMessage || ""),
+        model: String(metadata.model || profile.model || ""),
+        reasoningEffort: String(metadata.reasoningEffort || profile.reasoningEffort || ""),
+        prompt: trimAppTranscriptValue(metadata.prompt, 4_000),
+        activeTurnId,
+        canStop: Boolean(activeTurnId),
+        updatedAt: unixSecondsToIso(thread?.updatedAt),
+        project: projectFromCwd(String(thread?.cwd || session.cwd)),
+      };
+    }),
+  );
   send(ws, "app-command-result", {
     kind: "subagents",
-    title: "Subagents",
+    title: "Agent 管理",
     agents,
     note: agents.length
-      ? "子 Agent 继承当前权限；打开后可以查看它的完整线程。"
+      ? "这里显示当前 Session 树中的子 Agent。打开可进入完整线程；运行中的 Agent 可以单独停止。"
       : "还没有子 Agent。需要时在 Prompt 中明确要求 Codex 并行委派。",
   });
+}
+
+function rememberCollabAgentMetadata(session, item) {
+  if (item?.type !== "collabAgentToolCall") return;
+  for (const receiverThreadId of Array.isArray(item.receiverThreadIds) ? item.receiverThreadIds : []) {
+    const id = String(receiverThreadId || "");
+    if (!id) continue;
+    const previous = session.collabAgentMetadata.get(id) || {};
+    const agentState = item.agentsStates?.[id] || {};
+    session.collabAgentMetadata.set(id, {
+      ...previous,
+      prompt: item.prompt || previous.prompt || "",
+      model: item.model || previous.model || "",
+      reasoningEffort: item.reasoningEffort || previous.reasoningEffort || "",
+      state: agentState.status || previous.state || "",
+      stateMessage: agentState.message || previous.stateMessage || "",
+      tool: item.tool || previous.tool || "",
+    });
+  }
+}
+
+async function readAgentRoleProfiles() {
+  const profiles = new Map();
+  const directory = path.join(CODEX_HOME, "agents");
+  let files;
+  try {
+    files = await fs.readdir(directory, { withFileTypes: true });
+  } catch {
+    return profiles;
+  }
+  await Promise.all(
+    files
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".toml"))
+      .map(async (entry) => {
+        const role = entry.name.slice(0, -5);
+        try {
+          const source = await fs.readFile(path.join(directory, entry.name), "utf8");
+          profiles.set(role, {
+            description: tomlQuotedValue(source, "description"),
+            model: tomlQuotedValue(source, "model"),
+            reasoningEffort: tomlQuotedValue(source, "model_reasoning_effort"),
+          });
+        } catch {
+          // A malformed optional role profile should not hide the live Agent list.
+        }
+      }),
+  );
+  return profiles;
+}
+
+function tomlQuotedValue(source, key) {
+  const match = String(source || "").match(
+    new RegExp(`^\\s*${key.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}\\s*=\\s*(['"])(.*?)\\1\\s*$`, "m"),
+  );
+  return match ? match[2] : "";
+}
+
+function activeTurnFromThread(thread) {
+  const turns = Array.isArray(thread?.turns) ? thread.turns : [];
+  return [...turns].reverse().find((turn) => turn?.status === "inProgress") || null;
+}
+
+async function stopAppServerSubagent(session, threadId) {
+  if (!threadId || threadId === session.sessionId) throw new Error("请选择一个子 Agent。");
+  const descendants = await session.appServer.listThreads({
+    ancestorThreadId: session.sessionId,
+    limit: APP_THREAD_TREE_MAX_THREADS,
+    sortKey: "updated_at",
+    sortDirection: "desc",
+    useStateDbOnly: true,
+  });
+  const target = (Array.isArray(descendants?.data) ? descendants.data : []).find(
+    (thread) => String(thread?.id || "") === threadId,
+  );
+  if (!target) throw new Error("这个线程不属于当前 Session 的子 Agent。");
+  const thread = await session.appServer.readThread({ threadId, includeTurns: true });
+  const turn = activeTurnFromThread(thread);
+  if (!turn?.id) throw new Error("这个 Agent 当前没有正在运行的任务。");
+  await session.appServer.interruptThreadTurn(threadId, turn.id);
+  return { threadId, turnId: turn.id };
+}
+
+async function listAllAppServerThreads(client, archived) {
+  const threads = [];
+  let cursor = null;
+  do {
+    const page = await client.listThreads({
+      archived,
+      cursor,
+      limit: APP_THREAD_TREE_PAGE_LIMIT,
+      sortKey: "created_at",
+      sortDirection: "asc",
+      sourceKinds: APP_THREAD_SOURCE_KINDS,
+      useStateDbOnly: false,
+    });
+    threads.push(...(Array.isArray(page?.data) ? page.data : []));
+    cursor = page?.nextCursor || null;
+  } while (cursor && threads.length < APP_THREAD_TREE_MAX_THREADS);
+  return threads.slice(0, APP_THREAD_TREE_MAX_THREADS).map((thread) => ({ thread, archived }));
+}
+
+async function sendAppServerThreadTree(session, ws) {
+  const catalog = await Promise.all([
+    listAllAppServerThreads(session.appServer, false),
+    listAllAppServerThreads(session.appServer, true),
+  ]);
+  const entries = catalog.flat();
+  const byId = new Map(entries.map((entry) => [String(entry.thread?.id || ""), entry]));
+  let current = byId.get(session.sessionId)?.thread || null;
+  if (!current) {
+    current = await session.appServer.readThread({ threadId: session.sessionId, includeTurns: false });
+    if (current?.id) byId.set(current.id, { thread: current, archived: false });
+  }
+
+  let ancestor = current;
+  for (let depth = 0; ancestor && depth < 100; depth += 1) {
+    const parentId = String(ancestor.parentThreadId || ancestor.forkedFromId || "");
+    if (!parentId) break;
+    let parent = byId.get(parentId)?.thread || null;
+    if (!parent) {
+      parent = await session.appServer.readThread({ threadId: parentId, includeTurns: false }).catch(() => null);
+      if (parent?.id) byId.set(parent.id, { thread: parent, archived: false });
+    }
+    ancestor = parent;
+  }
+
+  const relatedIds = new Set();
+  const pending = [session.sessionId];
+  while (pending.length) {
+    const id = pending.shift();
+    if (!id || relatedIds.has(id)) continue;
+    relatedIds.add(id);
+    const entry = byId.get(id);
+    const thread = entry?.thread;
+    const parentId = String(thread?.parentThreadId || thread?.forkedFromId || "");
+    if (parentId) pending.push(parentId);
+    for (const candidate of byId.values()) {
+      const candidateParentId = String(candidate.thread?.parentThreadId || candidate.thread?.forkedFromId || "");
+      if (candidateParentId === id) pending.push(String(candidate.thread?.id || ""));
+    }
+  }
+
+  const nodes = [...relatedIds]
+    .map((id) => {
+      const entry = byId.get(id);
+      const thread = entry?.thread;
+      if (!thread) return null;
+      const parentId = String(thread.parentThreadId || thread.forkedFromId || "");
+      return {
+        id,
+        parentId: relatedIds.has(parentId) ? parentId : "",
+        relation: thread.parentThreadId ? "agent" : thread.forkedFromId ? "branch" : "root",
+        current: id === session.sessionId,
+        archived: Boolean(entry.archived),
+        name: cleanCustomTitle(thread.name) || cleanTitle(thread.preview) || "Untitled session",
+        nickname: String(thread.agentNickname || ""),
+        role: String(thread.agentRole || ""),
+        status: threadStatusLabel(thread.status),
+        statusType: String(thread.status?.type || ""),
+        project: projectFromCwd(String(thread.cwd || "")),
+        updatedAt: unixSecondsToIso(thread.updatedAt),
+      };
+    })
+    .filter(Boolean);
+
+  send(ws, "app-command-result", {
+    kind: "thread-tree",
+    title: "Session 关系",
+    currentThreadId: session.sessionId,
+    nodes,
+    note: nodes.length > 1 ? "Agent 节点来自委派；“分支”节点来自 fork。" : "当前 Session 暂时没有分支或子 Agent。",
+  });
+}
+
+function restoreSideChatState() {
+  return {
+    id: "",
+    client: null,
+    threadId: "",
+    status: "closed",
+    active: false,
+    turnId: "",
+    items: [],
+    error: "",
+    startedAt: "",
+  };
+}
+
+function publicSideChatState(sideChat) {
+  const state = sideChat || restoreSideChatState();
+  return {
+    id: String(state.id || ""),
+    threadId: String(state.threadId || ""),
+    status: String(state.status || "closed"),
+    active: Boolean(state.active),
+    turnId: String(state.turnId || ""),
+    items: (Array.isArray(state.items) ? state.items : []).slice(-100).map((item) => ({
+      id: String(item?.id || ""),
+      role: item?.role === "assistant" ? "assistant" : item?.role === "notice" ? "notice" : "user",
+      text: trimAppTranscriptValue(item?.text, 20_000),
+      status: String(item?.status || ""),
+    })),
+    error: cleanClientLogValue(state.error, 1_000),
+    startedAt: String(state.startedAt || ""),
+  };
+}
+
+function broadcastSideChat(session) {
+  broadcast(session, "side-chat-state", publicSideChatState(session.sideChat));
+}
+
+function sideChatInstructions(session) {
+  const requirements = (session.turnState?.requirements || [])
+    .filter((item) => ["working", "queued", "interrupted"].includes(item.status))
+    .map((item) => `- ${item.text}`)
+    .join("\n");
+  return [
+    AGENT_WEB_DEVELOPER_INSTRUCTIONS,
+    "You are a temporary read-only side conversation forked from the user's main Codex thread.",
+    "Answer the user's focused question. Do not edit files, run mutating commands, send messages, or make external changes.",
+    "Keep the answer self-contained and concise. This side conversation is ephemeral and must not take ownership of the main task.",
+    requirements ? `The main thread is currently working on these requirements for context only:\n${requirements}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+async function createSideChat(session) {
+  if (session.sideChat?.client && !session.sideChat.client.closed) return session.sideChat;
+  if (!session.ready || session.exited || !session.sessionId) throw new Error("当前 Session 还没有准备好。");
+
+  const client = new CodexAppServerClient({
+    cwd: session.cwd,
+    command: process.env.CODEX_APP_SERVER_COMMAND || "codex",
+    env: codexEnvironmentForWeb(`side-${session.id}-${cryptoRandomId()}`),
+    clientInfo: {
+      name: "agent_terminal_web_side_chat",
+      title: "Agent Web Side Chat",
+      version: "0.1.0",
+    },
+  });
+  const sideChat = {
+    ...restoreSideChatState(),
+    id: cryptoRandomId(),
+    client,
+    status: "starting",
+    startedAt: new Date().toISOString(),
+  };
+  session.sideChat = sideChat;
+  broadcastSideChat(session);
+
+  client.on("notification", (message) => handleSideChatNotification(session, sideChat, message));
+  client.on("server-request", (message) => declineSideChatRequest(sideChat, message));
+  client.on("stderr", (text) => {
+    logAgentEvent("side-chat-stderr", {
+      webSessionId: session.id,
+      message: cleanClientLogValue(text, 500),
+    });
+  });
+  client.on("exit", (error) => {
+    if (session.sideChat !== sideChat || sideChat.status === "closed") return;
+    sideChat.active = false;
+    sideChat.status = "failed";
+    sideChat.error = error?.message || "临时侧问连接已关闭。";
+    broadcastSideChat(session);
+    resetDetachedCleanupAfterWork(session);
+  });
+
+  try {
+    await client.start();
+    const forkParams = {
+      threadId: session.sessionId,
+      cwd: session.cwd,
+      sandbox: "read-only",
+      approvalPolicy: "never",
+      developerInstructions: sideChatInstructions(session),
+      ephemeral: true,
+      excludeTurns: true,
+      deferGoalContinuation: true,
+    };
+    if (session.turnState.active && session.turnState.turnId) forkParams.beforeTurnId = session.turnState.turnId;
+    const result = await client.forkThread(forkParams);
+    sideChat.threadId = String(result?.thread?.id || client.threadId || "");
+    if (!sideChat.threadId) throw new Error("Codex 没有返回临时对话 ID。");
+    sideChat.status = "idle";
+    broadcastSideChat(session);
+    return sideChat;
+  } catch (error) {
+    sideChat.status = "failed";
+    sideChat.error = error.message;
+    broadcastSideChat(session);
+    client.close();
+    throw error;
+  }
+}
+
+async function submitSideChatPrompt(session, text) {
+  const sideChat = await createSideChat(session);
+  if (sideChat.active || sideChat.client.activeTurnId) throw new Error("临时侧问仍在回答，请先等待或停止。");
+  sideChat.error = "";
+  sideChat.items.push({
+    id: `side-user-${Date.now()}`,
+    role: "user",
+    text,
+    status: "completed",
+  });
+  sideChat.active = true;
+  sideChat.status = "working";
+  broadcastSideChat(session);
+  try {
+    const turn = await sideChat.client.startTurn(text, {
+      approvalPolicy: "never",
+      cwd: session.cwd,
+    });
+    sideChat.turnId = String(turn?.id || sideChat.client.activeTurnId || "");
+    broadcastSideChat(session);
+    return { threadId: sideChat.threadId, turnId: sideChat.turnId };
+  } catch (error) {
+    sideChat.active = false;
+    sideChat.status = "failed";
+    sideChat.error = error.message;
+    broadcastSideChat(session);
+    throw error;
+  }
+}
+
+function sideChatAssistantItem(sideChat, itemId) {
+  const id = String(itemId || `side-assistant-${Date.now()}`);
+  let item = sideChat.items.find((entry) => entry.id === id);
+  if (!item) {
+    item = { id, role: "assistant", text: "", status: "inProgress" };
+    sideChat.items.push(item);
+  }
+  return item;
+}
+
+function handleSideChatNotification(session, sideChat, message) {
+  if (session.sideChat !== sideChat || sideChat.status === "closed") return;
+  const { method, params = {} } = message;
+  const notificationThreadId = String(
+    params.threadId || (method === "thread/started" ? params.thread?.id : "") || "",
+  );
+  if (notificationThreadId && sideChat.threadId && notificationThreadId !== sideChat.threadId) return;
+
+  if (method === "turn/started") {
+    sideChat.active = true;
+    sideChat.status = "working";
+    sideChat.turnId = String(params.turn?.id || "");
+  } else if (method === "item/agentMessage/delta") {
+    const item = sideChatAssistantItem(sideChat, params.itemId);
+    item.text = trimAppTranscriptValue(`${item.text}${params.delta || ""}`, 20_000);
+  } else if (method === "item/completed" && params.item?.type === "agentMessage") {
+    const item = sideChatAssistantItem(sideChat, params.item.id);
+    item.text = trimAppTranscriptValue(params.item.text || item.text, 20_000);
+    item.status = "completed";
+  } else if (method === "turn/completed") {
+    sideChat.active = false;
+    sideChat.turnId = "";
+    sideChat.status = params.turn?.status === "failed" ? "failed" : "idle";
+    if (params.turn?.error?.message) sideChat.error = params.turn.error.message;
+    resetDetachedCleanupAfterWork(session);
+  } else if (method === "error") {
+    sideChat.active = false;
+    sideChat.status = "failed";
+    sideChat.error = params.error?.message || params.message || "临时侧问失败。";
+    resetDetachedCleanupAfterWork(session);
+  } else {
+    return;
+  }
+  if (sideChat.items.length > 100) sideChat.items.splice(0, sideChat.items.length - 100);
+  broadcastSideChat(session);
+}
+
+function declineSideChatRequest(sideChat, message) {
+  const method = String(message?.method || "");
+  try {
+    if (["item/commandExecution/requestApproval", "item/fileChange/requestApproval"].includes(method)) {
+      sideChat.client.respond(message.id, { decision: "decline" });
+    } else if (method === "item/permissions/requestApproval") {
+      sideChat.client.respond(message.id, { permissions: {}, scope: "turn" });
+    } else if (method === "mcpServer/elicitation/request") {
+      sideChat.client.respond(message.id, { action: "decline" });
+    } else if (method === "item/tool/requestUserInput") {
+      const answers = {};
+      for (const question of message.params?.questions || []) answers[question.id] = { answers: [""] };
+      sideChat.client.respond(message.id, { answers });
+    } else {
+      sideChat.client.respondError(message.id, { code: -32000, message: "Side chat is read-only." });
+    }
+  } catch (error) {
+    sideChat.error = error.message;
+  }
+}
+
+async function stopSideChat(session) {
+  const sideChat = session.sideChat;
+  if (!sideChat?.client || !sideChat.active) return;
+  sideChat.status = "stopping";
+  broadcastSideChat(session);
+  await sideChat.client.interruptTurn();
+}
+
+function closeSideChat(session) {
+  const sideChat = session.sideChat;
+  if (!sideChat) return;
+  sideChat.status = "closed";
+  sideChat.active = false;
+  sideChat.client?.close();
+  session.sideChat = null;
+  broadcastSideChat(session);
+}
+
+function restoreRealtimeState() {
+  return {
+    status: "idle",
+    voice: "marin",
+    version: "v3",
+    transcript: [],
+    error: "",
+    reason: "",
+    startedAt: "",
+  };
+}
+
+function publicRealtimeState(realtime) {
+  const state = realtime || restoreRealtimeState();
+  return {
+    status: String(state.status || "idle"),
+    voice: String(state.voice || "marin"),
+    version: String(state.version || "v3"),
+    transcript: (Array.isArray(state.transcript) ? state.transcript : []).slice(-80).map((item) => ({
+      id: String(item?.id || ""),
+      role: String(item?.role || "assistant"),
+      text: trimAppTranscriptValue(item?.text, 10_000),
+      final: Boolean(item?.final),
+    })),
+    error: cleanClientLogValue(state.error, 1_000),
+    reason: cleanClientLogValue(state.reason, 500),
+    startedAt: String(state.startedAt || ""),
+  };
+}
+
+function realtimeBusy(realtime) {
+  return ["starting", "live", "stopping"].includes(String(realtime?.status || ""));
+}
+
+async function sendRealtimeVoices(session, ws) {
+  const result = await session.appServer.listRealtimeVoices();
+  const available = result?.voices || {};
+  const voices = [...new Set([...(available.v2 || []), ...(available.v1 || [])].map(String).filter(Boolean))];
+  send(ws, "realtime-voices", {
+    voices,
+    defaultVoice: String(available.defaultV2 || available.defaultV1 || "marin"),
+    version: "v3",
+  });
+}
+
+function normalizeRealtimeVoice(value) {
+  const voice = String(value || "").trim();
+  return /^[a-z][a-z0-9_-]{0,31}$/i.test(voice) ? voice : "marin";
+}
+
+async function startRealtimeConversation(session, voice) {
+  if (!session.ready || session.exited) throw new Error("当前 Session 还没有准备好。");
+  if (session.turnState.active || session.appServer.activeTurnId) {
+    throw new Error("主 Session 仍在执行任务，请等当前 turn 完成后再开始实时对话。");
+  }
+  if (realtimeBusy(session.realtime)) throw new Error("实时对话已经在进行。");
+  session.realtime = {
+    ...restoreRealtimeState(),
+    status: "starting",
+    voice: normalizeRealtimeVoice(voice),
+    startedAt: new Date().toISOString(),
+  };
+  broadcast(session, "realtime-state", publicRealtimeState(session.realtime));
+  await session.appServer.startRealtime({
+    version: "v3",
+    voice: session.realtime.voice,
+    outputModality: "audio",
+    transport: { type: "websocket" },
+    includeStartupContext: true,
+    flushTranscriptTailOnSessionEnd: true,
+    codexResponsesAsItems: true,
+  });
+}
+
+function normalizeRealtimeAudioChunk(value) {
+  const input = value && typeof value === "object" ? value : {};
+  const data = String(input.data || "");
+  if (
+    !data ||
+    data.length > REALTIME_AUDIO_MAX_BASE64_CHARS ||
+    data.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]*={0,2}$/.test(data)
+  ) {
+    throw new Error("实时音频块格式无效。");
+  }
+  const sampleRate = clampInteger(
+    input.sampleRate,
+    REALTIME_SAMPLE_RATE_MIN,
+    REALTIME_SAMPLE_RATE_MAX,
+    24_000,
+  );
+  const numChannels = clampInteger(input.numChannels, 1, 2, 1);
+  const byteLength = Buffer.from(data, "base64").byteLength;
+  if (!byteLength || byteLength % (2 * numChannels) !== 0) throw new Error("实时音频块不是有效的 PCM16 数据。");
+  const samplesPerChannel = byteLength / 2 / numChannels;
+  return {
+    data,
+    sampleRate,
+    numChannels,
+    samplesPerChannel,
+    itemId: input.itemId ? String(input.itemId).slice(0, 200) : null,
+  };
+}
+
+async function stopRealtimeConversation(session) {
+  if (!realtimeBusy(session.realtime)) return;
+  session.realtime.status = "stopping";
+  broadcast(session, "realtime-state", publicRealtimeState(session.realtime));
+  await session.appServer.stopRealtime();
+}
+
+function realtimeTranscriptItem(state, role) {
+  const normalizedRole = role === "user" ? "user" : "assistant";
+  let item = state.transcript.at(-1);
+  if (!item || item.final || item.role !== normalizedRole) {
+    item = {
+      id: `realtime-${Date.now()}-${state.transcript.length + 1}`,
+      role: normalizedRole,
+      text: "",
+      final: false,
+    };
+    state.transcript.push(item);
+  }
+  return item;
+}
+
+function handleRealtimeNotification(session, method, params) {
+  if (!String(method || "").startsWith("thread/realtime/")) return false;
+  if (params.threadId && session.sessionId && params.threadId !== session.sessionId) return true;
+  const state = session.realtime || (session.realtime = restoreRealtimeState());
+
+  if (method === "thread/realtime/started") {
+    state.status = "live";
+    state.version = String(params.version || "v3");
+    state.error = "";
+  } else if (method === "thread/realtime/transcript/delta") {
+    const item = realtimeTranscriptItem(state, params.role);
+    item.text = trimAppTranscriptValue(`${item.text}${params.delta || ""}`, 10_000);
+  } else if (method === "thread/realtime/transcript/done") {
+    const item = realtimeTranscriptItem(state, params.role);
+    item.text = trimAppTranscriptValue(params.text || item.text, 10_000);
+    item.final = true;
+  } else if (method === "thread/realtime/outputAudio/delta") {
+    try {
+      broadcast(session, "realtime-audio", normalizeRealtimeAudioChunk(params.audio));
+    } catch (error) {
+      failRealtimeConversation(session, error);
+    }
+    return true;
+  } else if (method === "thread/realtime/error") {
+    state.status = "failed";
+    state.error = params.message || "实时对话失败。";
+    resetDetachedCleanupAfterWork(session);
+  } else if (method === "thread/realtime/closed") {
+    state.status = "idle";
+    state.reason = String(params.reason || "");
+    resetDetachedCleanupAfterWork(session);
+  } else if (!["thread/realtime/itemAdded", "thread/realtime/sdp"].includes(method)) {
+    return false;
+  } else {
+    return true;
+  }
+
+  if (state.transcript.length > 80) state.transcript.splice(0, state.transcript.length - 80);
+  broadcast(session, "realtime-state", publicRealtimeState(state));
+  if (method === "thread/realtime/error") {
+    broadcast(session, "realtime-error", { message: state.error });
+  }
+  return true;
+}
+
+function failRealtimeConversation(session, error) {
+  const state = session.realtime || (session.realtime = restoreRealtimeState());
+  state.status = "failed";
+  state.error = error?.message || String(error || "实时对话失败。");
+  broadcast(session, "realtime-state", publicRealtimeState(state));
+  broadcast(session, "realtime-error", { message: state.error });
+  resetDetachedCleanupAfterWork(session);
 }
 
 function branchThreadTitle(sourceTitle, suffix) {
@@ -3544,6 +4266,7 @@ function appTranscriptItemsFromTurns(session, turns, { historical = false } = {}
     };
     for (const item of Array.isArray(turn?.items) ? turn.items : []) {
       rememberToolMemoryCitation(session, item, context.turnId);
+      rememberCollabAgentMetadata(session, item);
       const transcriptItem = appTranscriptFromThreadItem(session, item, context);
       if (transcriptItem) items.push(transcriptItem);
     }
@@ -3824,6 +4547,12 @@ function handleAppServerNotification(session, message) {
   const { method, params = {} } = message;
   session.lastActivityAt = new Date().toISOString();
 
+  if (handleRealtimeNotification(session, method, params)) return;
+  const notificationThreadId = String(
+    params.threadId || (method === "thread/started" ? params.thread?.id : "") || "",
+  );
+  if (notificationThreadId && session.sessionId && notificationThreadId !== session.sessionId) return;
+
   if (method === "thread/started" && params.thread?.id) {
     session.sessionId = params.thread.id;
     rememberAgentSessionAccess(session.sessionId, session.access);
@@ -3903,6 +4632,7 @@ function handleAppServerNotification(session, message) {
       `\r\n\x1b[33mModel changed: ${params.fromModel || "requested model"} → ${params.toModel || "fallback model"}.\x1b[0m\r\n`,
     );
   } else if (method === "item/started") {
+    rememberCollabAgentMetadata(session, params.item);
     const transcriptItem = appTranscriptFromThreadItem(session, params.item, {
       turnId: params.turnId || session.turnState.turnId,
     });
@@ -3910,6 +4640,7 @@ function handleAppServerNotification(session, message) {
     renderAppServerItemStarted(session, params.item);
   } else if (method === "item/completed") {
     rememberToolMemoryCitation(session, params.item, params.turnId || session.turnState.turnId);
+    rememberCollabAgentMetadata(session, params.item);
     const transcriptItem = appTranscriptFromThreadItem(session, params.item, {
       turnId: params.turnId || session.turnState.turnId,
     });
@@ -4179,6 +4910,8 @@ async function sendAppServerTurnNotification(session, turnId) {
 
 function markAppServerExited(session, error) {
   if (session.exited) return;
+  closeSideChat(session);
+  session.realtime = { ...restoreRealtimeState(), status: "failed", error: error?.message || "App Server 已关闭。" };
   session.ready = false;
   session.exited = true;
   session.exitCode = 1;
@@ -4485,6 +5218,9 @@ function publicSession(session) {
       threadFork: session.transport === APP_SERVER_TRANSPORT,
       subagents: session.transport === APP_SERVER_TRANSPORT,
       audioInput: session.transport === APP_SERVER_TRANSPORT,
+      threadTree: session.transport === APP_SERVER_TRANSPORT,
+      sideChat: session.transport === APP_SERVER_TRANSPORT,
+      realtimeV3: session.transport === APP_SERVER_TRANSPORT,
     },
     turnState: publicTurnState(session.turnState),
   };
@@ -4536,6 +5272,8 @@ function tmuxHasSession(tmuxName) {
 function killSessionTerminal(session) {
   if (session.transport === APP_SERVER_TRANSPORT) {
     removePersistedWebSession(session.id);
+    closeSideChat(session);
+    session.realtime = restoreRealtimeState();
     session.ready = false;
     session.exited = true;
     session.exitCode = 0;

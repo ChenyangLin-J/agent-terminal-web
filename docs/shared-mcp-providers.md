@@ -7,11 +7,13 @@ connection for request attribution, but it does not own a provider process.
 ## Request path
 
 ```text
-App Server A ─┐
-App Server B ─┼─> loopback Streamable HTTP proxy ─> shared provider backend
-Side Chat    ─┘
+Shared App Server
+├─ Main thread A ─┐
+├─ Main thread B ─┼─> loopback Streamable HTTP proxy ─> shared provider backend
+└─ Side Chat      ┘
 
-Catalog App Server ─> no MCP configuration
+Catalog metadata calls use the same App Server connection and do not own a
+separate provider or App Server process.
 ```
 
 The loopback endpoints are:
@@ -19,7 +21,9 @@ The loopback endpoints are:
 - `/internal/mcp/amap`
 - `/internal/mcp/playwright`
 
-Direct non-loopback requests receive `404`.
+Direct non-loopback requests receive `404`. When
+`AGENT_SHARED_APP_SERVER=0` is used for rollback, the legacy Catalog process
+still starts with `mcp_servers={}`.
 
 ## Lifecycle contract
 

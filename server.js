@@ -9,7 +9,10 @@ import { fileURLToPath } from "node:url";
 import busboy from "busboy";
 import express from "express";
 import { WebSocketServer } from "ws";
-import { CodexAppServerClient } from "./lib/codex-app-server-client.js";
+import {
+  CodexAppServerClient,
+  CodexAppServerConnection,
+} from "./lib/codex-app-server-client.js";
 import { readCodexMemoryStatus, readCodexMemoryView } from "./lib/codex-memories.js";
 import {
   deletePersonalMemoryEntry,
@@ -121,6 +124,7 @@ const MAX_APP_TRANSCRIPT_DETAIL = 40_000;
 const MAX_APP_TRANSCRIPT_OUTPUT = 80_000;
 const WS_HEARTBEAT_MS = Number(process.env.WS_HEARTBEAT_MS || 25_000);
 const USE_TMUX_SESSIONS = process.env.AGENT_USE_TMUX === "1";
+const SHARED_APP_SERVER_ENABLED = process.env.AGENT_SHARED_APP_SERVER !== "0";
 const CODEX_NOTIFY_SCRIPT = path.join(__dirname, "scripts", "codex-notify.js");
 const CODEX_GUARD_BIN = path.join(__dirname, "scripts", "codex-guard-bin");
 const AGENT_NOTIFY_URL = process.env.AGENT_NOTIFY_URL || `http://${HOST}:${PORT}/internal/codex-notify`;
@@ -164,6 +168,7 @@ let catalogAppServerClient = null;
 let catalogAppServerStart = null;
 let catalogAppServerIdleTimer = null;
 let catalogAppServerActiveUses = 0;
+let agentAppServerConnection = null;
 const agentInstanceId = cryptoRandomId();
 const personalMemoryScheduler = createPersonalMemoryScheduler({
   delayMs: PERSONAL_MEMORY_SETTLE_MS,
@@ -1110,7 +1115,10 @@ server.listen(PORT, HOST, () => {
   console.log(`Agent Terminal Web: http://${HOST}:${PORT}`);
   console.log(`Workspace root: ${WORKSPACE_ROOT}`);
   console.log(`Detached session TTL: ${Math.round(SESSION_TTL_MS / 60000)} minutes`);
+  console.log(`Shared App Server: ${SHARED_APP_SERVER_ENABLED ? "enabled" : "disabled"}`);
 });
+
+process.once("exit", () => agentAppServerConnection?.close());
 
 function isDirectLoopbackRequest(req) {
   const address = req.socket.remoteAddress || "";
@@ -1299,6 +1307,85 @@ function codexEnvironmentForWeb(sessionId, extra = {}) {
   };
 }
 
+function sharedAgentAppServerConnection() {
+  if (
+    agentAppServerConnection &&
+    !agentAppServerConnection.closed
+  ) {
+    return agentAppServerConnection;
+  }
+
+  const connection = new CodexAppServerConnection({
+    cwd: WORKSPACE_ROOT,
+    command: process.env.CODEX_APP_SERVER_COMMAND || "codex",
+    env: codexEnvironmentForWeb(`shared-${agentInstanceId}`),
+  });
+  connection.on("stderr", (text) => {
+    logAgentEvent("app-server-stderr", {
+      shared: true,
+      message: cleanClientLogValue(text, 500),
+    });
+  });
+  connection.on("protocol-error", (error) => {
+    logAgentEvent("app-server-protocol-error", {
+      shared: true,
+      message: cleanClientLogValue(error?.message, 500),
+    });
+  });
+  connection.on("exit", (error) => {
+    if (agentAppServerConnection === connection) agentAppServerConnection = null;
+    logAgentEvent("shared-app-server-exit", {
+      message: cleanClientLogValue(error?.message, 500),
+    });
+  });
+  agentAppServerConnection = connection;
+  return connection;
+}
+
+function createAgentAppServerClient(cwd, webSessionId, clientInfo = undefined) {
+  if (SHARED_APP_SERVER_ENABLED) {
+    return new CodexAppServerClient({
+      cwd,
+      connection: sharedAgentAppServerConnection(),
+    });
+  }
+  return new CodexAppServerClient({
+    cwd,
+    command: process.env.CODEX_APP_SERVER_COMMAND || "codex",
+    env: codexEnvironmentForWeb(webSessionId),
+    ...(clientInfo ? { clientInfo } : {}),
+  });
+}
+
+function releaseAgentAppServerClient(client, { interrupt = false } = {}) {
+  if (!client || client.closed) return;
+  if (!SHARED_APP_SERVER_ENABLED || client.ownsConnection) {
+    client.close();
+    return;
+  }
+
+  const threadId = String(client.threadId || "");
+  const turnId = String(client.activeTurnId || "");
+  void (async () => {
+    try {
+      if (interrupt && threadId && turnId) {
+        await client.request("turn/interrupt", { threadId, turnId });
+      }
+      if (threadId) {
+        await client.request("thread/unsubscribe", { threadId });
+      }
+    } catch (error) {
+      logAgentEvent("shared-app-server-detach-failed", {
+        threadId,
+        turnId,
+        message: cleanClientLogValue(error?.message, 300),
+      });
+    } finally {
+      client.close();
+    }
+  })();
+}
+
 function cleanClientLogValue(value, maxLength) {
   return String(value || "")
     .replace(/[\r\n\t]/g, " ")
@@ -1447,11 +1534,7 @@ function createAppServerSession(cwd, launch, restored = {}) {
   const id = restored.id || cryptoRandomId();
   const startedAt = new Date().toISOString();
   const initialMemoryRouting = initialSessionMemoryRouting(launch.sessionId, restored);
-  const appServer = new CodexAppServerClient({
-    cwd,
-    command: process.env.CODEX_APP_SERVER_COMMAND || "codex",
-    env: codexEnvironmentForWeb(id),
-  });
+  const appServer = createAgentAppServerClient(cwd, id);
   const session = {
     id,
     cwd,
@@ -1620,6 +1703,7 @@ async function initializeAppServerSession(session, launch) {
       });
     }
     markAppServerExited(session, error);
+    releaseAgentAppServerClient(session.appServer);
   }
 }
 
@@ -4003,16 +4087,15 @@ async function createSideChat(session) {
   if (session.sideChat?.client && !session.sideChat.client.closed) return session.sideChat;
   if (!session.ready || session.exited || !session.sessionId) throw new Error("当前 Session 还没有准备好。");
 
-  const client = new CodexAppServerClient({
-    cwd: session.cwd,
-    command: process.env.CODEX_APP_SERVER_COMMAND || "codex",
-    env: codexEnvironmentForWeb(`side-${session.id}-${cryptoRandomId()}`),
-    clientInfo: {
+  const client = createAgentAppServerClient(
+    session.cwd,
+    `side-${session.id}-${cryptoRandomId()}`,
+    {
       name: "agent_terminal_web_side_chat",
       title: "Agent Web Side Chat",
       version: "0.1.0",
     },
-  });
+  );
   const sideChat = {
     ...restoreSideChatState(),
     id: cryptoRandomId(),
@@ -4179,7 +4262,7 @@ function closeSideChat(session) {
   if (!sideChat) return;
   sideChat.status = "closed";
   sideChat.active = false;
-  sideChat.client?.close();
+  releaseAgentAppServerClient(sideChat.client, { interrupt: true });
   session.sideChat = null;
   broadcastSideChat(session);
 }
@@ -5400,7 +5483,7 @@ function killSessionTerminal(session) {
     session.ready = false;
     session.exited = true;
     session.exitCode = 0;
-    session.appServer?.close();
+    releaseAgentAppServerClient(session.appServer, { interrupt: true });
     broadcast(session, "status", publicSession(session));
     for (const client of session.clients) client.close();
     scheduleCleanup(session);
@@ -5945,6 +6028,10 @@ function nativeThreadCatalogEnabled() {
 }
 
 async function withStandaloneAppServer(run) {
+  if (SHARED_APP_SERVER_ENABLED) {
+    const client = await sharedCatalogAppServer();
+    return run(client);
+  }
   cancelCatalogAppServerIdleStop();
   catalogAppServerActiveUses += 1;
   try {
@@ -5961,12 +6048,14 @@ async function sharedCatalogAppServer() {
   if (catalogAppServerStart) return catalogAppServerStart;
 
   catalogAppServerStart = (async () => {
-    const client = new CodexAppServerClient({
-      cwd: WORKSPACE_ROOT,
-      command: process.env.CODEX_APP_SERVER_COMMAND || "codex",
-      args: ["app-server", "-c", "mcp_servers={}"],
-      env: codexEnvironmentForWeb(`catalog-${cryptoRandomId()}`),
-    });
+    const client = SHARED_APP_SERVER_ENABLED
+      ? createAgentAppServerClient(WORKSPACE_ROOT, `catalog-${cryptoRandomId()}`)
+      : new CodexAppServerClient({
+          cwd: WORKSPACE_ROOT,
+          command: process.env.CODEX_APP_SERVER_COMMAND || "codex",
+          args: ["app-server", "-c", "mcp_servers={}"],
+          env: codexEnvironmentForWeb(`catalog-${cryptoRandomId()}`),
+        });
     client.on("exit", () => {
       if (catalogAppServerClient === client) catalogAppServerClient = null;
     });

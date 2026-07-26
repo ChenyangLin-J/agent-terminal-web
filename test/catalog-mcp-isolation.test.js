@@ -4,14 +4,22 @@ import test from "node:test";
 
 const serverSource = await readFile(new URL("../server.js", import.meta.url), "utf8");
 
-test("the hidden catalog App Server disables MCP providers", () => {
+test("catalog metadata uses the shared App Server by default", () => {
+  assert.match(
+    serverSource,
+    /if \(SHARED_APP_SERVER_ENABLED\) \{\s*const client = await sharedCatalogAppServer\(\);\s*return run\(client\)/,
+  );
+  assert.match(
+    serverSource,
+    /SHARED_APP_SERVER_ENABLED\s*\?\s*createAgentAppServerClient\(WORKSPACE_ROOT,/,
+  );
+});
+
+test("the rollback-only hidden Catalog disables MCP and stops when idle", () => {
   assert.match(
     serverSource,
     /args:\s*\["app-server",\s*"-c",\s*"mcp_servers=\{\}"\]/,
   );
-});
-
-test("the hidden catalog App Server is reclaimed after an idle interval", () => {
   assert.match(serverSource, /AGENT_CATALOG_IDLE_MS/);
   assert.match(serverSource, /scheduleCatalogAppServerIdleStop\(\)/);
   assert.match(serverSource, /catalog-app-server-stopped/);

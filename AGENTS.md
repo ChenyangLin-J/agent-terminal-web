@@ -25,8 +25,14 @@
   profile/port, and a bounded `maxInstances`.
 - Every provider needs an idle timeout, bounded errors, secret redaction where
   credentials exist, process-count tests, and a clear failure message.
-- The hidden Catalog App Server is metadata-only. Keep `mcp_servers={}` on its
-  launch and reclaim it after an idle interval.
+- Agent Web normally owns one on-demand, long-lived Codex App Server connection.
+  Main Sessions, Side Chats, and catalog metadata calls use thread-scoped
+  clients over that connection. Keep event and approval routing isolated by
+  `threadId`, unsubscribe released threads, and never close the shared process
+  when one Session detaches.
+- `AGENT_SHARED_APP_SERVER=0` is a rollback-only path. In that legacy mode, the
+  hidden Catalog App Server remains metadata-only, uses `mcp_servers={}`, and
+  is reclaimed after an idle interval.
 - When updating `@playwright/mcp`, regenerate
   `config/playwright-mcp-tools.json` with
   `npm run update:playwright-tools`, then verify that tool listing remains

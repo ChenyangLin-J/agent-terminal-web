@@ -13,12 +13,24 @@ Select the engine on the session start screen. Home and other callers can also o
 
 ## Behavior
 
-`lib/codex-app-server-client.js` owns one App Server process per live web session. It initializes the connection, starts or resumes a thread, tracks the active `turnId`, and persists the transport and thread id after the first turn starts so the web session can be restored after a service restart.
+Agent Web owns one on-demand App Server process and initializes its protocol
+connection once. Main Sessions, Side Chats, and homepage catalog operations
+create thread-scoped clients over that connection. Each client tracks its own
+`threadId`, active `turnId`, queue, notifications, and approval requests.
+
+The shared connection remains alive for the Agent Web process lifetime. Closing
+one web Session unsubscribes its thread without terminating other Sessions.
+`AGENT_SHARED_APP_SERVER=0` temporarily restores the previous per-Session
+process model when an operational rollback is needed.
 
 - `新任务` calls `turn/start`.
 - `追加当前` calls `turn/steer` with `expectedTurnId`; it cannot silently steer a different turn.
 - `下一轮` stays in an application queue and calls `turn/start` only after the current `turn/completed` event.
 - If a follow-up reaches the server just after completion, its text is retained and starts as a new turn instead of being lost.
+- Notifications and server-initiated approval requests are routed only to the
+  client whose `threadId` matches the protocol message.
+- A shared connection failure marks affected turns as interrupted; opening a
+  Session again creates a fresh connection and resumes its persisted thread.
 
 The browser renders agent text, reasoning summaries, command output, file changes, turn state, and errors as readable terminal output. Command and file approvals, permission requests, and text questions appear as an explicit decision card. Voice input, uploads, push notifications, session titles, archive, Text view, and Home deep links continue to use the shared web UI.
 
@@ -31,4 +43,10 @@ The browser renders agent text, reasoning summaries, command output, file change
 
 ## Verification
 
-Automated tests cover exact-turn steering, rejected late steering, immediate completion races, queue ordering, the engine switch, and approval UI wiring. Browser checks cover mobile layout, approval interaction, reconnect, a same-turn follow-up, and a queued second turn.
+Automated tests cover exact-turn steering, rejected late steering, immediate
+completion races, queue ordering, shared-process counts, concurrent thread
+isolation, approval routing, unsubscribe behavior, the engine switch, and
+approval UI wiring. Release verification starts two concurrent ephemeral
+threads on one real App Server process and confirms that each receives only its
+own final response. Browser checks cover mobile layout, approval interaction,
+reconnect, a same-turn follow-up, and a queued second turn.

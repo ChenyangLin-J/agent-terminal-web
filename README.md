@@ -194,8 +194,10 @@ by all Agent sessions. Browser calls are serialized because they mutate one shar
 state. The provider exits after five minutes without a tool call, while Browser Hand-off
 uses its own no-client idle policy so an active human takeover is preserved.
 
-The hidden Catalog App Server, which lists and searches native Codex threads, launches
-with MCP disabled and exits after an idle interval. See
+Agent Web normally initializes one App Server connection on demand. Main Sessions, Side
+Chats, and native thread catalog operations reuse that process while keeping turn state,
+events, and approvals isolated by `threadId`. Set `AGENT_SHARED_APP_SERVER=0` only for an
+operational rollback to the legacy per-Session and idle Catalog process model. See
 [`docs/shared-mcp-providers.md`](docs/shared-mcp-providers.md) for the lifecycle and the
 required checklist for future local MCP providers.
 

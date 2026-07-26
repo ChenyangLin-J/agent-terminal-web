@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import test from "node:test";
-import { CodexAppServerClient } from "../lib/codex-app-server-client.js";
+import {
+  CodexAppServerClient,
+  CodexAppServerConnection,
+} from "../lib/codex-app-server-client.js";
 
 test("app-server client steers the exact active turn and starts queued work after completion", async (t) => {
   const fake = createFakeAppServer();
@@ -285,13 +288,102 @@ test("app-server error notifications do not crash clients without error listener
   assert.equal(client.closed, false);
 });
 
-function createFakeAppServer({ completeTurnImmediately = false } = {}) {
+test("one app-server connection isolates concurrent threads and survives a client detach", async (t) => {
+  const fake = createFakeAppServer();
+  let spawnCount = 0;
+  const connection = new CodexAppServerConnection({
+    spawnImpl: () => {
+      spawnCount += 1;
+      return fake.child;
+    },
+    requestTimeoutMs: 1_000,
+  });
+  const first = new CodexAppServerClient({ connection, cwd: "/workspace/first" });
+  const second = new CodexAppServerClient({ connection, cwd: "/workspace/second" });
+  t.after(() => connection.close());
+
+  await Promise.all([first.start(), second.start()]);
+  assert.equal(spawnCount, 1);
+  assert.equal(fake.received.filter((message) => message.method === "initialize").length, 1);
+
+  await first.startThread({ cwd: first.cwd });
+  await second.resumeThread("thread-2", { cwd: second.cwd });
+  const [firstTurn, secondTurn] = await Promise.all([
+    first.startTurn("First thread"),
+    second.startTurn("Second thread"),
+  ]);
+  assert.equal(firstTurn.id, "turn-1");
+  assert.equal(secondTurn.id, "turn-2");
+  assert.deepEqual(
+    fake.received
+      .filter((message) => message.method === "turn/start")
+      .map((message) => message.params.threadId),
+    ["thread-1", "thread-2"],
+  );
+
+  const firstNotifications = [];
+  const secondNotifications = [];
+  const firstRequests = [];
+  const secondRequests = [];
+  first.on("notification", (message) => firstNotifications.push(message));
+  second.on("notification", (message) => secondNotifications.push(message));
+  first.on("server-request", (message) => firstRequests.push(message));
+  second.on("server-request", (message) => secondRequests.push(message));
+
+  fake.send({ method: "turn/completed", params: { threadId: "thread-2", turn: { id: "turn-2" } } });
+  fake.send({
+    id: 900,
+    method: "item/commandExecution/requestApproval",
+    params: { threadId: "thread-2", turnId: "turn-2", itemId: "item-2" },
+  });
+  await tick();
+
+  assert.equal(first.activeTurnId, "turn-1");
+  assert.equal(second.activeTurnId, "");
+  assert.equal(firstNotifications.length, 0);
+  assert.equal(secondNotifications.length, 1);
+  assert.equal(firstRequests.length, 0);
+  assert.equal(secondRequests.length, 1);
+
+  await second.unsubscribeThread();
+  assert.equal(second.threadId, "");
+  assert.ok(
+    fake.received.some(
+      (message) => message.method === "thread/unsubscribe" && message.params.threadId === "thread-2",
+    ),
+  );
+  second.close();
+  assert.equal(fake.killCount, 0);
+  assert.equal((await first.readThread()).id, "thread-1");
+});
+
+test("a shared initialization failure closes every attached thread client", async () => {
+  const fake = createFakeAppServer({ initializeError: true });
+  const connection = new CodexAppServerConnection({
+    spawnImpl: () => fake.child,
+    requestTimeoutMs: 1_000,
+  });
+  const first = new CodexAppServerClient({ connection });
+  const second = new CodexAppServerClient({ connection });
+
+  await assert.rejects(
+    Promise.all([first.start(), second.start()]),
+    /initialization rejected/i,
+  );
+  assert.equal(connection.closed, true);
+  assert.equal(first.closed, true);
+  assert.equal(second.closed, true);
+  assert.equal(fake.killCount, 1);
+});
+
+function createFakeAppServer({ completeTurnImmediately = false, initializeError = false } = {}) {
   const child = new EventEmitter();
   const stdout = new PassThrough();
   const stderr = new PassThrough();
   const received = [];
   let inputBuffer = "";
   let turnNumber = 0;
+  let killCount = 0;
 
   const stdin = new Writable({
     write(chunk, _encoding, callback) {
@@ -313,6 +405,7 @@ function createFakeAppServer({ completeTurnImmediately = false } = {}) {
     stdout,
     stderr,
     kill() {
+      killCount += 1;
       stdin.end();
       stdout.end();
       stderr.end();
@@ -321,7 +414,11 @@ function createFakeAppServer({ completeTurnImmediately = false } = {}) {
 
   function handle(message) {
     if (message.method === "initialize") {
-      send({ id: message.id, result: { userAgent: "fake" } });
+      if (initializeError) {
+        send({ id: message.id, error: { message: "Initialization rejected" } });
+      } else {
+        send({ id: message.id, result: { userAgent: "fake" } });
+      }
       return;
     }
     if (message.method === "thread/start") {
@@ -435,7 +532,12 @@ function createFakeAppServer({ completeTurnImmediately = false } = {}) {
       send({ id: message.id, result: { data: [{ cwd: "/workspace", hooks: [], warnings: [], errors: [] }] } });
       return;
     }
-    if (message.method === "thread/name/set" || message.method === "thread/compact/start" || message.method === "thread/goal/clear") {
+    if (
+      message.method === "thread/name/set" ||
+      message.method === "thread/compact/start" ||
+      message.method === "thread/goal/clear" ||
+      message.method === "thread/unsubscribe"
+    ) {
       send({ id: message.id, result: {} });
       return;
     }
@@ -497,7 +599,14 @@ function createFakeAppServer({ completeTurnImmediately = false } = {}) {
     queueMicrotask(() => stdout.write(`${messages.map((message) => JSON.stringify(message)).join("\n")}\n`));
   }
 
-  return { child, received, send };
+  return {
+    child,
+    received,
+    send,
+    get killCount() {
+      return killCount;
+    },
+  };
 }
 
 function tick() {

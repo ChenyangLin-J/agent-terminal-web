@@ -10,7 +10,8 @@ test("web Codex processes receive restart safety instructions and a guarded PATH
 
   assert.match(server, /const CODEX_GUARD_BIN = path\.join\(__dirname, "scripts", "codex-guard-bin"\)/);
   assert.match(server, /PATH: \[CODEX_GUARD_BIN, process\.env\.PATH\]/);
-  assert.match(server, /env: codexEnvironmentForWeb\(id\)/);
+  assert.match(server, /env: codexEnvironmentForWeb\(`shared-\$\{agentInstanceId\}`\)/);
+  assert.match(server, /env: codexEnvironmentForWeb\(webSessionId\)/);
   assert.match(server, /developerInstructions: AGENT_WEB_DEVELOPER_INSTRUCTIONS/);
   assert.match(server, /Never stop, restart, kill, or otherwise terminate agent-terminal-web\.service/);
 });

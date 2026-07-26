@@ -4059,13 +4059,13 @@ function terminalLaunchArgs(access, tail = []) {
 }
 
 async function getLaunchConfig(searchParams) {
-  const transport = searchParams.get("transport") === APP_SERVER_TRANSPORT ? APP_SERVER_TRANSPORT : "terminal";
+  const transport = searchParams.get("transport") === "terminal" ? "terminal" : APP_SERVER_TRANSPORT;
   const purpose = normalizeSessionPurpose(searchParams.get("purpose"));
   const sessionId = String(searchParams.get("sessionId") || "").trim();
   if (sessionId && !/^[a-zA-Z0-9._:-]+$/.test(sessionId)) return null;
   const access = searchParams.has("access")
     ? normalizeAccessMode(searchParams.get("access"))
-    : savedAgentSessionAccess(sessionId) || "safe";
+    : savedAgentSessionAccess(sessionId) || FULL_ACCESS_MODE;
 
   if (sessionId) {
     return {

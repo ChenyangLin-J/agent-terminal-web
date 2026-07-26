@@ -26,7 +26,7 @@ The production route is reverse proxied by Caddy. Authentication is delegated to
 ## What It Does
 
 - 手机优先：打开后先进入登录和 session 选择页。
-- 新会话可选择 `Terminal（稳定）` 或 `App Server（试用）`；Terminal 默认不变。
+- 新会话默认使用 `App Server` 与“全部允许”权限，也可手动切换为 `Terminal` 或“按需确认”。
 - App Server 用结构化 turn 处理“追加当前”和“下一轮”，避免分开发的 prompt 互相替换或串轮。
 - Prompt 使用网页原生 textarea，适合语音输入后再点按修改文本。
 - Terminal 模式由 `node-pty` 启动 `codex` CLI；App Server 模式通过 JSON-RPC 启动或恢复 thread。

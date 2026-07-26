@@ -57,7 +57,9 @@ setInterval(() => {}, 1000);
   });
   await waitFor(() => output.includes("Agent Terminal Web:"), 3000);
 
-  const first = await connect(`ws://127.0.0.1:${agentPort}/terminal?cwd=.&clientId=first-client`);
+  const first = await connect(
+    `ws://127.0.0.1:${agentPort}/terminal?cwd=.&transport=terminal&access=safe&clientId=first-client`,
+  );
   const status = await first.next((message) => message.type === "status");
   await first.next((message) => message.type === "replay");
   const firstOutput = await first.next(

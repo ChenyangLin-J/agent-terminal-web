@@ -2,8 +2,8 @@
 
 Agent Terminal provides two per-session engines:
 
-- `Terminal（稳定）` runs the interactive Codex CLI in a PTY and remains the default.
-- `App Server（试用）` uses JSON-RPC so a follow-up can be attached to an exact Codex turn.
+- `App Server` is the default and uses JSON-RPC so a follow-up can be attached to an exact Codex turn.
+- `Terminal` remains available for the full interactive Codex CLI in a PTY.
 
 Select the engine on the session start screen. Home and other callers can also open an App Server session with:
 
@@ -27,7 +27,7 @@ The browser renders agent text, reasoning summaries, command output, file change
 - Raw terminal keystrokes and CLI slash commands are available only in Terminal mode.
 - App Server mode shows the structured events needed by the current workflow, not every experimental event type.
 - Multi-question tool prompts use a compact text answer field rather than a dedicated form for every question.
-- Terminal remains the fallback and default until App Server has been used reliably in normal phone sessions.
+- Terminal remains available as a manual fallback for workflows that need the full interactive CLI.
 
 ## Verification
 

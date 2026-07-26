@@ -79,16 +79,16 @@
           <label>
             <span>Engine</span>
             <select id="transport">
+              <option value="app-server" selected>App Server（默认）</option>
               <option value="terminal">Terminal（完整 CLI）</option>
-              <option value="app-server">App Server（快速恢复）</option>
             </select>
           </label>
 
           <label>
             <span>Access</span>
             <select id="access-mode">
-              <option value="safe">按需确认（推荐）</option>
-              <option value="full">全部允许（高风险）</option>
+              <option value="full" selected>全部允许（默认，高风险）</option>
+              <option value="safe">按需确认</option>
             </select>
           </label>
 
@@ -357,7 +357,7 @@
     <script src="/shared/voice-capture-widget.js?v=20260717-recovery-3"></script>
     <script src="/agent-upload.js?v=20260725-attachment-wait-1"></script>
     <script src="/agent-voice-input.js?v=20260717-recovery-2"></script>
-    <script src="/app.js?v=20260725-attachment-wait-1"></script>
+    <script src="/app.js?v=20260726-app-server-default-1"></script>
     <script src="/session-focus-mode.js?v=20260716-app-chrome-1"></script>
   </body>
 </html>

@@ -105,6 +105,8 @@ const TERMINAL_HISTORY_QUIET_MS = 1_200;
 const TERMINAL_HISTORY_EMPTY_READY_MS = 120;
 const TERMINAL_DELAYED_HISTORY_GUARD_MS = 60_000;
 const APP_INITIAL_TURN_LIMIT = 10;
+const DEFAULT_TRANSPORT = "app-server";
+const DEFAULT_ACCESS_MODE = "full";
 const APP_COMMANDS = [
   { name: "/status", description: "完整 Session 状态、上下文与额度" },
   { name: "/usage", description: "查看一周额度、重置时间与 Token 活动" },
@@ -176,8 +178,8 @@ let latestTurnState = {
 };
 let resumeInterruptedPending = false;
 let interruptRequestPending = false;
-let activeTransport = "terminal";
-let activeAccessMode = "safe";
+let activeTransport = DEFAULT_TRANSPORT;
+let activeAccessMode = DEFAULT_ACCESS_MODE;
 let activeMemoryProjectMode = "auto";
 let activeMemoryProjects = [];
 let activeMemoryProjectSource = "global";
@@ -723,10 +725,10 @@ function startSession(overrides = {}) {
     cwd: overrides.cwd || projectSelect.value,
     mode: overrides.mode || (sessionId ? "new" : launchModeSelect.value),
     sessionId,
-    transport: overrides.transport || transportSelect.value || "terminal",
+    transport: overrides.transport || transportSelect.value || DEFAULT_TRANSPORT,
     purpose: overrides.purpose === "think" ? "think" : "",
   };
-  const access = overrides.access || (!sessionId ? accessModeSelect.value || "safe" : "");
+  const access = overrides.access || (!sessionId ? accessModeSelect.value || DEFAULT_ACCESS_MODE : "");
   if (access) params.access = access;
   openSocket(params);
 }
@@ -736,8 +738,8 @@ function startThinkSession() {
     cwd: ".",
     mode: "new",
     sessionId: "",
-    transport: transportSelect.value || "terminal",
-    access: accessModeSelect.value || "safe",
+    transport: transportSelect.value || DEFAULT_TRANSPORT,
+    access: accessModeSelect.value || DEFAULT_ACCESS_MODE,
     purpose: "think",
   });
 }
@@ -761,7 +763,11 @@ function openInitialSessionFromUrl() {
   const sessionId = params.get("sessionId") || "";
   const title = params.get("title") || "";
   const startNew = params.get("new") === "1";
-  const transport = params.get("transport") === "app-server" ? "app-server" : "terminal";
+  const transport = params.has("transport")
+    ? params.get("transport") === "terminal"
+      ? "terminal"
+      : "app-server"
+    : DEFAULT_TRANSPORT;
   const access = params.has("access") ? (params.get("access") === "full" ? "full" : "safe") : "";
   const purpose = params.get("purpose") === "think" ? "think" : "";
   syncStartSelectionsFromUrl(params);

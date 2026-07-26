@@ -64,7 +64,9 @@ setInterval(() => {}, 1000);
   await delay(600);
   assert.equal(await sessionIsLive(agentPort, firstId), false, output);
 
-  const second = await connect(`ws://127.0.0.1:${agentPort}/terminal?cwd=.&clientId=second-client`);
+  const second = await connect(
+    `ws://127.0.0.1:${agentPort}/terminal?cwd=.&transport=terminal&access=safe&clientId=second-client`,
+  );
   const secondStatus = await second.next((message) => message.type === "status");
   await second.next((message) => message.type === "replay");
   second.ws.close();
@@ -86,7 +88,9 @@ setInterval(() => {}, 1000);
   await delay(300);
   assert.equal(await sessionIsLive(agentPort, secondStatus.payload.id), false, output);
 
-  const working = await connect(`ws://127.0.0.1:${agentPort}/terminal?cwd=.&clientId=working-client`);
+  const working = await connect(
+    `ws://127.0.0.1:${agentPort}/terminal?cwd=.&transport=terminal&access=safe&clientId=working-client`,
+  );
   const workingStatus = await working.next((message) => message.type === "status");
   await working.next((message) => message.type === "replay");
   working.ws.send(JSON.stringify({ type: "submit", data: "keep working while detached" }));
@@ -119,7 +123,9 @@ setInterval(() => {}, 1000);
 });
 
 async function startSession(port, clientId) {
-  const client = await connect(`ws://127.0.0.1:${port}/terminal?cwd=.&clientId=${clientId}`);
+  const client = await connect(
+    `ws://127.0.0.1:${port}/terminal?cwd=.&transport=terminal&access=safe&clientId=${clientId}`,
+  );
   const status = await client.next((message) => message.type === "status");
   await client.next((message) => message.type === "replay");
   client.ws.close();

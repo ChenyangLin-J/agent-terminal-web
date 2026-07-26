@@ -57,6 +57,7 @@ import {
   listIntegrations,
   saveIntegrationCredential,
 } from "./lib/integrations.js";
+import { createAmapMcpProxy } from "./lib/amap-mcp-proxy.js";
 
 const AGENT_TIME_ZONE = "Asia/Shanghai";
 process.env.TZ = AGENT_TIME_ZONE;
@@ -140,6 +141,10 @@ const personalMemoryScheduler = createPersonalMemoryScheduler({
   run: () => execFileOutput("systemctl", ["--user", "start", "--no-block", "personal-memory-worker.service"]),
   onError: (error) => logAgentEvent("personal-memory-trigger-failed", { message: error.message }),
 });
+const amapMcpProxy = createAmapMcpProxy({
+  integrationRoot: AGENT_INTEGRATIONS_DIR,
+  logger: logAgentEvent,
+});
 
 wss.on("error", (error) => {
   logAgentEvent("ws-server-error", {
@@ -214,6 +219,30 @@ app.post("/internal/codex-notify", async (req, res) => {
     });
     res.status(502).json({ error: "Home push failed." });
   }
+});
+
+app.post("/internal/mcp/amap", async (req, res) => {
+  if (!isDirectLoopbackRequest(req)) {
+    res.sendStatus(404);
+    return;
+  }
+  await amapMcpProxy.handlePost(req, res);
+});
+
+app.get("/internal/mcp/amap", (req, res) => {
+  if (!isDirectLoopbackRequest(req)) {
+    res.sendStatus(404);
+    return;
+  }
+  amapMcpProxy.handleUnsupported(req, res);
+});
+
+app.delete("/internal/mcp/amap", (req, res) => {
+  if (!isDirectLoopbackRequest(req)) {
+    res.sendStatus(404);
+    return;
+  }
+  amapMcpProxy.handleUnsupported(req, res);
 });
 
 app.get("/internal/recent-sessions", async (req, res) => {
@@ -339,6 +368,7 @@ app.put("/api/integrations/:integrationId", requireSafeIntegrationMutation, asyn
     const integration = await saveIntegrationCredential(integrationId, req.body?.values, {
       root: AGENT_INTEGRATIONS_DIR,
     });
+    if (integrationId === "amap") await amapMcpProxy.backend.close("credential-updated");
     logAgentEvent("integration-saved", { integrationId });
     res.set("Cache-Control", "private, no-store");
     res.json({ integration });
@@ -358,6 +388,7 @@ app.delete("/api/integrations/:integrationId", requireSafeIntegrationMutation, a
     const removed = await deleteIntegrationCredential(integrationId, {
       root: AGENT_INTEGRATIONS_DIR,
     });
+    if (integrationId === "amap") await amapMcpProxy.backend.close("credential-deleted");
     logAgentEvent("integration-deleted", { integrationId, removed });
     res.set("Cache-Control", "private, no-store");
     res.json({ ok: true, removed });

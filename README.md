@@ -166,9 +166,21 @@ Integration credentials are stored outside the repository:
 ```
 
 The directory is mode `0700` and each credential file is mode `0600`. Codex does not
-receive the integration key in its parent environment. The configured MCP launcher reads
-the credential only when it starts the matching provider process. A newly created or
-reconnected Codex process is required after a credential is changed.
+receive the integration key in its parent environment. Agent Web exposes the integration
+to local Codex App Servers through a loopback-only Streamable HTTP MCP endpoint:
+
+```toml
+[mcp_servers.amap]
+url = "http://127.0.0.1:3030/internal/mcp/amap"
+enabled = true
+startup_timeout_sec = 10
+tool_timeout_sec = 60
+```
+
+Connecting or listing tools does not start the Amap provider. The first Amap tool call
+starts one provider shared by all Agent sessions, and it exits after 60 seconds without
+another call. Replacing or deleting the credential closes the shared provider immediately.
+Provider results and errors are recursively redacted before they return to Codex.
 
 Auth service:
 

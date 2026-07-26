@@ -1,5 +1,19 @@
 const startScreen = document.querySelector("#start-screen");
 const sessionScreen = document.querySelector("#session-screen");
+const primaryNavigation = document.querySelector("#app-primary-nav");
+const navControlCenterButton = document.querySelector("#nav-control-center");
+const navCurrentSessionButton = document.querySelector("#nav-current-session");
+const navAttentionCount = document.querySelector("#nav-attention-count");
+const openNewSessionButton = document.querySelector("#open-new-session");
+const closeNewSessionButton = document.querySelector("#close-new-session");
+const newSessionPanel = document.querySelector("#new-session-panel");
+const controlCenterMenu = document.querySelector("#control-center-menu");
+const controlCenterFilters = document.querySelector("#control-center-filters");
+const controlAttentionCount = document.querySelector("#control-attention-count");
+const controlRunningCount = document.querySelector("#control-running-count");
+const controlReadyCount = document.querySelector("#control-ready-count");
+const controlHistoryCount = document.querySelector("#control-history-count");
+const controlLiveCount = document.querySelector("#control-live-count");
 const projectSelect = document.querySelector("#project");
 const launchModeSelect = document.querySelector("#launch-mode");
 const transportSelect = document.querySelector("#transport");
@@ -15,6 +29,7 @@ const logoutButton = document.querySelector("#logout");
 const sessionsList = document.querySelector("#sessions-list");
 const codexSessionsList = document.querySelector("#codex-sessions-list");
 const archivedCodexSessionsList = document.querySelector("#archived-codex-sessions-list");
+const controlCenterHistorySections = document.querySelectorAll("[data-control-section='history']");
 const sessionSearchInput = document.querySelector("#session-search-input");
 const sessionSearchSubmit = document.querySelector("#session-search-submit");
 const sessionSearchResults = document.querySelector("#session-search-results");
@@ -132,6 +147,12 @@ const threadSearchInput = document.querySelector("#thread-search-input");
 const threadSearchSubmit = document.querySelector("#thread-search-submit");
 const threadSearchResults = document.querySelector("#thread-search-results");
 const threadSearchClose = document.querySelector("#thread-search-close");
+const sessionSwitcher = document.querySelector("#session-switcher");
+const sessionSwitcherCenterButton = document.querySelector("#session-switcher-center");
+const sessionSwitcherNewButton = document.querySelector("#session-switcher-new");
+const sessionSwitcherSearch = document.querySelector("#session-switcher-search");
+const sessionSwitcherList = document.querySelector("#session-switcher-list");
+const sessionSwitcherCount = document.querySelector("#session-switcher-count");
 
 if ("scrollRestoration" in history) history.scrollRestoration = "manual";
 
@@ -223,6 +244,10 @@ let terminalHistoryUiReady = false;
 let uploadStatusTimer = null;
 let promptSubmissionPending = false;
 let liveSessionsByCodexId = new Map();
+let liveSessionsCache = [];
+let savedSessionsCache = [];
+let archivedSessionsCache = [];
+let activeControlCenterFilter = "all";
 let archivedSessionsExpanded = false;
 let latestTurnState = {
   active: false,
@@ -296,6 +321,31 @@ window.addEventListener("resize", () => fitTerminal({ delay: 120 }));
 
 logoutButton.addEventListener("click", logout);
 restartAgentButton.addEventListener("click", restartAgentWeb);
+navControlCenterButton.addEventListener("click", showStartScreen);
+navCurrentSessionButton.addEventListener("click", () => {
+  if (!activeSessionId && !activeSessionParams.sessionId) return;
+  showSessionScreen();
+  syncSessionUrl({
+    id: activeSessionId,
+    project: activeSessionParams.cwd || ".",
+    sessionId: activeSessionParams.sessionId || "",
+    title: activeSessionParams.title || "",
+    transport: activeSessionParams.transport || activeTransport,
+    access: activeSessionParams.access || activeAccessMode,
+    purpose: activeSessionParams.purpose || "",
+  });
+});
+openNewSessionButton.addEventListener("click", () => toggleNewSessionPanel(true));
+closeNewSessionButton.addEventListener("click", () => toggleNewSessionPanel(false));
+controlCenterFilters.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-session-filter]");
+  if (!button) return;
+  activeControlCenterFilter = button.dataset.sessionFilter || "all";
+  for (const option of controlCenterFilters.querySelectorAll("[data-session-filter]")) {
+    option.classList.toggle("active", option === button);
+  }
+  applyControlCenterFilter();
+});
 connectButton.addEventListener("click", () => startSession());
 startThinkButton.addEventListener("click", startThinkSession);
 openMemoriesButton.addEventListener("click", openMemoryManager);
@@ -309,6 +359,7 @@ sessionSearchInput.addEventListener("keydown", (event) => {
 });
 sessionSearchInput.addEventListener("input", () => {
   if (!sessionSearchInput.value.trim()) sessionSearchResults.classList.add("hidden");
+  applyControlCenterFilter();
 });
 resumeAccessMode.addEventListener("change", renderResumeAccessWarning);
 resumeWithTerminal.addEventListener("click", () => resumePendingSession("terminal"));
@@ -318,6 +369,12 @@ resumeEngineDialog.addEventListener("click", (event) => {
   if (event.target === resumeEngineDialog) closeResumeEngineDialog();
 });
 backButton.addEventListener("click", showStartScreen);
+sessionSwitcherCenterButton.addEventListener("click", showStartScreen);
+sessionSwitcherNewButton.addEventListener("click", () => {
+  showStartScreen();
+  toggleNewSessionPanel(true);
+});
+sessionSwitcherSearch.addEventListener("input", renderSessionSwitcher);
 searchCurrentSessionButton.addEventListener("click", openThreadSearch);
 disconnectButton.addEventListener("click", detach);
 mobileSearchCurrentSessionButton.addEventListener("click", () => {
@@ -672,37 +729,63 @@ async function searchSavedSessions() {
 
 function renderLiveSessions(sessions) {
   const uniqueSessions = uniqueLiveSessions(sessions);
+  liveSessionsCache = uniqueSessions;
   liveSessionsByCodexId = new Map(
     uniqueSessions.filter((session) => session.sessionId).map((session) => [session.sessionId, session]),
   );
-  sessionsList.innerHTML = "";
+  sessionsList.replaceChildren();
+  renderSessionSwitcher();
+  updateControlCenterSummary();
+
   if (!uniqueSessions.length) {
-    sessionsList.append(empty("No live sessions. Detached sessions stay available for about 30 minutes."));
+    const message = empty("当前没有活跃 Session。新建或恢复后，它会出现在这里。");
+    message.classList.add("control-center-empty");
+    sessionsList.append(message);
+    applyControlCenterFilter();
     return;
   }
 
-  for (const session of uniqueSessions) {
-    sessionsList.append(
-      sessionCard({
-        title: session.title || "New Codex session",
-        status: appServerLiveStatus(session),
-        subtitle: `${displayProject(session.project)} · ${formatLaunch(session)} · ${formatTime(
-          session.lastActivityAt,
-        )}`,
-        action: "Reconnect",
-        onClick: () =>
-          openSessionFromList({
-            attach: session.id,
-            cwd: session.project || ".",
-            sessionId: session.sessionId || "",
-            title: session.title || "New Codex session",
-            transport: session.transport || "terminal",
-            access: session.access || "safe",
-            purpose: session.purpose || "",
-          }),
-      }),
-    );
+  const groups = [
+    { kind: "attention", label: "需要你处理", note: "优先看" },
+    { kind: "running", label: "正在运行", note: "持续更新" },
+    { kind: "ready", label: "已完成一轮", note: "随时继续" },
+    { kind: "released", label: "已暂停", note: "上下文已保留" },
+  ];
+
+  for (const group of groups) {
+    const groupSessions = uniqueSessions.filter((session) => liveSessionPresentation(session).kind === group.kind);
+    if (!groupSessions.length) continue;
+    const section = document.createElement("section");
+    section.className = `control-session-group control-session-group-${group.kind}`;
+    section.dataset.controlKind = group.kind;
+    const header = document.createElement("header");
+    const title = document.createElement("strong");
+    title.innerHTML = `<i aria-hidden="true"></i>${group.label}`;
+    const note = document.createElement("span");
+    note.textContent = `${groupSessions.length} · ${group.note}`;
+    header.append(title, note);
+    const list = document.createElement("div");
+    list.className = "control-session-group-list";
+
+    for (const session of groupSessions) {
+      const presentation = liveSessionPresentation(session);
+      list.append(
+        sessionCard({
+          title: session.title || "New Codex session",
+          status: presentation,
+          subtitle: displayProject(session.project),
+          description: liveSessionCurrentTask(session, presentation),
+          meta: liveSessionMeta(session, presentation),
+          kind: group.kind,
+          action: group.kind === "attention" ? "处理" : group.kind === "running" ? "查看" : "继续",
+          onClick: () => openSessionFromList(liveSessionOpenParams(session)),
+        }),
+      );
+    }
+    section.append(header, list);
+    sessionsList.append(section);
   }
+  applyControlCenterFilter();
 }
 
 function uniqueLiveSessions(sessions) {
@@ -727,20 +810,78 @@ function compareLiveSession(a, b) {
   return new Date(a.lastActivityAt).getTime() - new Date(b.lastActivityAt).getTime();
 }
 
-function appServerLiveStatus(session) {
-  if (session?.transport !== "app-server") return null;
-  if (session.turnState?.interrupted) return { state: "interrupted", label: "已中断" };
-  if (session.ready === false) return { state: "restoring", label: "恢复中" };
-  if (session.turnState?.active) return { state: "running", label: "运行中" };
-  return { state: "waiting", label: "等你回复" };
+function liveSessionPresentation(session) {
+  const pendingRequestCount = Number(
+    session?.pendingServerRequestCount ?? session?.pendingRequestCount ?? (session?.waitingForUser ? 1 : 0),
+  );
+  if (pendingRequestCount > 0) {
+    return { kind: "attention", state: "attention", label: "等你处理", pendingRequestCount };
+  }
+  if (session?.turnState?.interrupted) {
+    return { kind: "attention", state: "interrupted", label: "需要继续", pendingRequestCount: 0 };
+  }
+  if (session?.exited || session?.released || session?.suspended) {
+    return { kind: "released", state: "released", label: "已释放", pendingRequestCount: 0 };
+  }
+  if (session?.ready === false) {
+    return { kind: "running", state: "restoring", label: "恢复中", pendingRequestCount: 0 };
+  }
+  if (session?.turnState?.active || session?.turnState?.stopping) {
+    return {
+      kind: "running",
+      state: session?.turnState?.stopping ? "stopping" : "running",
+      label: session?.turnState?.stopping ? "停止中" : "运行中",
+      pendingRequestCount: 0,
+    };
+  }
+  return { kind: "ready", state: "waiting", label: "可继续", pendingRequestCount: 0 };
+}
+
+function liveSessionCurrentTask(session, presentation = liveSessionPresentation(session)) {
+  const requirements = [
+    ...(Array.isArray(session?.turnState?.requirements) ? session.turnState.requirements : []),
+    ...(Array.isArray(session?.turnState?.queuedTurns) ? session.turnState.queuedTurns : []),
+  ];
+  const current =
+    [...requirements].reverse().find((requirement) =>
+      ["working", "queued", "interrupted"].includes(String(requirement?.status || "")),
+    ) || [...requirements].reverse().find((requirement) => String(requirement?.text || "").trim());
+  if (current?.text) return String(current.text).replace(/\s+/g, " ").trim();
+  if (presentation.kind === "running") return "任务正在运行，等待下一次进度更新。";
+  if (presentation.kind === "attention") return "上次任务需要你的操作，进入 Session 后可以继续。";
+  if (presentation.kind === "released") return "运行资源已释放；会话上下文仍然保留。";
+  return "当前没有运行中的任务，可以直接继续对话。";
+}
+
+function liveSessionMeta(session, presentation = liveSessionPresentation(session)) {
+  const parts = [formatLaunch(session), formatTime(session.lastActivityAt)];
+  if (presentation.pendingRequestCount) parts.unshift(`${presentation.pendingRequestCount} 个待处理`);
+  else if (session?.turnState?.queuedTurns?.length) parts.unshift(`${session.turnState.queuedTurns.length} 条排队`);
+  else if (session?.connectedClients > 0) parts.unshift(`${session.connectedClients} 个页面`);
+  return parts.filter(Boolean);
+}
+
+function liveSessionOpenParams(session) {
+  return {
+    attach: session.id,
+    cwd: session.project || ".",
+    sessionId: session.sessionId || "",
+    title: session.title || "New Codex session",
+    transport: session.transport || "terminal",
+    access: session.access || "safe",
+    purpose: session.purpose || "",
+  };
 }
 
 function renderSavedCodexSessions(sessions) {
-  codexSessionsList.innerHTML = "";
+  savedSessionsCache = sessions;
+  codexSessionsList.replaceChildren();
   const nonLiveSessions = sessions.filter((session) => !liveSessionsByCodexId.has(session.id));
+  updateControlCenterSummary();
 
   if (!nonLiveSessions.length) {
-    codexSessionsList.append(empty(sessions.length ? "No other saved sessions." : "No saved Codex sessions found."));
+    codexSessionsList.append(empty(sessions.length ? "没有其他历史 Session。" : "还没有保存的 Codex Session。"));
+    applyControlCenterFilter();
     return;
   }
 
@@ -748,22 +889,29 @@ function renderSavedCodexSessions(sessions) {
     codexSessionsList.append(
       sessionCard({
         title: session.title || "Untitled session",
-        subtitle: `${displayProject(session.project)} · ${formatTime(session.updatedAt)}`,
-        action: "Resume",
+        subtitle: displayProject(session.project),
+        description: "历史上下文已保存，可以恢复后继续。",
+        meta: [formatTime(session.updatedAt)],
+        kind: "history",
+        action: "恢复",
         onClick: () => openResumeEngineDialog(session),
-        secondaryAction: "Rename",
+        secondaryAction: "重命名",
         onSecondaryClick: () => renameCodexSession(session),
-        tertiaryAction: "Archive",
+        tertiaryAction: "归档",
         onTertiaryClick: () => archiveCodexSession(session, true),
       }),
     );
   }
+  applyControlCenterFilter();
 }
 
 function renderArchivedCodexSessions(sessions) {
-  archivedCodexSessionsList.innerHTML = "";
+  archivedSessionsCache = sessions;
+  archivedCodexSessionsList.replaceChildren();
+  updateControlCenterSummary();
   if (!sessions.length) {
-    archivedCodexSessionsList.append(empty("No archived Codex sessions."));
+    archivedCodexSessionsList.append(empty("没有已归档的 Session。"));
+    applyControlCenterFilter();
     return;
   }
 
@@ -775,12 +923,13 @@ function renderArchivedCodexSessions(sessions) {
     archivedCodexSessionsList.append(
       sessionCard({
         title: session.title || "Untitled session",
-        subtitle: `${displayProject(session.project)} · archived ${formatTime(
-          session.archivedAt || session.updatedAt,
-        )}`,
-        action: "Restore",
+        subtitle: displayProject(session.project),
+        description: "已归档，不会出现在常用 Session 中。",
+        meta: [`归档于 ${formatTime(session.archivedAt || session.updatedAt)}`],
+        kind: "history",
+        action: "恢复",
         onClick: () => archiveCodexSession(session, false),
-        secondaryAction: "Rename",
+        secondaryAction: "重命名",
         onSecondaryClick: () => renameCodexSession(session),
       }),
     );
@@ -799,6 +948,139 @@ function renderArchivedCodexSessions(sessions) {
     });
     archivedCodexSessionsList.append(toggleButton);
   }
+  applyControlCenterFilter();
+}
+
+function toggleNewSessionPanel(open) {
+  newSessionPanel.classList.toggle("hidden", !open);
+  openNewSessionButton.setAttribute("aria-expanded", String(open));
+  controlCenterMenu.removeAttribute("open");
+  if (open) {
+    requestAnimationFrame(() => {
+      newSessionPanel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      projectSelect.focus();
+    });
+  }
+}
+
+function updateControlCenterSummary() {
+  const counts = { attention: 0, running: 0, ready: 0, released: 0 };
+  for (const session of liveSessionsCache) {
+    const kind = liveSessionPresentation(session).kind;
+    if (Object.prototype.hasOwnProperty.call(counts, kind)) counts[kind] += 1;
+  }
+  const nonLiveSaved = savedSessionsCache.filter((session) => !liveSessionsByCodexId.has(session.id)).length;
+  const historyCount = nonLiveSaved + archivedSessionsCache.length;
+  controlAttentionCount.textContent = String(counts.attention);
+  controlRunningCount.textContent = String(counts.running);
+  controlReadyCount.textContent = String(counts.ready);
+  controlHistoryCount.textContent = String(historyCount);
+  controlLiveCount.textContent = `${liveSessionsCache.length} 个活跃`;
+  sessionSwitcherCount.textContent = `${liveSessionsCache.length} 个活跃`;
+  navAttentionCount.textContent = String(counts.attention);
+  navAttentionCount.classList.toggle("hidden", counts.attention === 0);
+}
+
+function applyControlCenterFilter() {
+  const query = sessionSearchInput.value.trim().toLocaleLowerCase();
+  const liveSection = document.querySelector(".control-center-live");
+  let visibleLiveCards = 0;
+
+  for (const card of sessionsList.querySelectorAll(".session-card")) {
+    const kind = card.dataset.sessionKind || "ready";
+    const filterMatches =
+      activeControlCenterFilter === "all" ||
+      activeControlCenterFilter === kind ||
+      (activeControlCenterFilter === "ready" && kind === "released");
+    const queryMatches = !query || card.textContent.toLocaleLowerCase().includes(query);
+    const visible = filterMatches && queryMatches;
+    card.classList.toggle("hidden", !visible);
+    if (visible) visibleLiveCards += 1;
+  }
+
+  for (const group of sessionsList.querySelectorAll(".control-session-group")) {
+    group.classList.toggle("hidden", !group.querySelector(".session-card:not(.hidden)"));
+  }
+
+  const historyVisible = ["all", "history"].includes(activeControlCenterFilter);
+  for (const section of controlCenterHistorySections) {
+    const cards = [...section.querySelectorAll(".session-card")];
+    for (const card of cards) {
+      const queryMatches = !query || card.textContent.toLocaleLowerCase().includes(query);
+      card.classList.toggle("hidden", !historyVisible || !queryMatches);
+    }
+    const hasVisibleCards = cards.some((card) => !card.classList.contains("hidden"));
+    section.classList.toggle("hidden", !historyVisible || (Boolean(query) && cards.length > 0 && !hasVisibleCards));
+  }
+
+  if (liveSection) {
+    liveSection.classList.toggle(
+      "hidden",
+      activeControlCenterFilter === "history" || (Boolean(query) && liveSessionsCache.length > 0 && visibleLiveCards === 0),
+    );
+  }
+}
+
+function renderSessionSwitcher() {
+  const query = sessionSwitcherSearch.value.trim().toLocaleLowerCase();
+  sessionSwitcherList.replaceChildren();
+  const visible = liveSessionsCache.filter((session) => {
+    if (!query) return true;
+    return [session.title, session.project, liveSessionCurrentTask(session)]
+      .filter(Boolean)
+      .join(" ")
+      .toLocaleLowerCase()
+      .includes(query);
+  });
+
+  if (!visible.length) {
+    sessionSwitcherList.append(empty(query ? "没有匹配的 Session。" : "当前没有活跃 Session。"));
+    return;
+  }
+
+  const groups = [
+    { kind: "attention", label: "需要你" },
+    { kind: "running", label: "运行中" },
+    { kind: "ready", label: "可继续" },
+    { kind: "released", label: "已暂停" },
+  ];
+  for (const group of groups) {
+    const groupSessions = visible.filter((session) => liveSessionPresentation(session).kind === group.kind);
+    if (!groupSessions.length) continue;
+    const heading = document.createElement("div");
+    heading.className = "session-switcher-heading";
+    heading.innerHTML = `<span>${group.label}</span><small>${groupSessions.length}</small>`;
+    sessionSwitcherList.append(heading);
+
+    for (const session of groupSessions) {
+      const presentation = liveSessionPresentation(session);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "session-switcher-item";
+      button.dataset.state = presentation.state;
+      button.classList.toggle(
+        "active",
+        session.id === activeSessionId ||
+          (session.sessionId && session.sessionId === activeSessionParams.sessionId),
+      );
+      const dot = document.createElement("i");
+      dot.className = "session-switcher-dot";
+      const copy = document.createElement("span");
+      const title = document.createElement("strong");
+      title.textContent = session.title || "New Codex session";
+      const status = document.createElement("small");
+      status.textContent = `${presentation.label} · ${formatTime(session.lastActivityAt)}`;
+      copy.append(title, status);
+      button.append(dot, copy);
+      button.addEventListener("click", () => openSessionInCurrentPage(liveSessionOpenParams(session)));
+      sessionSwitcherList.append(button);
+    }
+  }
+}
+
+function openSessionInCurrentPage(params) {
+  window.history.pushState(null, "", sessionUrl(params));
+  openSocket(params);
 }
 
 function openResumeEngineDialog(session) {
@@ -837,6 +1119,9 @@ function sessionCard({
   title,
   status,
   subtitle,
+  description = "",
+  meta: metaItems = [],
+  kind = "history",
   action,
   onClick,
   secondaryAction,
@@ -846,7 +1131,11 @@ function sessionCard({
 }) {
   const card = document.createElement("div");
   card.className = "session-card";
+  card.dataset.sessionKind = kind;
+  card.tabIndex = 0;
+  card.setAttribute("role", "button");
   const meta = document.createElement("div");
+  meta.className = "session-card-main";
   const titleRow = document.createElement("div");
   titleRow.className = "session-card-title";
   const titleLabel = document.createElement("strong");
@@ -861,8 +1150,25 @@ function sessionCard({
     titleRow.append(statusLabel);
   }
   const subtitleLabel = document.createElement("span");
+  subtitleLabel.className = "session-card-project";
   subtitleLabel.textContent = subtitle;
   meta.append(titleRow, subtitleLabel);
+  if (description) {
+    const descriptionLabel = document.createElement("p");
+    descriptionLabel.className = "session-card-description";
+    descriptionLabel.textContent = description;
+    meta.append(descriptionLabel);
+  }
+  if (Array.isArray(metaItems) && metaItems.length) {
+    const metaRow = document.createElement("span");
+    metaRow.className = "session-card-meta";
+    for (const value of metaItems) {
+      const item = document.createElement("i");
+      item.textContent = value;
+      metaRow.append(item);
+    }
+    meta.append(metaRow);
+  }
   const actions = document.createElement("div");
   actions.className = "session-card-actions";
   if (secondaryAction) {
@@ -896,6 +1202,12 @@ function sessionCard({
   });
   actions.append(button);
   card.append(meta, actions);
+  card.addEventListener("click", () => onClick?.());
+  card.addEventListener("keydown", (event) => {
+    if (!["Enter", " "].includes(event.key)) return;
+    event.preventDefault();
+    onClick?.();
+  });
   return card;
 }
 
@@ -3146,6 +3458,13 @@ function renderStatus(status) {
   document.body.classList.toggle("app-server-session", activeTransport === "app-server");
   updateSessionViewLabels();
   currentSessionExited = Boolean(status.exited);
+  const liveIndex = liveSessionsCache.findIndex(
+    (session) => session.id === status.id || (status.sessionId && session.sessionId === status.sessionId),
+  );
+  if (liveIndex >= 0) liveSessionsCache[liveIndex] = { ...liveSessionsCache[liveIndex], ...status };
+  else if (!status.exited && status.id) liveSessionsCache.unshift(status);
+  syncPrimaryNavigation(sessionScreen.classList.contains("hidden") ? "center" : "session");
+  updateControlCenterSummary();
   const sessionLabel = status.title || displayProject(status.project);
   statusEls.project.textContent = sessionLabel;
   statusEls.project.title = sessionLabel;
@@ -3275,6 +3594,7 @@ function showStartScreen() {
   startScreen.classList.remove("hidden");
   sessionScreen.classList.add("hidden");
   document.body.classList.remove("app-server-session");
+  syncPrimaryNavigation("center");
   window.clearInterval(sessionsTimer);
   refreshLists().then(scrollStartScreenToTop);
   sessionsTimer = window.setInterval(refreshLists, 10_000);
@@ -3291,9 +3611,22 @@ function showSessionScreen() {
   startScreen.classList.add("hidden");
   sessionScreen.classList.remove("hidden");
   setSessionPageMode(true);
+  syncPrimaryNavigation("session");
   closeTextView();
   window.clearInterval(sessionsTimer);
+  void loadLiveSessions();
+  sessionsTimer = window.setInterval(loadLiveSessions, 10_000);
   fitTerminal();
+}
+
+function syncPrimaryNavigation(screen) {
+  const onControlCenter = screen === "center";
+  navControlCenterButton.classList.toggle("active", onControlCenter);
+  navControlCenterButton.toggleAttribute("aria-current", onControlCenter);
+  navCurrentSessionButton.classList.toggle("active", !onControlCenter);
+  navCurrentSessionButton.toggleAttribute("aria-current", !onControlCenter);
+  navCurrentSessionButton.disabled = !activeSessionId && !activeSessionParams.sessionId;
+  renderSessionSwitcher();
 }
 
 function syncSessionUrl(status) {

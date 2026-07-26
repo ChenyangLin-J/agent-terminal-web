@@ -1,0 +1,46 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+const [page, app, styles] = await Promise.all([
+  readFile(new URL("../public/index.html", import.meta.url), "utf8"),
+  readFile(new URL("../public/app.js", import.meta.url), "utf8"),
+  readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
+]);
+
+test("the default Agent home is a two-destination Session control center", () => {
+  assert.match(page, /id="nav-control-center"[\s\S]*>[\s\S]*中控/);
+  assert.match(page, /id="nav-current-session"[\s\S]*>[\s\S]*会话/);
+  assert.equal((page.match(/class="app-nav-button/g) || []).length, 2);
+  assert.match(page, /<h1>Agent 中控<\/h1>/);
+  assert.match(page, /id="open-new-session"[\s\S]*新建/);
+  assert.match(page, /data-session-filter="attention"/);
+  assert.match(page, /data-session-filter="history"/);
+});
+
+test("control center cards derive attention and progress from real Session state", () => {
+  assert.match(app, /function liveSessionPresentation\(session\)/);
+  assert.match(app, /session\?\.turnState\?\.interrupted/);
+  assert.match(app, /session\?\.turnState\?\.active/);
+  assert.match(app, /pendingServerRequestCount/);
+  assert.match(app, /function liveSessionCurrentTask\(session/);
+  assert.match(app, /turnState\?\.requirements/);
+  assert.doesNotMatch(app, /Math\.random\(\).*progress/);
+});
+
+test("desktop, Pad, and phone keep the same navigation responsibilities", () => {
+  assert.match(page, /id="session-switcher"/);
+  assert.match(styles, /@media \(min-width: 821px\)[\s\S]*grid-template-areas:[\s\S]*"switcher header"/);
+  assert.match(
+    styles,
+    /@media \(min-width: 821px\) and \(max-width: 1100px\)[\s\S]*grid-template-columns: 188px minmax\(0, 1fr\)/,
+  );
+  assert.match(
+    styles,
+    /@media \(max-width: 820px\)[\s\S]*\.app-primary-nav \{[\s\S]*grid-template-columns: repeat\(2, 1fr\)/,
+  );
+  assert.match(
+    styles,
+    /body\.session-active \.session-screen \{[\s\S]*height: calc\(100dvh - 66px - env\(safe-area-inset-bottom\)\)/,
+  );
+});

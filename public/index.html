@@ -36,7 +36,7 @@
       }
     </style>
     <link rel="stylesheet" href="/vendor/xterm-css/xterm.css?v=20260625-5" />
-    <link rel="stylesheet" href="/styles.css?v=20260726-inline-rename-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260726-control-center-1" />
     <link rel="stylesheet" href="/session-focus-mode.css?v=20260720-app-toolbar-1" />
     <link rel="stylesheet" href="/thinking-session.css?v=20260716-1" />
     <link rel="stylesheet" href="/agent-memories.css?v=20260723-pending-merge-1" />
@@ -44,106 +44,192 @@
   </head>
   <body>
     <main class="app">
+      <nav id="app-primary-nav" class="app-primary-nav" aria-label="Agent 主要导航">
+        <img class="app-nav-brand" src="/favicon.svg?v=20260710-1" alt="Agent" />
+        <button id="nav-control-center" class="app-nav-button active" type="button" aria-current="page">
+          <span class="app-nav-icon" aria-hidden="true">
+            <i></i><i></i><i></i><i></i>
+          </span>
+          <span>中控</span>
+          <strong id="nav-attention-count" class="app-nav-badge hidden">0</strong>
+        </button>
+        <button id="nav-current-session" class="app-nav-button" type="button" disabled>
+          <span class="app-nav-session-icon" aria-hidden="true"></span>
+          <span>会话</span>
+        </button>
+        <span class="app-nav-spacer"></span>
+        <span class="app-nav-connection" title="Agent Web 在线"><i></i><span>在线</span></span>
+      </nav>
+
       <section id="start-screen" class="start-screen hidden" aria-label="Start session">
-        <header class="start-header">
+        <header class="start-header control-center-header">
           <div class="start-brand">
-            <img class="start-brand-icon" src="/favicon.svg?v=20260710-1" alt="" />
             <div>
-              <h1>Codex Agent</h1>
-              <p>Start, reconnect, or resume a Codex session.</p>
+              <span class="control-center-eyebrow">Session control center</span>
+              <h1>Agent 中控</h1>
+              <p>先看哪里需要你，再决定进入哪个会话。</p>
             </div>
           </div>
           <div class="start-header-actions">
-            <button id="open-integrations" type="button" title="管理外部工具凭证">集成</button>
-            <button id="restart-agent" class="restart-agent" type="button" title="重启 Agent Web">
-              <span class="restart-agent-icon" aria-hidden="true">↻</span>
-              <span id="restart-agent-label">重启</span>
-            </button>
-            <button id="logout" type="button">Logout</button>
+            <button id="open-new-session" class="primary control-center-new" type="button">＋ 新建</button>
+            <details id="control-center-menu" class="control-center-menu">
+              <summary title="更多中控操作" aria-label="更多中控操作">•••</summary>
+              <div>
+                <button id="open-integrations" type="button" title="管理外部工具凭证">集成</button>
+                <button
+                  id="open-memories"
+                  class="memory-trigger"
+                  type="button"
+                  data-memory-state="loading"
+                  title="管理个人记忆"
+                >
+                  <span>记忆</span>
+                  <strong class="memory-trigger-status" data-memory-trigger-status>检查中</strong>
+                </button>
+                <button id="refresh-sessions" type="button">刷新状态</button>
+                <button id="restart-agent" class="restart-agent" type="button" title="重启 Agent Web">
+                  <span class="restart-agent-icon" aria-hidden="true">↻</span>
+                  <span id="restart-agent-label">重启 Agent Web</span>
+                </button>
+                <button id="logout" type="button">退出登录</button>
+              </div>
+            </details>
           </div>
         </header>
 
-        <h2 class="start-form-title">Start a session</h2>
-        <div class="start-grid">
-          <label>
-            <span>Project</span>
-            <select id="project"></select>
-          </label>
-
-          <label>
-            <span>Launch</span>
-            <select id="launch-mode">
-              <option value="new">New session</option>
-              <option value="resume-last">Resume last</option>
-            </select>
-          </label>
-
-          <label>
-            <span>Engine</span>
-            <select id="transport">
-              <option value="app-server" selected>App Server（默认）</option>
-              <option value="terminal">Terminal（完整 CLI）</option>
-            </select>
-          </label>
-
-          <label>
-            <span>Access</span>
-            <select id="access-mode">
-              <option value="full" selected>全部允许（默认，高风险）</option>
-              <option value="safe">按需确认</option>
-            </select>
-          </label>
-
-          <label>
-            <span>Session ID</span>
-            <input id="session-id" type="text" spellcheck="false" placeholder="optional" />
-          </label>
-        </div>
-
-        <div class="start-actions">
-          <button id="connect" class="primary" type="button">Start</button>
-          <button id="start-think" type="button">Think</button>
-          <button
-            id="open-memories"
-            class="memory-trigger"
-            type="button"
-            data-memory-state="loading"
-            title="管理个人记忆"
-          >
-            <span>记忆</span>
-            <strong class="memory-trigger-status" data-memory-trigger-status>检查中</strong>
-          </button>
-          <button id="refresh-sessions" type="button">Refresh</button>
-        </div>
+        <section class="control-center-summary" aria-label="Session 状态概览">
+          <article data-summary-kind="attention">
+            <span>需要你</span>
+            <strong id="control-attention-count">0</strong>
+            <small>权限 / 决策 / 中断</small>
+          </article>
+          <article data-summary-kind="running">
+            <span>进行中</span>
+            <strong id="control-running-count">0</strong>
+            <small>持续有变化</small>
+          </article>
+          <article data-summary-kind="ready">
+            <span>可继续</span>
+            <strong id="control-ready-count">0</strong>
+            <small>已完成一轮</small>
+          </article>
+          <article data-summary-kind="history">
+            <span>历史</span>
+            <strong id="control-history-count">0</strong>
+            <small>保存与归档</small>
+          </article>
+        </section>
 
         <section class="session-search" aria-label="Search Codex sessions">
-          <label for="session-search-input">搜索历史会话</label>
-          <div>
-            <input id="session-search-input" type="search" placeholder="搜索 Prompt、最终回答或 Session 名称" />
-            <button id="session-search-submit" type="button">搜索</button>
+          <div class="control-center-command">
+            <input id="session-search-input" type="search" placeholder="搜索 Session、项目或当前任务…" />
+            <button id="session-search-submit" type="button">搜索内容</button>
+          </div>
+          <div id="control-center-filters" class="control-center-filters" aria-label="Session 状态筛选">
+            <button class="active" type="button" data-session-filter="all">全部</button>
+            <button type="button" data-session-filter="attention">需我处理</button>
+            <button type="button" data-session-filter="running">运行中</button>
+            <button type="button" data-session-filter="ready">可继续</button>
+            <button type="button" data-session-filter="history">历史</button>
           </div>
           <div id="session-search-results" class="sessions-list hidden" aria-live="polite"></div>
         </section>
 
-        <section class="recent">
-          <h2>Live Sessions</h2>
+        <section id="new-session-panel" class="start-launch-panel hidden" aria-label="新建 Session">
+          <header>
+            <div>
+              <span>New session</span>
+              <h2>开始一个 Session</h2>
+            </div>
+            <button id="close-new-session" type="button" aria-label="关闭新建 Session">×</button>
+          </header>
+          <div class="start-grid">
+            <label>
+              <span>Project</span>
+              <select id="project"></select>
+            </label>
+
+            <label>
+              <span>Launch</span>
+              <select id="launch-mode">
+                <option value="new">New session</option>
+                <option value="resume-last">Resume last</option>
+              </select>
+            </label>
+
+            <label>
+              <span>Engine</span>
+              <select id="transport">
+                <option value="app-server" selected>App Server（默认）</option>
+                <option value="terminal">Terminal（完整 CLI）</option>
+              </select>
+            </label>
+
+            <label>
+              <span>Access</span>
+              <select id="access-mode">
+                <option value="full" selected>全部允许（默认，高风险）</option>
+                <option value="safe">按需确认</option>
+              </select>
+            </label>
+
+            <label>
+              <span>Session ID</span>
+              <input id="session-id" type="text" spellcheck="false" placeholder="optional" />
+            </label>
+          </div>
+          <div class="start-actions">
+            <button id="connect" class="primary" type="button">开始</button>
+            <button id="start-think" type="button">Think</button>
+          </div>
+        </section>
+
+        <section class="recent control-center-live">
+          <header class="control-center-section-header">
+            <div>
+              <h2>当前 Session</h2>
+              <span>状态来自正在运行的真实任务</span>
+            </div>
+            <small id="control-live-count">0 个活跃</small>
+          </header>
           <div id="sessions-list" class="sessions-list"></div>
         </section>
 
-        <section class="recent">
-          <h2>Saved Codex Sessions</h2>
+        <section class="recent control-center-history" data-control-section="history">
+          <header class="control-center-section-header">
+            <div>
+              <h2>最近历史</h2>
+              <span>搜索、恢复、重命名和归档都在这里</span>
+            </div>
+          </header>
           <div id="codex-sessions-list" class="sessions-list"></div>
         </section>
 
-        <section class="recent">
-          <h2>Archived Codex Sessions</h2>
+        <details class="recent control-center-history control-center-archive" data-control-section="history">
+          <summary>已归档 Session</summary>
           <div id="archived-codex-sessions-list" class="sessions-list"></div>
-        </section>
+        </details>
       </section>
 
       <section id="session-screen" class="session-screen hidden" aria-label="Codex session">
+        <aside id="session-switcher" class="session-switcher" aria-label="快速切换 Session">
+          <header>
+            <div>
+              <strong>快速切换</strong>
+              <span id="session-switcher-count">0 个活跃</span>
+            </div>
+            <button id="session-switcher-center" type="button">中控</button>
+          </header>
+          <label>
+            <span class="hidden">搜索 Session</span>
+            <input id="session-switcher-search" type="search" placeholder="搜索 Session…" />
+          </label>
+          <div id="session-switcher-list" class="session-switcher-list"></div>
+          <button id="session-switcher-new" class="session-switcher-new" type="button">＋ 新建 Session</button>
+        </aside>
+
         <header class="session-header">
-          <button id="back" type="button" title="返回会话列表">会话</button>
+          <button id="back" type="button" title="返回 Agent 中控">中控</button>
           <div id="session-title" class="session-title">
             <button
               id="session-title-display"
@@ -556,7 +642,7 @@
     <script src="/agent-upload.js?v=20260725-attachment-wait-1"></script>
     <script src="/agent-voice-input.js?v=20260717-recovery-2"></script>
     <script src="/agent-realtime.js?v=20260726-1"></script>
-    <script src="/app.js?v=20260726-inline-rename-1"></script>
+    <script src="/app.js?v=20260726-control-center-1"></script>
     <script src="/session-focus-mode.js?v=20260716-app-chrome-1"></script>
   </body>
 </html>

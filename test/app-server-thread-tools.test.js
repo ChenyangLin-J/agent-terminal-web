@@ -24,16 +24,25 @@ test("Agent Web exposes native search, persistent names, branching, subagent nav
   assert.match(server, /type: "localAudio"/);
   assert.match(server, /ancestorThreadId: session\.sessionId/);
   assert.match(server, /parentThreadId: session\.parentThreadId/);
+  assert.match(server, /readCodexThreadRelationsFromFiles/);
+  assert.match(server, /payload\.forked_from_id/);
+  assert.match(server, /rememberAgentSessionRelation/);
 
   assert.match(page, /id="session-search-input"/);
+  assert.match(page, /id="session-title-display"/);
+  assert.match(page, /id="session-title-editor"/);
+  assert.match(page, /id="session-title-input"/);
   assert.match(page, /id="thread-search-dialog"/);
   assert.match(page, /id="edit-fork-banner"/);
   assert.match(page, /id="app-session-agents"/);
   assert.match(page, /id="app-session-more"/);
   assert.match(app, /function searchSavedSessions\(\)/);
   assert.match(app, /function searchCurrentThread\(\)/);
-  assert.match(app, /"编辑并分支"/);
-  assert.match(app, /"从这里分支"/);
+  assert.match(app, /edit\.textContent = "编辑"/);
+  assert.match(app, /fork\.textContent = "分支"/);
+  assert.match(app, /function beginCurrentSessionRename\(\)/);
+  assert.match(app, /function saveCurrentSessionRename\(\)/);
+  assert.match(app, /saveCodexSessionTitle\(sessionId, title\)/);
   assert.match(app, /const canBranch = item\.type === "user"/);
   assert.doesNotMatch(app, /const canFork =[\s\S]*item\.type === "assistant"/);
   assert.match(app, /function renderAppSubagents/);
@@ -42,4 +51,7 @@ test("Agent Web exposes native search, persistent names, branching, subagent nav
   assert.match(styles, /\.app-transcript-item-actions/);
   assert.match(styles, /\.app-transcript-item\.has-transcript-actions:hover \.app-transcript-item-actions/);
   assert.match(styles, /\.app-session-more-menu/);
+  assert.match(styles, /\.session-title-display:not\(:disabled\):hover \.session-title-rename-hint/);
+  assert.match(styles, /\.edit-fork-banner \{[\s\S]*grid-column: 1 \/ -1/);
+  assert.match(styles, /\.app-transcript-item\.is-edit-source/);
 });

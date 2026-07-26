@@ -1044,25 +1044,98 @@ input {
 }
 
 .session-title {
+  display: grid;
   min-width: 0;
 }
 
-.session-title strong,
-.session-title span {
-  display: block;
+.session-title-display {
+  display: flex;
+  align-items: center;
+  justify-self: start;
+  gap: 0;
+  width: 100%;
+  max-width: 100%;
+  min-height: 24px !important;
+  margin-left: -4px;
+  padding: 0 4px !important;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: #f2f4f8;
+  text-align: left;
+}
+
+.session-title-display:hover,
+.session-title-display:focus-visible {
+  background: #1b2230;
+}
+
+.session-title-display:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.session-title-display strong {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.session-title strong {
   line-height: 24px;
 }
 
-.session-title span {
+.session-title-rename-hint {
+  max-width: 0;
+  margin-left: 0;
+  overflow: hidden;
+  color: #92a4c1;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 20px;
+  opacity: 0;
+  white-space: nowrap;
+  transition:
+    max-width 120ms ease,
+    margin-left 120ms ease,
+    opacity 120ms ease;
+}
+
+.session-title-display:not(:disabled):hover .session-title-rename-hint,
+.session-title-display:not(:disabled):focus-visible .session-title-rename-hint {
+  max-width: 48px;
+  margin-left: 8px;
+  opacity: 1;
+}
+
+.session-title-editor {
+  min-width: 0;
+  max-width: min(460px, 100%);
+}
+
+.session-title-editor input {
+  display: block;
+  width: 100%;
+  height: 28px;
+  min-width: 0;
+  padding: 3px 7px;
+  border: 1px solid #526c9a;
+  border-radius: 6px;
+  background: #111722;
+  color: #f2f4f8;
+  font: 600 14px/20px system-ui, sans-serif;
+}
+
+.session-title.saving .session-title-editor {
+  opacity: 0.68;
+}
+
+.session-connection {
+  display: block;
+  overflow: hidden;
   color: #a7adbc;
   font-size: 12px;
   line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-controls {
@@ -2702,7 +2775,37 @@ input {
 }
 
 .edit-fork-banner {
-  margin-bottom: 8px;
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin: 0;
+}
+
+.edit-fork-banner > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.edit-fork-banner strong {
+  color: #d7e7ff;
+  font-size: 0.78rem;
+}
+
+.edit-fork-banner span {
+  color: #91a8c8;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.composer.editing-history #prompt {
+  border-color: #496b9f;
+  box-shadow: inset 3px 0 0 #496b9f;
+}
+
+.composer.editing-history #send-prompt {
+  border-color: #506fa8;
+  background: #263d6b;
 }
 
 .app-transcript-item header {
@@ -2735,6 +2838,16 @@ input {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0);
+}
+
+.app-server-transcript.editing-history .app-transcript-item-actions {
+  display: none;
+}
+
+.app-transcript-item.is-edit-source {
+  border-color: rgba(96, 165, 250, 0.7);
+  background: #101a2a;
+  box-shadow: inset 3px 0 0 #4c77bd;
 }
 
 .app-transcript-item-actions button,
@@ -2843,5 +2956,10 @@ input {
   .app-branch-banner,
   .edit-fork-banner {
     align-items: flex-start;
+  }
+
+  .edit-fork-banner {
+    gap: 8px;
+    padding: 8px 9px;
   }
 }

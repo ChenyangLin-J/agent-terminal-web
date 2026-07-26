@@ -928,6 +928,7 @@ app.put("/api/codex-sessions/:id/title", async (req, res) => {
       if (session.sessionId === id && title) {
         session.title = title;
         persistRestorableWebSession(session);
+        broadcast(session, "status", publicSession(session));
       }
     }
     res.json({ id, customTitle: title, nativeNameSaved });
@@ -1562,6 +1563,12 @@ async function initializeAppServerSession(session, launch) {
         "主 Agent";
     }
     rememberAgentSessionAccess(session.sessionId, session.access);
+    rememberAgentSessionRelation(session.sessionId, {
+      forkedFromId: session.forkedFromId,
+      forkedFromTitle: session.forkedFromTitle,
+      parentThreadId: session.parentThreadId,
+      parentThreadTitle: session.parentThreadTitle,
+    });
     rememberAgentSessionMemoryRouting(session);
     session.ready = true;
     session.lastActivityAt = new Date().toISOString();
@@ -3487,6 +3494,10 @@ async function forkAppServerSessionInBackground(session, lastTurnId) {
     });
   });
   rememberAgentSessionAccess(threadId, session.access);
+  rememberAgentSessionRelation(threadId, {
+    forkedFromId: sourceThreadId,
+    forkedFromTitle: session.title,
+  });
   logAgentEvent("thread-fork-created", {
     webSessionId: session.id,
     sourceThreadId,
@@ -3560,6 +3571,12 @@ async function editAndForkAppServerSession(session, { beforeTurnId, editedText, 
       });
     });
     rememberAgentSessionAccess(session.sessionId, session.access);
+    rememberAgentSessionRelation(session.sessionId, {
+      forkedFromId: sourceThreadId,
+      forkedFromTitle: sourceTitle,
+      parentThreadId: session.parentThreadId,
+      parentThreadTitle: session.parentThreadTitle,
+    });
     rememberAgentSessionMemoryRouting(session);
 
     broadcast(session, "app-transcript", publicAppTranscript(session));
@@ -3750,6 +3767,39 @@ async function listAllAppServerThreads(client, archived) {
   return threads.slice(0, APP_THREAD_TREE_MAX_THREADS).map((thread) => ({ thread, archived }));
 }
 
+async function readCodexThreadRelationsFromFiles(threadIds) {
+  const wanted = new Set([...threadIds].map(String).filter(isValidSessionId));
+  if (!wanted.size) return new Map();
+  const files = [
+    ...(await walkFiles(CODEX_SESSIONS_ROOT)),
+    ...(await walkFiles(CODEX_ARCHIVED_SESSIONS_ROOT)),
+  ].filter((file) => file.endsWith(".jsonl") && wanted.has(sessionIdFromFilename(file)));
+  const entries = await Promise.all(
+    files.map(async (file) => {
+      const id = sessionIdFromFilename(file);
+      const firstLine = await readFirstLine(file);
+      if (!firstLine) return null;
+      try {
+        const payload = JSON.parse(firstLine)?.payload || {};
+        return [
+          id,
+          {
+            forkedFromId: String(payload.forked_from_id || payload.forkedFromId || ""),
+            parentThreadId: String(payload.parent_thread_id || payload.parentThreadId || ""),
+          },
+        ];
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return new Map(entries.filter(Boolean));
+}
+
+function firstValidThreadId(...values) {
+  return values.map((value) => String(value || "")).find(isValidSessionId) || "";
+}
+
 async function sendAppServerThreadTree(session, ws) {
   const catalog = await Promise.all([
     listAllAppServerThreads(session.appServer, false),
@@ -3763,9 +3813,44 @@ async function sendAppServerThreadTree(session, ws) {
     if (current?.id) byId.set(current.id, { thread: current, archived: false });
   }
 
+  const [fileRelations, persistedRecords] = await Promise.all([
+    readCodexThreadRelationsFromFiles(byId.keys()),
+    Promise.resolve(readPersistedWebSessions()),
+  ]);
+  const persistedByCodexId = latestPersistedSessionsByCodexId(persistedRecords);
+  const sessionSettings = readAgentSessionSettings();
+  const liveByCodexId = new Map();
+  for (const live of sessions.values()) {
+    if (isValidSessionId(live.sessionId)) liveByCodexId.set(live.sessionId, live);
+  }
+  const relationFor = (threadId, thread = byId.get(threadId)?.thread) => {
+    const live = liveByCodexId.get(threadId) || {};
+    const saved = sessionSettings[threadId] || {};
+    const persisted = persistedByCodexId.get(threadId) || {};
+    const file = fileRelations.get(threadId) || {};
+    return {
+      parentThreadId: firstValidThreadId(
+        thread?.parentThreadId,
+        live.parentThreadId,
+        saved.parentThreadId,
+        persisted.parentThreadId,
+        file.parentThreadId,
+      ),
+      forkedFromId: firstValidThreadId(
+        thread?.forkedFromId,
+        live.forkedFromId,
+        saved.forkedFromId,
+        persisted.forkedFromId,
+        file.forkedFromId,
+      ),
+    };
+  };
+
   let ancestor = current;
   for (let depth = 0; ancestor && depth < 100; depth += 1) {
-    const parentId = String(ancestor.parentThreadId || ancestor.forkedFromId || "");
+    const ancestorId = String(ancestor.id || "");
+    const relation = relationFor(ancestorId, ancestor);
+    const parentId = relation.parentThreadId || relation.forkedFromId;
     if (!parentId) break;
     let parent = byId.get(parentId)?.thread || null;
     if (!parent) {
@@ -3783,10 +3868,13 @@ async function sendAppServerThreadTree(session, ws) {
     relatedIds.add(id);
     const entry = byId.get(id);
     const thread = entry?.thread;
-    const parentId = String(thread?.parentThreadId || thread?.forkedFromId || "");
+    const relation = relationFor(id, thread);
+    const parentId = relation.parentThreadId || relation.forkedFromId;
     if (parentId) pending.push(parentId);
     for (const candidate of byId.values()) {
-      const candidateParentId = String(candidate.thread?.parentThreadId || candidate.thread?.forkedFromId || "");
+      const candidateId = String(candidate.thread?.id || "");
+      const candidateRelation = relationFor(candidateId, candidate.thread);
+      const candidateParentId = candidateRelation.parentThreadId || candidateRelation.forkedFromId;
       if (candidateParentId === id) pending.push(String(candidate.thread?.id || ""));
     }
   }
@@ -3796,11 +3884,12 @@ async function sendAppServerThreadTree(session, ws) {
       const entry = byId.get(id);
       const thread = entry?.thread;
       if (!thread) return null;
-      const parentId = String(thread.parentThreadId || thread.forkedFromId || "");
+      const relation = relationFor(id, thread);
+      const parentId = relation.parentThreadId || relation.forkedFromId;
       return {
         id,
         parentId: relatedIds.has(parentId) ? parentId : "",
-        relation: thread.parentThreadId ? "agent" : thread.forkedFromId ? "branch" : "root",
+        relation: relation.parentThreadId ? "agent" : relation.forkedFromId ? "branch" : "root",
         current: id === session.sessionId,
         archived: Boolean(entry.archived),
         name: cleanCustomTitle(thread.name) || cleanTitle(thread.preview) || "Untitled session",
@@ -5414,6 +5503,21 @@ function rememberAgentSessionAccess(sessionId, access) {
   writeAgentSessionSettings(settings);
 }
 
+function rememberAgentSessionRelation(sessionId, relation = {}) {
+  if (!isValidSessionId(sessionId)) return;
+  const settings = readAgentSessionSettings();
+  const existing = settings[sessionId] || {};
+  settings[sessionId] = {
+    ...existing,
+    forkedFromId: isValidSessionId(relation.forkedFromId) ? String(relation.forkedFromId) : "",
+    forkedFromTitle: cleanCustomTitle(relation.forkedFromTitle),
+    parentThreadId: isValidSessionId(relation.parentThreadId) ? String(relation.parentThreadId) : "",
+    parentThreadTitle: cleanCustomTitle(relation.parentThreadTitle),
+    updatedAt: new Date().toISOString(),
+  };
+  writeAgentSessionSettings(settings);
+}
+
 function rememberAgentSessionMemoryRouting(session) {
   if (!isValidSessionId(session?.sessionId)) return;
   const settings = readAgentSessionSettings();
@@ -5442,6 +5546,10 @@ function writeAgentSessionSettings(settings) {
             memoryProjectMode: setting.memoryProjectMode === "manual" ? "manual" : "auto",
             memoryProjects: normalizeMemoryProjectNames(setting.memoryProjects),
             memoryProjectSource: normalizeMemoryProjectSource(setting.memoryProjectSource),
+            forkedFromId: isValidSessionId(setting.forkedFromId) ? String(setting.forkedFromId) : "",
+            forkedFromTitle: cleanCustomTitle(setting.forkedFromTitle),
+            parentThreadId: isValidSessionId(setting.parentThreadId) ? String(setting.parentThreadId) : "",
+            parentThreadTitle: cleanCustomTitle(setting.parentThreadTitle),
           },
         ])
         .sort(([a], [b]) => a.localeCompare(b)),
@@ -5785,8 +5893,12 @@ function nativeThreadSessionMeta(thread, { archived, customTitles, persistedByCo
     createdAt: unixSecondsToIso(thread?.createdAt) || updatedAt,
     updatedAt,
     access: normalizeAccessMode(sessionSettings[id]?.access || persisted?.access),
-    forkedFromId: String(thread?.forkedFromId || ""),
-    parentThreadId: String(thread?.parentThreadId || ""),
+    forkedFromId: String(
+      thread?.forkedFromId || sessionSettings[id]?.forkedFromId || persisted?.forkedFromId || "",
+    ),
+    parentThreadId: String(
+      thread?.parentThreadId || sessionSettings[id]?.parentThreadId || persisted?.parentThreadId || "",
+    ),
     agentNickname: String(thread?.agentNickname || ""),
     agentRole: String(thread?.agentRole || ""),
   };
@@ -6025,6 +6137,10 @@ async function readCodexSessionMeta(file, customTitles = {}, archivedSessions = 
       project: projectFromCwd(cwd),
       source: payload.source || payload.originator || "",
       cliVersion: payload.cli_version || "",
+      forkedFromId: String(payload.forked_from_id || payload.forkedFromId || ""),
+      parentThreadId: String(payload.parent_thread_id || payload.parentThreadId || ""),
+      agentNickname: String(payload.agent_nickname || payload.agentNickname || ""),
+      agentRole: String(payload.agent_role || payload.agentRole || ""),
       createdAt: payload.timestamp || parsed.timestamp || stat.birthtime.toISOString(),
       updatedAt: stat.mtime.toISOString(),
     };

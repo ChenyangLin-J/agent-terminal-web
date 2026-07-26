@@ -36,7 +36,7 @@
       }
     </style>
     <link rel="stylesheet" href="/vendor/xterm-css/xterm.css?v=20260625-5" />
-    <link rel="stylesheet" href="/styles.css?v=20260726-session-ui-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260726-inline-rename-1" />
     <link rel="stylesheet" href="/session-focus-mode.css?v=20260720-app-toolbar-1" />
     <link rel="stylesheet" href="/thinking-session.css?v=20260716-1" />
     <link rel="stylesheet" href="/agent-memories.css?v=20260723-pending-merge-1" />
@@ -144,9 +144,28 @@
       <section id="session-screen" class="session-screen hidden" aria-label="Codex session">
         <header class="session-header">
           <button id="back" type="button" title="返回会话列表">会话</button>
-          <div class="session-title">
-            <strong id="session-project">workspace</strong>
-            <span id="connection">idle</span>
+          <div id="session-title" class="session-title">
+            <button
+              id="session-title-display"
+              class="session-title-display"
+              type="button"
+              title="点击重命名当前 Session"
+              aria-label="重命名当前 Session"
+              disabled
+            >
+              <strong id="session-project">workspace</strong>
+              <span class="session-title-rename-hint" aria-hidden="true">重命名</span>
+            </button>
+            <form id="session-title-editor" class="session-title-editor hidden">
+              <input
+                id="session-title-input"
+                type="text"
+                maxlength="120"
+                autocomplete="off"
+                aria-label="Session 名称；按 Enter 保存，Esc 取消"
+              />
+            </form>
+            <span id="connection" class="session-connection">idle</span>
           </div>
           <div class="session-controls">
             <button id="search-current-session" type="button" title="搜索当前会话">搜索</button>
@@ -291,8 +310,11 @@
           ></section>
           <div id="composer-attachments" class="composer-attachments hidden" aria-label="待发送附件"></div>
           <section id="edit-fork-banner" class="edit-fork-banner hidden" aria-live="polite">
-            <span>正在编辑历史消息；发送后当前窗口会切换到新分支。</span>
-            <button id="cancel-edit-fork" type="button">取消</button>
+            <div>
+              <strong>正在编辑历史消息</strong>
+              <span>提交后将在新分支继续，原 Session 保留。</span>
+            </div>
+            <button id="cancel-edit-fork" type="button">退出编辑</button>
           </section>
           <div class="prompt-field">
             <textarea
@@ -534,7 +556,7 @@
     <script src="/agent-upload.js?v=20260725-attachment-wait-1"></script>
     <script src="/agent-voice-input.js?v=20260717-recovery-2"></script>
     <script src="/agent-realtime.js?v=20260726-1"></script>
-    <script src="/app.js?v=20260726-session-ui-1"></script>
+    <script src="/app.js?v=20260726-inline-rename-1"></script>
     <script src="/session-focus-mode.js?v=20260716-app-chrome-1"></script>
   </body>
 </html>

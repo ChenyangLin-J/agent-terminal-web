@@ -59,6 +59,10 @@ const mobileSearchCurrentSessionButton = document.querySelector("#mobile-search-
 const mobileArchiveSessionButton = document.querySelector("#mobile-archive-session");
 const mobileRestartSessionButton = document.querySelector("#mobile-restart-session");
 const mobileKillSessionButton = document.querySelector("#mobile-kill-session");
+const sessionTitle = document.querySelector("#session-title");
+const sessionTitleDisplay = document.querySelector("#session-title-display");
+const sessionTitleEditor = document.querySelector("#session-title-editor");
+const sessionTitleInput = document.querySelector("#session-title-input");
 const attachFileButton = document.querySelector("#attach-file");
 const voiceInputButton = document.querySelector("#voice-input");
 const sendPromptButton = document.querySelector("#send-prompt");
@@ -259,6 +263,7 @@ let appReadingPositionSaveTimer = null;
 let appTranscriptHasUnseenContent = false;
 let pendingAppReadingRestore = null;
 let pendingEditFork = null;
+let sessionTitleRenameSaving = false;
 let appTranscriptSource = "";
 let cachedSessionPreview = null;
 let sessionPreviewRequestSequence = 0;
@@ -362,6 +367,21 @@ restartSessionButton.addEventListener("click", restartCurrentSession);
 mobileRestartSessionButton.addEventListener("click", restartCurrentSession);
 killSessionButton.addEventListener("click", endSession);
 mobileKillSessionButton.addEventListener("click", endSession);
+sessionTitleDisplay.addEventListener("click", beginCurrentSessionRename);
+sessionTitleEditor.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void saveCurrentSessionRename();
+});
+sessionTitleInput.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  event.preventDefault();
+  cancelCurrentSessionRename();
+});
+sessionTitleInput.addEventListener("blur", () => {
+  window.setTimeout(() => {
+    if (sessionTitle.classList.contains("editing")) void saveCurrentSessionRename();
+  }, 0);
+});
 document.addEventListener("click", (event) => {
   if (sessionMenu.open && !sessionMenu.contains(event.target)) closeSessionMenu();
   if (appSessionMore.open && !appSessionMore.contains(event.target)) closeAppSessionMoreMenu();
@@ -884,21 +904,112 @@ async function renameCodexSession(session) {
   const title = window.prompt("Session title", currentTitle);
   if (title === null) return;
 
-  const response = await fetch(`/api/codex-sessions/${encodeURIComponent(session.id)}/title`, {
+  try {
+    await saveCodexSessionTitle(session.id, title);
+  } catch (error) {
+    window.alert(error.message || "Failed to save title.");
+    return;
+  }
+  await loadSavedCodexSessions();
+  await loadArchivedCodexSessions();
+}
+
+async function saveCodexSessionTitle(sessionId, title) {
+  const response = await fetch(`/api/codex-sessions/${encodeURIComponent(sessionId)}/title`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title }),
   });
   if (response.status === 401) {
     redirectToLogin();
-    return;
+    throw new Error("登录状态已失效。");
   }
   if (!response.ok) {
-    window.alert("Failed to save title.");
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error || "Failed to save title.");
+  }
+  return response.json();
+}
+
+function beginCurrentSessionRename() {
+  if (!activeSessionParams.sessionId || sessionTitleRenameSaving) {
+    setUploadStatus("Session 尚未建立完成，暂时无法重命名。", { clear: true });
     return;
   }
-  await loadSavedCodexSessions();
-  await loadArchivedCodexSessions();
+  sessionTitleInput.value = activeSessionParams.title || statusEls.project.textContent || "";
+  sessionTitle.classList.add("editing");
+  sessionTitleDisplay.classList.add("hidden");
+  sessionTitleEditor.classList.remove("hidden");
+  sessionTitleInput.focus();
+  sessionTitleInput.select();
+}
+
+function cancelCurrentSessionRename() {
+  if (sessionTitleRenameSaving) return;
+  finishCurrentSessionRename();
+  sessionTitleDisplay.focus();
+}
+
+function finishCurrentSessionRename() {
+  sessionTitle.classList.remove("editing", "saving");
+  sessionTitleEditor.classList.add("hidden");
+  sessionTitleDisplay.classList.remove("hidden");
+  sessionTitleInput.disabled = false;
+  sessionTitleInput.value = "";
+  syncSessionTitleControl();
+}
+
+async function saveCurrentSessionRename() {
+  if (!sessionTitle.classList.contains("editing") || sessionTitleRenameSaving) return;
+  const sessionId = String(activeSessionParams.sessionId || "").trim();
+  const title = sessionTitleInput.value.replace(/\s+/g, " ").trim();
+  if (!sessionId || !title) {
+    setUploadStatus(sessionId ? "Session 名称不能为空。" : "Session 尚未建立完成。", { clear: true });
+    sessionTitleInput.focus();
+    return;
+  }
+  if (title === activeSessionParams.title) {
+    finishCurrentSessionRename();
+    return;
+  }
+
+  sessionTitleRenameSaving = true;
+  sessionTitle.classList.add("saving");
+  sessionTitleInput.disabled = true;
+  try {
+    const payload = await saveCodexSessionTitle(sessionId, title);
+    const savedTitle = String(payload.customTitle || title);
+    activeSessionParams.title = savedTitle;
+    statusEls.project.textContent = savedTitle;
+    statusEls.project.title = savedTitle;
+    setDocumentTitle(savedTitle);
+    syncSessionUrl({
+      id: activeSessionId,
+      project: activeSessionParams.cwd || ".",
+      sessionId,
+      title: savedTitle,
+      transport: activeSessionParams.transport || activeTransport,
+      access: activeSessionParams.access || activeAccessMode,
+      purpose: activeSessionParams.purpose || "",
+    });
+    finishCurrentSessionRename();
+    setUploadStatus(`Session 已重命名为“${savedTitle}”。`, { clear: true });
+  } catch (error) {
+    sessionTitle.classList.remove("saving");
+    sessionTitleInput.disabled = false;
+    sessionTitleInput.focus();
+    sessionTitleInput.select();
+    setUploadStatus(error.message || "Session 重命名失败。", { clear: true });
+  } finally {
+    sessionTitleRenameSaving = false;
+    syncSessionTitleControl();
+  }
+}
+
+function syncSessionTitleControl() {
+  const disabled = !activeSessionParams.sessionId || sessionTitleRenameSaving;
+  sessionTitleDisplay.disabled = disabled;
+  sessionTitleDisplay.title = disabled ? "Session 建立后可重命名" : "点击重命名当前 Session";
 }
 
 async function archiveCodexSession(session, archived) {
@@ -3149,6 +3260,7 @@ function setConnectedState(state) {
   searchCurrentSessionButton.disabled = activeTransport !== "app-server" || !connected;
   mobileSearchCurrentSessionButton.disabled = activeTransport !== "app-server" || !connected;
   const canManageSession = ["connected", "starting", "loading"].includes(state);
+  syncSessionTitleControl();
   setArchiveSessionDisabled(!activeSessionParams.sessionId || !canManageSession);
   setRestartSessionDisabled(!activeSessionId || !activeSessionParams.sessionId || !canManageSession);
   killSessionButton.disabled = !canManageSession;
@@ -3903,6 +4015,7 @@ function renderAppTranscript({ follow = false } = {}) {
   if (latestTurnState.interrupted) fragment.append(createInterruptedTurnNotice());
 
   appServerTranscript.replaceChildren(fragment);
+  syncEditForkSourceHighlight();
   if (canRestoreInitial && storedPosition && !storedPosition.atBottom) {
     restoreAppTranscriptAnchor(storedPosition);
   } else if (liveAnchor && !shouldFollow) {
@@ -4356,12 +4469,12 @@ function createTranscriptItemActions(item) {
   actions.className = "app-transcript-item-actions";
   const edit = document.createElement("button");
   edit.type = "button";
-  edit.textContent = "编辑并分支";
-  edit.title = "修改这条 Prompt，并在新的分支中继续";
+  edit.textContent = "编辑";
+  edit.title = "编辑这条 Prompt；提交后在新分支继续";
   edit.addEventListener("click", () => beginEditAndFork(item));
   const fork = document.createElement("button");
   fork.type = "button";
-  fork.textContent = "从这里分支";
+  fork.textContent = "分支";
   fork.title = "保留这一轮问答，从本轮结束处创建新的 Session";
   fork.addEventListener("click", () => void forkFromTurn(item));
   actions.append(edit, fork);
@@ -4401,12 +4514,21 @@ function cancelEditAndFork() {
 
 function renderEditForkBanner() {
   editForkBanner.classList.toggle("hidden", !pendingEditFork);
+  composer.classList.toggle("editing-history", Boolean(pendingEditFork));
+  syncEditForkSourceHighlight();
   sendPromptButton.textContent = pendingEditFork
-    ? "编辑并分支"
+    ? "提交编辑"
     : latestTurnState.active
       ? "追加当前"
       : "新任务";
   queuePromptButton.classList.toggle("hidden", Boolean(pendingEditFork) || !latestTurnState.active);
+}
+
+function syncEditForkSourceHighlight() {
+  appServerTranscript.classList.toggle("editing-history", Boolean(pendingEditFork));
+  for (const item of appServerTranscript.querySelectorAll(".app-transcript-item")) {
+    item.classList.toggle("is-edit-source", item.dataset.transcriptId === pendingEditFork?.itemId);
+  }
 }
 
 async function forkFromTurn(item) {

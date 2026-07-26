@@ -259,6 +259,32 @@ test("subagent turn notifications do not replace the main thread active turn", a
   assert.equal(client.activeTurnId, "turn-1");
 });
 
+test("app-server error notifications do not crash clients without error listeners", async (t) => {
+  const fake = createFakeAppServer();
+  const client = new CodexAppServerClient({ spawnImpl: () => fake.child, requestTimeoutMs: 1_000 });
+  t.after(() => client.close());
+
+  await client.start();
+  await client.startThread();
+  const notifications = [];
+  client.on("notification", (message) => notifications.push(message));
+
+  const errorNotification = {
+    method: "error",
+    params: {
+      error: { message: "Reconnecting... 2/5" },
+      willRetry: true,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    },
+  };
+  fake.send(errorNotification);
+  await tick();
+
+  assert.deepEqual(notifications, [errorNotification]);
+  assert.equal(client.closed, false);
+});
+
 function createFakeAppServer({ completeTurnImmediately = false } = {}) {
   const child = new EventEmitter();
   const stdout = new PassThrough();

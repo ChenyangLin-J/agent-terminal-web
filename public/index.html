@@ -36,7 +36,7 @@
       }
     </style>
     <link rel="stylesheet" href="/vendor/xterm-css/xterm.css?v=20260625-5" />
-    <link rel="stylesheet" href="/styles.css?v=20260726-integrations-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260726-history-1" />
     <link rel="stylesheet" href="/session-focus-mode.css?v=20260720-app-toolbar-1" />
     <link rel="stylesheet" href="/thinking-session.css?v=20260716-1" />
     <link rel="stylesheet" href="/agent-memories.css?v=20260723-pending-merge-1" />
@@ -116,6 +116,15 @@
           <button id="refresh-sessions" type="button">Refresh</button>
         </div>
 
+        <section class="session-search" aria-label="Search Codex sessions">
+          <label for="session-search-input">搜索历史会话</label>
+          <div>
+            <input id="session-search-input" type="search" placeholder="搜索 Prompt、最终回答或 Session 名称" />
+            <button id="session-search-submit" type="button">搜索</button>
+          </div>
+          <div id="session-search-results" class="sessions-list hidden" aria-live="polite"></div>
+        </section>
+
         <section class="recent">
           <h2>Live Sessions</h2>
           <div id="sessions-list" class="sessions-list"></div>
@@ -140,6 +149,7 @@
             <span id="connection">idle</span>
           </div>
           <div class="session-controls">
+            <button id="search-current-session" type="button" title="搜索当前会话">搜索</button>
             <button id="disconnect" type="button" title="离开页面，Codex 保持运行">离开</button>
             <button id="archive-session" type="button" title="结束运行并将 Session 移入归档" disabled>归档</button>
             <button id="restart-session" type="button" title="重启当前 Session" disabled>重启</button>
@@ -147,6 +157,7 @@
             <details id="session-menu" class="session-menu">
               <summary aria-label="打开 Session 操作菜单" title="Session 操作">···</summary>
               <div class="session-menu-panel">
+                <button id="mobile-search-current-session" type="button">搜索</button>
                 <button id="mobile-disconnect" type="button">离开</button>
                 <button id="mobile-archive-session" type="button" disabled>归档</button>
                 <button id="mobile-restart-session" type="button" disabled>重启</button>
@@ -174,6 +185,7 @@
         </section>
 
         <section id="app-server-view" class="app-server-view hidden" aria-label="App Server conversation">
+          <button id="app-transcript-latest" class="app-transcript-latest hidden" type="button">有新内容 ↓</button>
           <div id="app-server-transcript" class="app-server-transcript" aria-live="polite"></div>
         </section>
 
@@ -212,6 +224,10 @@
           <button id="app-session-permissions" type="button" title="修改当前 Session 的权限">
             <span>权限</span>
             <strong id="app-session-permissions-value">按需确认</strong>
+          </button>
+          <button id="app-session-agents" type="button" title="查看当前 Session 的子 Agent">
+            <span>Agents</span>
+            <strong>查看</strong>
           </button>
           <button
             id="app-session-memories"
@@ -254,6 +270,10 @@
             aria-label="Commands and Skills"
           ></section>
           <div id="composer-attachments" class="composer-attachments hidden" aria-label="待发送附件"></div>
+          <section id="edit-fork-banner" class="edit-fork-banner hidden" aria-live="polite">
+            <span>正在编辑历史消息；发送后当前窗口会切换到新分支。</span>
+            <button id="cancel-edit-fork" type="button">取消</button>
+          </section>
           <div class="prompt-field">
             <textarea
               id="prompt"
@@ -326,6 +346,23 @@
       </form>
     </dialog>
 
+    <dialog id="thread-search-dialog" class="thread-search-dialog" aria-labelledby="thread-search-title">
+      <form method="dialog">
+        <header>
+          <div>
+            <span>当前 Session</span>
+            <h2 id="thread-search-title">搜索会话内容</h2>
+          </div>
+          <button id="thread-search-close" class="dialog-close" type="button" aria-label="关闭">×</button>
+        </header>
+        <div class="thread-search-field">
+          <input id="thread-search-input" type="search" placeholder="搜索你的消息和 Codex 最终回答" />
+          <button id="thread-search-submit" class="primary" type="button">搜索</button>
+        </div>
+        <div id="thread-search-results" class="thread-search-results" aria-live="polite"></div>
+      </form>
+    </dialog>
+
     <dialog id="integrations-dialog" class="integrations-dialog" aria-labelledby="integrations-title">
       <section class="integrations-shell">
         <header>
@@ -387,7 +424,7 @@
     <script src="/shared/voice-capture-widget.js?v=20260717-recovery-3"></script>
     <script src="/agent-upload.js?v=20260725-attachment-wait-1"></script>
     <script src="/agent-voice-input.js?v=20260717-recovery-2"></script>
-    <script src="/app.js?v=20260726-current-session-restart-2"></script>
+    <script src="/app.js?v=20260726-history-1"></script>
     <script src="/session-focus-mode.js?v=20260716-app-chrome-1"></script>
   </body>
 </html>

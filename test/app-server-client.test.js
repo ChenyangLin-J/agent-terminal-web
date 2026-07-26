@@ -65,26 +65,25 @@ test("app-server client interrupts only the active turn", async (t) => {
   assert.deepEqual(interrupt.params, { threadId: "thread-1", turnId: "turn-1" });
 });
 
-test("app-server client resumes metadata first and requests only recent turns", async (t) => {
+test("app-server client resumes with its initial paginated turn page", async (t) => {
   const fake = createFakeAppServer();
   const client = new CodexAppServerClient({ spawnImpl: () => fake.child, requestTimeoutMs: 1_000 });
   t.after(() => client.close());
 
   await client.start();
-  await client.resumeThread("thread-large", { excludeTurns: true });
-  const page = await client.listThreadTurns({ limit: 3 });
+  const result = await client.resumeThreadWithResult("thread-large", {
+    excludeTurns: true,
+    initialTurnsPage: { limit: 3, sortDirection: "desc", itemsView: "full" },
+  });
 
   const resume = fake.received.find((message) => message.method === "thread/resume");
-  assert.deepEqual(resume.params, { threadId: "thread-large", excludeTurns: true });
-  const recent = fake.received.find((message) => message.method === "thread/turns/list");
-  assert.deepEqual(recent.params, {
+  assert.deepEqual(resume.params, {
     threadId: "thread-large",
-    limit: 3,
-    cursor: null,
-    sortDirection: "desc",
-    itemsView: "full",
+    excludeTurns: true,
+    initialTurnsPage: { limit: 3, sortDirection: "desc", itemsView: "full" },
   });
-  assert.equal(page.data.length, 1);
+  assert.equal(result.initialTurnsPage.data.length, 1);
+  assert.equal(fake.received.some((message) => message.method === "thread/turns/list"), false);
 });
 
 test("a turn that completes in the same output chunk is not left active", async (t) => {
@@ -171,6 +170,28 @@ test("app-server client submits structured skills and reads command data", async
   assert.ok(fake.received.some((message) => message.method === "thread/compact/start"));
 });
 
+test("app-server client exposes native search, fork, and subagent thread listing", async (t) => {
+  const fake = createFakeAppServer();
+  const client = new CodexAppServerClient({ spawnImpl: () => fake.child, requestTimeoutMs: 1_000 });
+  t.after(() => client.close());
+
+  await client.start();
+  await client.startThread();
+  const [threads, search, occurrences] = await Promise.all([
+    client.listThreads({ ancestorThreadId: "thread-1" }),
+    client.searchThreads("history", { archived: false }),
+    client.searchThreadOccurrences("needle"),
+  ]);
+  const forked = await client.forkThread({ lastTurnId: "turn-1", excludeTurns: true });
+
+  assert.equal(threads.data[0].id, "child-thread");
+  assert.equal(search.data[0].thread.id, "thread-search");
+  assert.equal(occurrences.data[0].itemId, "item-match");
+  assert.equal(forked.thread.id, "thread-fork");
+  assert.equal(client.threadId, "thread-fork");
+  assert.ok(fake.received.some((message) => message.method === "thread/fork"));
+});
+
 function createFakeAppServer({ completeTurnImmediately = false } = {}) {
   const child = new EventEmitter();
   const stdout = new PassThrough();
@@ -215,7 +236,49 @@ function createFakeAppServer({ completeTurnImmediately = false } = {}) {
       return;
     }
     if (message.method === "thread/resume") {
-      send({ id: message.id, result: { thread: { id: message.params.threadId, turns: [] } } });
+      send({
+        id: message.id,
+        result: {
+          thread: { id: message.params.threadId, turns: [] },
+          initialTurnsPage: {
+            data: [{ id: "recent-turn", items: [] }],
+            nextCursor: "older",
+          },
+        },
+      });
+      return;
+    }
+    if (message.method === "thread/fork") {
+      send({ id: message.id, result: { thread: { id: "thread-fork", turns: [] } } });
+      return;
+    }
+    if (message.method === "thread/list") {
+      send({ id: message.id, result: { data: [{ id: "child-thread" }], nextCursor: null } });
+      return;
+    }
+    if (message.method === "thread/search") {
+      send({
+        id: message.id,
+        result: { data: [{ thread: { id: "thread-search" }, snippet: "history" }], nextCursor: null },
+      });
+      return;
+    }
+    if (message.method === "thread/searchOccurrences") {
+      send({
+        id: message.id,
+        result: {
+          data: [
+            {
+              turnId: "turn-match",
+              itemId: "item-match",
+              snippet: "needle",
+              snippetMatchRange: { start: 0, end: 6 },
+              turnCursor: "cursor-match",
+            },
+          ],
+          nextCursor: null,
+        },
+      });
       return;
     }
     if (message.method === "thread/turns/list") {

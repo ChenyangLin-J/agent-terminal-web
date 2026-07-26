@@ -12,7 +12,7 @@ test("follow-ups are explicitly tracked as current-turn requirements", () => {
   assert.match(server, /deliveryMode: submission\.deliveryMode/);
   assert.match(server, /submitKey: "\\t"/);
   assert.match(app, /已追加到当前任务；不会替换前面的要求。/);
-  assert.match(app, /sendPromptButton\.textContent = latestTurnState\.active \? "追加当前" : "新任务"/);
+  assert.match(app, /pendingEditFork[\s\S]*\? "编辑并分支"[\s\S]*latestTurnState\.active[\s\S]*\? "追加当前"[\s\S]*: "新任务"/);
   assert.match(page, /id="turn-ledger"/);
   assert.match(page, /id="queue-prompt"/);
 });

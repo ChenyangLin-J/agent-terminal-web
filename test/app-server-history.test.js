@@ -10,8 +10,9 @@ test("App Server resume restores structured history and keeps raw text available
     readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
   ]);
 
-  assert.match(server, /resumeThread\(launch\.sessionId, \{ \.\.\.params, excludeTurns: true \}\)/);
-  assert.match(server, /listThreadTurns\(\{ limit: APP_INITIAL_TURN_LIMIT \}\)/);
+  assert.match(server, /resumeThreadWithResult\(launch\.sessionId, \{/);
+  assert.match(server, /initialTurnsPage: \{[\s\S]*limit: APP_INITIAL_TURN_LIMIT/);
+  assert.match(server, /const recentPage = resumed\.initialTurnsPage/);
   assert.match(server, /restoreAppServerTranscript\(session, \{ \.\.\.thread, turns: recentPage\?\.data \|\| \[\] \}, \{ resumed: true \}\)/);
   assert.match(server, /for \(const turn of turns\)[\s\S]*for \(const item of Array\.isArray\(turn\?\.items\)/);
   assert.match(server, /send\(ws, "app-transcript", publicAppTranscript\(session\)\)/);
@@ -46,7 +47,11 @@ test("App Server resume restores structured history and keeps raw text available
     /if \(!USE_TMUX_SESSIONS\) \{[\s\S]*transport: APP_SERVER_TRANSPORT,[\s\S]*args: \["app-server"\]/,
   );
   assert.match(app, /appTranscriptItems = allItems\.map\(normalizeClientTranscriptItem\)/);
-  assert.match(app, /appServerView\.scrollTop = previousScrollTop \+ \(appServerView\.scrollHeight - previousScrollHeight\)/);
+  assert.match(app, /APP_READING_POSITION_STORE_KEY/);
+  assert.match(app, /function captureAppTranscriptAnchor\(\)/);
+  assert.match(app, /function restoreAppTranscriptAnchor\(position\)/);
+  assert.match(app, /pendingAppReadingRestore/);
+  assert.match(app, /id="app-transcript-latest"|appTranscriptLatestButton/);
   assert.match(page, /id="terminal-session-preview"/);
   assert.match(app, /function renderTerminalSessionPreview\(\)/);
   assert.match(styles, /\.app-transcript-user/);

@@ -2232,3 +2232,189 @@ input {
     width: 100%;
   }
 }
+
+.session-search {
+  display: grid;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.session-search > label {
+  color: #cbd5e1;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.session-search > div:first-of-type,
+.thread-search-field {
+  display: flex;
+  gap: 8px;
+}
+
+.session-search input,
+.thread-search-field input {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid #303847;
+  border-radius: 10px;
+  background: #11151d;
+  color: #e8ebf0;
+  padding: 10px 12px;
+  font: inherit;
+}
+
+.session-search-results {
+  margin-top: 4px;
+}
+
+.app-server-view {
+  position: relative;
+}
+
+.app-transcript-latest {
+  position: sticky;
+  z-index: 8;
+  top: calc(100% - 48px);
+  float: right;
+  margin: 0 14px -40px 0;
+  border-color: rgba(96, 165, 250, 0.55);
+  background: rgba(18, 30, 49, 0.96);
+  color: #bfdbfe;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.app-branch-banner,
+.edit-fork-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: 10px;
+  background: rgba(30, 58, 95, 0.2);
+  color: #bfdbfe;
+  padding: 9px 11px;
+  font-size: 0.82rem;
+}
+
+.edit-fork-banner {
+  margin-bottom: 8px;
+}
+
+.app-transcript-item header {
+  gap: 8px;
+}
+
+.app-transcript-item-actions {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.app-transcript-item-actions button,
+.app-transcript-agent-link,
+.app-branch-banner button,
+.edit-fork-banner button {
+  min-height: 28px;
+  border-radius: 7px;
+  padding: 4px 8px;
+  font-size: 0.72rem;
+}
+
+.app-transcript-item.is-search-match {
+  border-color: rgba(250, 204, 21, 0.8);
+  box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.18);
+}
+
+.thread-search-dialog {
+  width: min(680px, calc(100vw - 28px));
+  max-height: min(760px, calc(100vh - 28px));
+  border: 1px solid #303847;
+  border-radius: 14px;
+  background: #11151d;
+  color: #e8ebf0;
+  padding: 0;
+}
+
+.thread-search-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.68);
+}
+
+.thread-search-dialog form {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.thread-search-dialog header,
+.thread-search-field {
+  align-items: center;
+}
+
+.thread-search-dialog header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.thread-search-dialog header span {
+  color: #8490a3;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.thread-search-dialog h2 {
+  margin: 3px 0 0;
+  font-size: 1.08rem;
+}
+
+.thread-search-results {
+  display: grid;
+  gap: 8px;
+  overflow: auto;
+  max-height: 58vh;
+}
+
+.thread-search-result {
+  width: 100%;
+  min-height: 0;
+  border-color: #303847;
+  background: #151a24;
+  color: #d9e0ea;
+  padding: 10px 12px;
+  text-align: left;
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.thread-search-result mark {
+  border-radius: 3px;
+  background: rgba(250, 204, 21, 0.3);
+  color: #fef3c7;
+}
+
+.thread-search-message {
+  margin: 0;
+  color: #94a3b8;
+  padding: 12px 2px;
+}
+
+@media (max-width: 820px) {
+  .session-controls > #search-current-session {
+    display: none;
+  }
+
+  .app-transcript-item header {
+    flex-wrap: wrap;
+  }
+
+  .app-transcript-item-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .app-branch-banner,
+  .edit-fork-banner {
+    align-items: flex-start;
+  }
+}

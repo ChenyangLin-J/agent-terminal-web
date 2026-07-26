@@ -106,6 +106,9 @@ const MAX_FULL_REPLAY_BYTES = 32 * 1024;
 const MAX_TURN_REQUIREMENTS = 20;
 const APP_INITIAL_TURN_LIMIT = 10;
 const APP_HISTORY_PAGE_LIMIT = 10;
+const APP_SEARCH_RESULT_LIMIT = 30;
+const APP_SEARCH_HYDRATE_PAGE_LIMIT = 25;
+const APP_SEARCH_HYDRATE_MAX_TURNS = 250;
 const MAX_APP_TRANSCRIPT_ITEMS = 4_000;
 const MAX_APP_TRANSCRIPT_TEXT = 200_000;
 const MAX_APP_TRANSCRIPT_DETAIL = 40_000;
@@ -135,6 +138,8 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/terminal" });
 const sessions = new Map();
 const integrationMutationAttempts = new Map();
+let catalogAppServerClient = null;
+let catalogAppServerStart = null;
 const agentInstanceId = cryptoRandomId();
 const personalMemoryScheduler = createPersonalMemoryScheduler({
   delayMs: PERSONAL_MEMORY_SETTLE_MS,
@@ -688,6 +693,146 @@ app.get("/api/codex-sessions/archived", async (_req, res) => {
   res.json({ sessions: codexSessions });
 });
 
+app.get("/api/codex-sessions/search", async (req, res) => {
+  const searchTerm = cleanSearchTerm(req.query.q);
+  if (!searchTerm) {
+    res.json({ results: [] });
+    return;
+  }
+
+  try {
+    res.set("Cache-Control", "private, no-store");
+    res.json({ results: await searchCodexSessions(searchTerm) });
+  } catch (error) {
+    logAgentEvent("thread-search-failed", { message: cleanClientLogValue(error.message, 300) });
+    res.status(502).json({ error: "Session 搜索暂时不可用。" });
+  }
+});
+
+app.get("/api/sessions/:id/search", async (req, res) => {
+  const session = sessions.get(String(req.params.id || ""));
+  const searchTerm = cleanSearchTerm(req.query.q);
+  if (!session || session.exited || session.transport !== APP_SERVER_TRANSPORT) {
+    res.status(404).json({ error: "当前 App Server Session 已不可用。" });
+    return;
+  }
+  if (!searchTerm) {
+    res.json({ results: [], nextCursor: null });
+    return;
+  }
+
+  try {
+    let page;
+    try {
+      page = await session.appServer.searchThreadOccurrences(searchTerm, {
+        limit: APP_SEARCH_RESULT_LIMIT,
+        cursor: req.query.cursor ? String(req.query.cursor) : null,
+      });
+    } catch (error) {
+      if (!/not supported yet/i.test(error.message)) throw error;
+      page = await searchAppServerOccurrencesFallback(session, searchTerm);
+    }
+    res.set("Cache-Control", "private, no-store");
+    res.json({
+      results: Array.isArray(page?.data) ? page.data.map(publicThreadSearchOccurrence) : [],
+      nextCursor: page?.nextCursor || null,
+    });
+  } catch (error) {
+    logAgentEvent("thread-occurrence-search-failed", {
+      webSessionId: session.id,
+      codexSessionId: session.sessionId,
+      message: cleanClientLogValue(error.message, 300),
+    });
+    res.status(502).json({ error: "当前会话搜索暂时不可用。" });
+  }
+});
+
+app.post("/api/sessions/:id/search/load", async (req, res) => {
+  const session = sessions.get(String(req.params.id || ""));
+  const turnCursor = String(req.body?.turnCursor || "");
+  const itemId = String(req.body?.itemId || "");
+  if (!session || session.exited || session.transport !== APP_SERVER_TRANSPORT) {
+    res.status(404).json({ error: "当前 App Server Session 已不可用。" });
+    return;
+  }
+  if (!turnCursor || !itemId) {
+    res.status(400).json({ error: "搜索结果缺少定位信息。" });
+    return;
+  }
+
+  try {
+    const loadedTurns = await hydrateAppServerSearchResult(session, turnCursor, itemId);
+    res.set("Cache-Control", "private, no-store");
+    res.json({ ok: true, itemId, loadedTurns });
+  } catch (error) {
+    logAgentEvent("thread-occurrence-load-failed", {
+      webSessionId: session.id,
+      codexSessionId: session.sessionId,
+      message: cleanClientLogValue(error.message, 300),
+    });
+    res.status(502).json({ error: "无法加载这条搜索结果附近的历史。" });
+  }
+});
+
+app.post("/api/sessions/:id/history/locate", async (req, res) => {
+  const session = sessions.get(String(req.params.id || ""));
+  const turnId = String(req.body?.turnId || "");
+  const itemId = String(req.body?.itemId || "");
+  if (!session || session.exited || session.transport !== APP_SERVER_TRANSPORT) {
+    res.status(404).json({ error: "当前 App Server Session 已不可用。" });
+    return;
+  }
+  if (!isCodexTurnId(turnId)) {
+    res.status(400).json({ error: "阅读位置缺少有效的轮次信息。" });
+    return;
+  }
+
+  try {
+    const loadedTurns = await locateAppServerHistoryTurn(session, turnId, itemId);
+    res.set("Cache-Control", "private, no-store");
+    res.json({ ok: true, turnId, itemId, loadedTurns });
+  } catch (error) {
+    logAgentEvent("thread-reading-position-load-failed", {
+      webSessionId: session.id,
+      codexSessionId: session.sessionId,
+      turnId,
+      message: cleanClientLogValue(error.message, 300),
+    });
+    res.status(502).json({ error: "无法恢复这条阅读位置。" });
+  }
+});
+
+app.post("/api/sessions/:id/fork", async (req, res) => {
+  const session = sessions.get(String(req.params.id || ""));
+  const lastTurnId = String(req.body?.lastTurnId || "");
+  if (!session || session.exited || session.transport !== APP_SERVER_TRANSPORT) {
+    res.status(404).json({ error: "当前 App Server Session 已不可用。" });
+    return;
+  }
+  if (!isCodexTurnId(lastTurnId)) {
+    res.status(400).json({ error: "分支位置无效。" });
+    return;
+  }
+  if (session.turnState.active || session.appServer.activeTurnId) {
+    res.status(409).json({ error: "当前任务仍在处理中，完成后才能从这里分支。" });
+    return;
+  }
+
+  try {
+    const result = await forkAppServerSessionInBackground(session, lastTurnId);
+    res.set("Cache-Control", "private, no-store");
+    res.json(result);
+  } catch (error) {
+    logAgentEvent("thread-fork-failed", {
+      webSessionId: session.id,
+      codexSessionId: session.sessionId,
+      lastTurnId,
+      message: cleanClientLogValue(error.message, 300),
+    });
+    res.status(502).json({ error: `无法创建分支：${error.message}` });
+  }
+});
+
 app.get("/api/session-preview/:id", async (req, res) => {
   const id = String(req.params.id || "").trim();
   if (!isValidSessionId(id)) {
@@ -748,6 +893,13 @@ app.put("/api/codex-sessions/:id/title", async (req, res) => {
   }
 
   try {
+    const nativeNameSaved = await setPersistedThreadName(id, title).catch((error) => {
+      logAgentEvent("thread-native-name-failed", {
+        codexSessionId: id,
+        message: cleanClientLogValue(error.message, 300),
+      });
+      return false;
+    });
     const titles = await readSessionTitles();
     if (title) {
       titles[id] = title;
@@ -761,7 +913,7 @@ app.put("/api/codex-sessions/:id/title", async (req, res) => {
         persistRestorableWebSession(session);
       }
     }
-    res.json({ id, customTitle: title });
+    res.json({ id, customTitle: title, nativeNameSaved });
   } catch (error) {
     res.status(500).json({ error: `Failed to save title: ${error.message}` });
   }
@@ -1263,6 +1415,10 @@ function createAppServerSession(cwd, launch, restored = {}) {
     mode: launch.mode,
     sessionId: launch.sessionId,
     title: launch.title || "",
+    forkedFromId: String(restored.forkedFromId || ""),
+    forkedFromTitle: String(restored.forkedFromTitle || ""),
+    parentThreadId: String(restored.parentThreadId || ""),
+    parentThreadTitle: String(restored.parentThreadTitle || ""),
     memoryProjectMode: initialMemoryRouting.mode,
     memoryProjects: initialMemoryRouting.projects,
     memoryProjectSource: initialMemoryRouting.source,
@@ -1347,8 +1503,17 @@ async function initializeAppServerSession(session, launch) {
     };
     let thread;
     if (launch.sessionId) {
-      thread = await session.appServer.resumeThread(launch.sessionId, { ...params, excludeTurns: true });
-      const recentPage = await session.appServer.listThreadTurns({ limit: APP_INITIAL_TURN_LIMIT });
+      const resumed = await session.appServer.resumeThreadWithResult(launch.sessionId, {
+        ...params,
+        excludeTurns: true,
+        initialTurnsPage: {
+          limit: APP_INITIAL_TURN_LIMIT,
+          sortDirection: "desc",
+          itemsView: "full",
+        },
+      });
+      thread = resumed.thread;
+      const recentPage = resumed.initialTurnsPage || { data: [], nextCursor: null };
       restoreAppServerTranscript(session, { ...thread, turns: recentPage?.data || [] }, { resumed: true });
       session.restoredHistoryCursor = recentPage?.nextCursor || null;
       session.restoredHistoryHasMore = Boolean(recentPage?.nextCursor);
@@ -1364,6 +1529,18 @@ async function initializeAppServerSession(session, launch) {
       restoreAppServerTranscript(session, thread, { resumed: false });
     }
     session.sessionId = thread.id;
+    session.forkedFromId = String(thread.forkedFromId || session.forkedFromId || "");
+    session.parentThreadId = String(thread.parentThreadId || session.parentThreadId || "");
+    if (session.parentThreadId) {
+      const parent = await session.appServer
+        .readThread({ threadId: session.parentThreadId, includeTurns: false })
+        .catch(() => null);
+      session.parentThreadTitle =
+        cleanCustomTitle(parent?.name) ||
+        cleanTitle(parent?.preview) ||
+        session.parentThreadTitle ||
+        "主 Agent";
+    }
     rememberAgentSessionAccess(session.sessionId, session.access);
     rememberAgentSessionMemoryRouting(session);
     session.ready = true;
@@ -1737,6 +1914,70 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
     if (message.type === "load-app-history" && session.transport === APP_SERVER_TRANSPORT) {
       void loadEarlierAppServerHistory(session).catch((error) => {
         send(ws, "error", { message: `Earlier history was not loaded: ${error.message}` });
+      });
+      return;
+    }
+
+    if (message.type === "edit-and-fork" && session.transport === APP_SERVER_TRANSPORT) {
+      if (session.turnState.active || session.appServer.activeTurnId) {
+        send(ws, "error", { message: "当前任务仍在处理，完成后才能编辑历史消息并分支。", preservePrompt: true });
+        return;
+      }
+      const editedText = String(message.data || "").trim();
+      const beforeTurnId = String(message.turnId || "");
+      const sourceItem = session.appTranscript.find(
+        (item) => item.type === "user" && item.turnId === beforeTurnId && item.id === String(message.itemId || ""),
+      );
+      if (!sourceItem || !isCodexTurnId(beforeTurnId)) {
+        send(ws, "error", { message: "找不到要编辑的历史消息，请刷新后重试。", preservePrompt: true });
+        return;
+      }
+      let attachments;
+      try {
+        attachments = normalizeEditForkAttachments(message.attachments, sourceItem);
+      } catch (error) {
+        send(ws, "error", { message: error.message, preservePrompt: true });
+        return;
+      }
+      if (!editedText && !attachments.length) {
+        send(ws, "error", { message: "编辑后的消息不能为空。", preservePrompt: true });
+        return;
+      }
+
+      rememberNotificationTarget(session, message.notificationApp, message.notificationDeviceId);
+      renewSessionRetention(session);
+      rememberSubmittedAttachments(session, attachments);
+      void editAndForkAppServerSession(session, {
+        beforeTurnId,
+        editedText,
+        attachments,
+        sourceTitle: session.title,
+      })
+        .then((result) => {
+          send(ws, "control-ack", {
+            kind: "edit-and-fork",
+            receivedAt: Date.now(),
+            ...result,
+            turnState: publicTurnState(session.turnState),
+          });
+        })
+        .catch((error) => {
+          send(ws, "error", {
+            message: error.branchCreated
+              ? `编辑分支已在 Codex 中创建，但当前窗口切换或消息提交失败：${error.message}`
+              : `编辑分支没有创建：${error.message}`,
+            preservePrompt: true,
+            branchCreated: Boolean(error.branchCreated),
+            sessionId: error.branchCreated ? String(error.forkedThreadId || session.sessionId || "") : "",
+            title: error.branchCreated ? session.title : "",
+          });
+        });
+      return;
+    }
+
+    if (message.type === "subagents-list" && session.transport === APP_SERVER_TRANSPORT) {
+      void sendAppServerSubagents(session, ws).catch((error) => {
+        send(ws, "error", { message: `子 Agent 列表暂时不可用：${error.message}` });
       });
       return;
     }
@@ -2234,6 +2475,42 @@ function normalizeSubmittedAttachments(value) {
   });
 }
 
+function normalizeEditForkAttachments(value, sourceItem) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new Error("附件信息无效，请重新上传。");
+  if (value.length > MAX_UPLOAD_FILES) throw new Error(`最多同时发送 ${MAX_UPLOAD_FILES} 个附件。`);
+
+  const historicalByPath = new Map(
+    normalizeTranscriptAttachments(sourceItem?.attachments).map((attachment) => [attachment.path, attachment]),
+  );
+  return value.map((attachment) => {
+    const submittedPath = String(attachment?.path || "").trim();
+    const historical = historicalByPath.get(submittedPath);
+    if (!historical) return normalizeSubmittedAttachments([attachment])[0];
+
+    let filePath;
+    let stat;
+    try {
+      filePath = fsSync.realpathSync(historical.path);
+      stat = fsSync.statSync(filePath);
+    } catch {
+      throw new Error(`历史附件“${historical.originalName}”已经不存在，请重新上传。`);
+    }
+    if (!stat.isFile() || stat.size > MAX_UPLOAD_FILE_BYTES) {
+      throw new Error(`历史附件“${historical.originalName}”无法继续使用，请重新上传。`);
+    }
+    return {
+      path: filePath,
+      originalName: historical.originalName,
+      storedName: path.basename(filePath),
+      size: stat.size,
+      mime: /^(?:audio|image)\/\*$/.test(historical.mime)
+        ? historical.mime
+        : cleanAttachmentMime(historical.mime),
+    };
+  });
+}
+
 function cleanAttachmentMime(value) {
   const mime = String(value || "application/octet-stream")
     .replace(/[\u0000-\u001f\u007f]/g, "")
@@ -2692,12 +2969,23 @@ function appServerPromptInput(text, skills, attachments = []) {
   if (String(text || "").trim()) input.push({ type: "text", text });
   for (const attachment of attachments) {
     input.push(
-      attachment.mime.startsWith("image/")
+      isAudioAttachment(attachment)
+        ? { type: "localAudio", path: attachment.path }
+        : attachment.mime.startsWith("image/")
         ? { type: "localImage", path: attachment.path }
         : { type: "mention", name: attachment.originalName, path: attachment.path },
     );
   }
   return input;
+}
+
+function isAudioAttachment(attachment) {
+  const mime = String(attachment?.mime || "");
+  if (mime.startsWith("audio/")) return true;
+  if (mime && mime !== "application/octet-stream") return false;
+  return /\.(?:aac|aif|aiff|caf|flac|m4a|mp3|oga|ogg|opus|wav|weba|webm)$/i.test(
+    String(attachment?.originalName || attachment?.path || ""),
+  );
 }
 
 function appServerTurnAccess(session) {
@@ -2942,7 +3230,7 @@ async function loadEarlierAppServerHistory(session) {
     });
     const turns = Array.isArray(page?.data) ? page.data : [];
     prependAppServerTranscript(session, turns);
-    session.restoredTurnCount += turns.length;
+    session.restoredTurnCount = new Set(session.appTranscript.map((item) => item.turnId).filter(Boolean)).size;
     session.restoredHistoryCursor = page?.nextCursor || null;
     session.restoredHistoryHasMore = Boolean(page?.nextCursor);
     logAgentEvent("app-server-earlier-history", {
@@ -2958,6 +3246,64 @@ async function loadEarlierAppServerHistory(session) {
   }
 }
 
+async function locateAppServerHistoryTurn(session, turnId, itemId = "") {
+  if (
+    session.appTranscript.some(
+      (item) => item.turnId === turnId && (!itemId || item.id === itemId),
+    )
+  ) {
+    return 0;
+  }
+
+  let loadedTurns = 0;
+  while (session.restoredHistoryCursor && loadedTurns < APP_SEARCH_HYDRATE_MAX_TURNS) {
+    const page = await session.appServer.listThreadTurns({
+      limit: APP_SEARCH_HYDRATE_PAGE_LIMIT,
+      cursor: session.restoredHistoryCursor,
+      sortDirection: "desc",
+      itemsView: "full",
+    });
+    const turns = Array.isArray(page?.data) ? page.data : [];
+    prependAppServerTranscript(session, turns);
+    loadedTurns += turns.length;
+    session.restoredHistoryCursor = page?.nextCursor || null;
+    session.restoredHistoryHasMore = Boolean(page?.nextCursor);
+    session.restoredTurnCount = new Set(session.appTranscript.map((item) => item.turnId).filter(Boolean)).size;
+    if (turns.some((turn) => String(turn?.id || "") === turnId) || !turns.length) break;
+  }
+  broadcast(session, "app-transcript", { ...publicAppTranscript(session), prepended: true, readingPositionItemId: itemId });
+  return loadedTurns;
+}
+
+async function hydrateAppServerSearchResult(session, turnCursor, itemId) {
+  if (session.appTranscript.some((item) => item.id === itemId)) return 0;
+
+  const turns = [];
+  let cursor = turnCursor;
+  let pageCount = 0;
+  const existingTurnIds = new Set(session.appTranscript.map((item) => item.turnId).filter(Boolean));
+
+  while (cursor && turns.length < APP_SEARCH_HYDRATE_MAX_TURNS) {
+    const page = await session.appServer.listThreadTurns({
+      limit: APP_SEARCH_HYDRATE_PAGE_LIMIT,
+      cursor,
+      sortDirection: "asc",
+      itemsView: "full",
+    });
+    const pageTurns = Array.isArray(page?.data) ? page.data : [];
+    turns.push(...pageTurns);
+    if (pageTurns.some((turn) => existingTurnIds.has(String(turn?.id || "")))) break;
+    cursor = page?.nextCursor || null;
+    pageCount += 1;
+    if (!pageTurns.length || pageCount >= Math.ceil(APP_SEARCH_HYDRATE_MAX_TURNS / APP_SEARCH_HYDRATE_PAGE_LIMIT)) break;
+  }
+
+  mergeAppServerTranscriptTurns(session, turns, { historical: true });
+  session.restoredTurnCount = new Set(session.appTranscript.map((item) => item.turnId).filter(Boolean)).size;
+  broadcast(session, "app-transcript", { ...publicAppTranscript(session), searchHydratedItemId: itemId });
+  return turns.length;
+}
+
 function restoreAppServerTranscript(session, thread, { resumed = false } = {}) {
   const turns = Array.isArray(thread?.turns) ? [...thread.turns] : [];
   turns.sort((a, b) => (a?.startedAt ?? 0) - (b?.startedAt ?? 0));
@@ -2970,15 +3316,220 @@ function restoreAppServerTranscript(session, thread, { resumed = false } = {}) {
 }
 
 function prependAppServerTranscript(session, turns) {
-  const sortedTurns = [...turns].sort((a, b) => (a?.startedAt ?? 0) - (b?.startedAt ?? 0));
-  const existingIds = new Set(session.appTranscript.map((item) => item.id));
-  const earlierItems = appTranscriptItemsFromTurns(session, sortedTurns, { historical: true }).filter(
-    (item) => !existingIds.has(item.id),
-  );
-  session.appTranscript = [...earlierItems.map(normalizeAppTranscriptItem), ...session.appTranscript];
+  mergeAppServerTranscriptTurns(session, turns, { historical: true });
+}
+
+function mergeAppServerTranscriptTurns(session, turns, { historical = false } = {}) {
+  const incoming = appTranscriptItemsFromTurns(session, turns, { historical }).map(normalizeAppTranscriptItem);
+  const byId = new Map();
+  let sequence = 0;
+  for (const item of [...session.appTranscript, ...incoming]) {
+    const existing = byId.get(item.id);
+    byId.set(item.id, {
+      item: existing ? normalizeAppTranscriptItem({ ...existing.item, ...item }) : item,
+      sequence: existing?.sequence ?? sequence++,
+    });
+  }
+  session.appTranscript = [...byId.values()]
+    .sort((left, right) => {
+      const leftTime = left.item.turnStartedAt ?? Number.MAX_SAFE_INTEGER;
+      const rightTime = right.item.turnStartedAt ?? Number.MAX_SAFE_INTEGER;
+      return leftTime === rightTime ? left.sequence - right.sequence : leftTime - rightTime;
+    })
+    .map((entry) => entry.item);
   if (session.appTranscript.length > MAX_APP_TRANSCRIPT_ITEMS) {
     session.appTranscript.splice(0, session.appTranscript.length - MAX_APP_TRANSCRIPT_ITEMS);
   }
+}
+
+async function forkAppServerSessionInBackground(session, lastTurnId) {
+  const sourceThreadId = session.sessionId;
+  const title = branchThreadTitle(session.title, "分支");
+  const result = await withStandaloneAppServer(async (client) => {
+    const forked = await client.forkThread(
+      {
+        threadId: sourceThreadId,
+        lastTurnId,
+        cwd: session.cwd,
+        approvalPolicy: session.access === FULL_ACCESS_MODE ? "never" : "on-request",
+        sandbox: session.access === FULL_ACCESS_MODE ? "danger-full-access" : "workspace-write",
+        developerInstructions: AGENT_WEB_DEVELOPER_INSTRUCTIONS,
+        excludeTurns: true,
+        deferGoalContinuation: true,
+      },
+      { adopt: false },
+    );
+    if (forked?.thread?.id && title) {
+      await client.setThreadName(title, forked.thread.id).catch((error) => {
+        logAgentEvent("thread-native-name-failed", {
+          codexSessionId: forked.thread.id,
+          message: cleanClientLogValue(error.message, 300),
+        });
+      });
+    }
+    return forked;
+  });
+  const threadId = String(result?.thread?.id || "");
+  if (!threadId) throw new Error("Codex 没有返回新分支 ID。");
+  await rememberSessionTitle(threadId, title).catch((error) => {
+    logAgentEvent("thread-sidecar-name-failed", {
+      codexSessionId: threadId,
+      message: cleanClientLogValue(error.message, 300),
+    });
+  });
+  rememberAgentSessionAccess(threadId, session.access);
+  logAgentEvent("thread-fork-created", {
+    webSessionId: session.id,
+    sourceThreadId,
+    forkedThreadId: threadId,
+    lastTurnId,
+    mode: "new-web-session",
+  });
+  return {
+    threadId,
+    title,
+    project: session.project,
+    transport: APP_SERVER_TRANSPORT,
+    access: session.access,
+    forkedFromId: sourceThreadId,
+  };
+}
+
+async function editAndForkAppServerSession(session, { beforeTurnId, editedText, attachments, sourceTitle }) {
+  const sourceThreadId = session.sessionId;
+  const title = branchThreadTitle(sourceTitle, "编辑分支");
+  let forkedThreadId = "";
+  try {
+    const result = await session.appServer.forkThread({
+      threadId: sourceThreadId,
+      beforeTurnId,
+      cwd: session.cwd,
+      approvalPolicy: session.access === FULL_ACCESS_MODE ? "never" : "on-request",
+      sandbox: session.access === FULL_ACCESS_MODE ? "danger-full-access" : "workspace-write",
+      developerInstructions: AGENT_WEB_DEVELOPER_INSTRUCTIONS,
+      excludeTurns: true,
+      deferGoalContinuation: true,
+    });
+    const thread = result?.thread;
+    if (!thread?.id) throw new Error("Codex 没有返回编辑分支 ID。");
+    forkedThreadId = thread.id;
+    session.sessionId = thread.id;
+    session.forkedFromId = sourceThreadId;
+    session.forkedFromTitle = sourceTitle || "";
+    session.parentThreadId = String(thread.parentThreadId || "");
+    if (!session.parentThreadId) session.parentThreadTitle = "";
+    session.title = title;
+    session.turnState = restoreTurnState();
+    session.pendingStartupPrompts = [];
+    session.personalMemoryCitationsByTurn.clear();
+    session.lastAssistantMessage = "";
+    persistRestorableWebSession(session);
+
+    await session.appServer.setThreadName(title, thread.id).catch((error) => {
+      logAgentEvent("thread-native-name-failed", {
+        codexSessionId: thread.id,
+        message: cleanClientLogValue(error.message, 300),
+      });
+    });
+    const recentPage = await session.appServer
+      .listThreadTurns({ limit: APP_INITIAL_TURN_LIMIT })
+      .catch((error) => {
+        logAgentEvent("thread-fork-history-failed", {
+          codexSessionId: thread.id,
+          message: cleanClientLogValue(error.message, 300),
+        });
+        return { data: Array.isArray(thread.turns) ? thread.turns : [], nextCursor: null };
+      });
+    restoreAppServerTranscript(session, { ...thread, turns: recentPage?.data || [] }, { resumed: true });
+    session.restoredHistoryCursor = recentPage?.nextCursor || null;
+    session.restoredHistoryHasMore = Boolean(recentPage?.nextCursor);
+    session.restoredTurnCount = Array.isArray(recentPage?.data) ? recentPage.data.length : 0;
+    await rememberSessionTitle(session.sessionId, title).catch((error) => {
+      logAgentEvent("thread-sidecar-name-failed", {
+        codexSessionId: thread.id,
+        message: cleanClientLogValue(error.message, 300),
+      });
+    });
+    rememberAgentSessionAccess(session.sessionId, session.access);
+    rememberAgentSessionMemoryRouting(session);
+
+    broadcast(session, "app-transcript", publicAppTranscript(session));
+    broadcast(session, "status", publicSession(session));
+
+    const requirementText = editedText || attachmentRequirementText(attachments);
+    const skillNames = requestedAppSkillNames(editedText);
+    const submission = await submitAppServerPrompt(
+      session,
+      editedText,
+      "auto",
+      skillNames,
+      attachments,
+      requirementText,
+    );
+    session.lastActivityAt = new Date().toISOString();
+    persistRestorableWebSession(session);
+    broadcast(session, "status", publicSession(session));
+    logAgentEvent("thread-fork-created", {
+      webSessionId: session.id,
+      sourceThreadId,
+      forkedThreadId: session.sessionId,
+      beforeTurnId,
+      mode: "edit-current-web-session",
+    });
+    return {
+      sourceThreadId,
+      sessionId: session.sessionId,
+      title,
+      deliveryMode: submission.deliveryMode,
+      skills: submission.skills,
+    };
+  } catch (error) {
+    if (forkedThreadId && error && typeof error === "object") {
+      error.branchCreated = true;
+      error.forkedThreadId = forkedThreadId;
+    }
+    throw error;
+  }
+}
+
+async function sendAppServerSubagents(session, ws) {
+  const response = await session.appServer.listThreads({
+    ancestorThreadId: session.sessionId,
+    limit: APP_SEARCH_RESULT_LIMIT,
+    sortKey: "updated_at",
+    sortDirection: "desc",
+    useStateDbOnly: true,
+  });
+  const agents = (Array.isArray(response?.data) ? response.data : []).map((thread) => ({
+    id: String(thread?.id || ""),
+    name: cleanCustomTitle(thread?.name) || cleanTitle(thread?.preview) || "子 Agent",
+    nickname: String(thread?.agentNickname || ""),
+    role: String(thread?.agentRole || ""),
+    status: threadStatusLabel(thread?.status),
+    updatedAt: unixSecondsToIso(thread?.updatedAt),
+    project: projectFromCwd(String(thread?.cwd || session.cwd)),
+  }));
+  send(ws, "app-command-result", {
+    kind: "subagents",
+    title: "Subagents",
+    agents,
+    note: agents.length
+      ? "子 Agent 继承当前权限；打开后可以查看它的完整线程。"
+      : "还没有子 Agent。需要时在 Prompt 中明确要求 Codex 并行委派。",
+  });
+}
+
+function branchThreadTitle(sourceTitle, suffix) {
+  const base = cleanCustomTitle(sourceTitle) || "Codex Session";
+  return cleanCustomTitle(`${base} · ${suffix}`);
+}
+
+async function rememberSessionTitle(threadId, title) {
+  const cleaned = cleanCustomTitle(title);
+  if (!threadId || !cleaned) return;
+  const titles = await readSessionTitles();
+  titles[threadId] = cleaned;
+  await writeSessionTitles(titles);
 }
 
 function appTranscriptItemsFromTurns(session, turns, { historical = false } = {}) {
@@ -3058,6 +3609,9 @@ function normalizeAppTranscriptItem(item) {
     turnStartedAt: Number.isFinite(item.turnStartedAt) ? item.turnStartedAt : null,
     turnStatus: String(item.turnStatus || ""),
     historical: Boolean(item.historical),
+    agentThreadId: String(item.agentThreadId || ""),
+    agentPath: String(item.agentPath || ""),
+    activityKind: String(item.activityKind || ""),
     attachments: normalizeTranscriptAttachments(item.attachments),
     memoryCitation: normalizeMemoryCitation(item.memoryCitation),
   };
@@ -3160,6 +3714,9 @@ function appTranscriptFromThreadItem(session, item, context = {}) {
       type: "tool",
       label: "协作",
       text: `${item.agentPath || "子 Agent"} · ${item.kind || "activity"}`,
+      agentThreadId: item.agentThreadId || "",
+      agentPath: item.agentPath || "",
+      activityKind: item.kind || "",
     };
   }
   if (item.type === "webSearch") {
@@ -3202,7 +3759,7 @@ function appServerUserMessageContent(session, content) {
     if (typeof entry === "string") text.push(entry);
     else if (entry?.type === "text" && entry.text) text.push(entry.text);
     else if (entry?.type === "image" && entry.url) text.push(`图片：${entry.url}`);
-    else if (["localImage", "mention"].includes(entry?.type) && entry.path) {
+    else if (["localImage", "localAudio", "mention"].includes(entry?.type) && entry.path) {
       attachments.push(appServerMessageAttachment(session, entry));
     } else if (entry?.type === "skill") text.push(`Skill：${entry.name || entry.path || ""}`);
   }
@@ -3222,7 +3779,12 @@ function appServerMessageAttachment(session, entry) {
   return {
     path: String(entry.path),
     originalName: cleanUploadOriginalName(entry.name || path.basename(entry.path)),
-    mime: entry.type === "localImage" ? "image/*" : "application/octet-stream",
+    mime:
+      entry.type === "localImage"
+        ? "image/*"
+        : entry.type === "localAudio"
+          ? "audio/*"
+          : "application/octet-stream",
     size,
   };
 }
@@ -3894,6 +4456,10 @@ function publicSession(session) {
     ready: session.ready !== false,
     mode: session.mode,
     sessionId: session.sessionId,
+    forkedFromId: session.forkedFromId || "",
+    forkedFromTitle: session.forkedFromTitle || "",
+    parentThreadId: session.parentThreadId || "",
+    parentThreadTitle: session.parentThreadTitle || "",
     memoryProjectMode: session.memoryProjectMode === "manual" ? "manual" : "auto",
     memoryProjects: normalizeMemoryProjectNames(session.memoryProjects),
     memoryProjectSource: normalizeMemoryProjectSource(session.memoryProjectSource),
@@ -3915,6 +4481,10 @@ function publicSession(session) {
       interruptTurn: session.transport === APP_SERVER_TRANSPORT,
       appCommands: session.transport === APP_SERVER_TRANSPORT,
       skills: session.transport === APP_SERVER_TRANSPORT,
+      threadSearch: session.transport === APP_SERVER_TRANSPORT,
+      threadFork: session.transport === APP_SERVER_TRANSPORT,
+      subagents: session.transport === APP_SERVER_TRANSPORT,
+      audioInput: session.transport === APP_SERVER_TRANSPORT,
     },
     turnState: publicTurnState(session.turnState),
   };
@@ -4035,6 +4605,10 @@ function persistWebSession(session) {
     memoryProjectSource: normalizeMemoryProjectSource(session.memoryProjectSource),
     mode: session.mode,
     sessionId: session.sessionId,
+    forkedFromId: String(session.forkedFromId || ""),
+    forkedFromTitle: String(session.forkedFromTitle || ""),
+    parentThreadId: String(session.parentThreadId || ""),
+    parentThreadTitle: String(session.parentThreadTitle || ""),
     title: session.title,
     notificationApp: session.notificationApp,
     notificationDeviceId: session.notificationDeviceId,
@@ -4334,6 +4908,45 @@ async function findCodexSessionFile(id) {
 }
 
 async function listCodexSessions({ archived }) {
+  if (nativeThreadCatalogEnabled()) {
+    try {
+      return await listCodexSessionsFromAppServer({ archived });
+    } catch (error) {
+      logAgentEvent("native-thread-list-fallback", {
+        archived,
+        message: cleanClientLogValue(error.message, 300),
+      });
+    }
+  }
+  return listCodexSessionsFromFiles({ archived });
+}
+
+async function listCodexSessionsFromAppServer({ archived }) {
+  const [page, customTitles, persistedRecords] = await Promise.all([
+    withStandaloneAppServer((client) =>
+      client.listThreads({
+        archived: Boolean(archived),
+        limit: 40,
+        sortKey: "updated_at",
+        sortDirection: "desc",
+      }),
+    ),
+    readSessionTitles(),
+    Promise.resolve(readPersistedWebSessions()),
+  ]);
+  const persistedByCodexId = latestPersistedSessionsByCodexId(persistedRecords);
+  const sessionSettings = readAgentSessionSettings();
+  return (Array.isArray(page?.data) ? page.data : [])
+    .map((thread) => nativeThreadSessionMeta(thread, {
+      archived: Boolean(archived),
+      customTitles,
+      persistedByCodexId,
+      sessionSettings,
+    }))
+    .filter(Boolean);
+}
+
+async function listCodexSessionsFromFiles({ archived }) {
   const activeFiles = (await walkFiles(CODEX_SESSIONS_ROOT)).map((file) => ({ file, fileArchived: false }));
   const archivedFiles = (await walkFiles(CODEX_ARCHIVED_SESSIONS_ROOT)).map((file) => ({
     file,
@@ -4360,6 +4973,222 @@ async function listCodexSessions({ archived }) {
   return items
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
     .slice(0, 40);
+}
+
+async function searchCodexSessions(searchTerm) {
+  if (!nativeThreadCatalogEnabled()) {
+    const [active, archived] = await Promise.all([
+      listCodexSessionsFromFiles({ archived: false }),
+      listCodexSessionsFromFiles({ archived: true }),
+    ]);
+    const query = searchTerm.toLocaleLowerCase();
+    return [...active, ...archived]
+      .filter((session) => `${session.title}\n${session.project}`.toLocaleLowerCase().includes(query))
+      .slice(0, APP_SEARCH_RESULT_LIMIT)
+      .map((session) => ({ session, snippet: session.title }));
+  }
+
+  const [pages, customTitles] = await Promise.all([
+    withStandaloneAppServer(async (client) => {
+      const active = await client.searchThreads(searchTerm, {
+        archived: false,
+        limit: APP_SEARCH_RESULT_LIMIT,
+        sortKey: "updated_at",
+        sortDirection: "desc",
+      });
+      const archived = await client.searchThreads(searchTerm, {
+        archived: true,
+        limit: APP_SEARCH_RESULT_LIMIT,
+        sortKey: "updated_at",
+        sortDirection: "desc",
+      });
+      return [active, archived];
+    }),
+    readSessionTitles(),
+  ]);
+  const persistedByCodexId = latestPersistedSessionsByCodexId(readPersistedWebSessions());
+  const sessionSettings = readAgentSessionSettings();
+  return pages
+    .flatMap((page, pageIndex) =>
+      (Array.isArray(page?.data) ? page.data : []).map((result) => ({
+        session: nativeThreadSessionMeta(result.thread, {
+          archived: pageIndex === 1,
+          customTitles,
+          persistedByCodexId,
+          sessionSettings,
+        }),
+        snippet: String(result?.snippet || ""),
+      })),
+    )
+    .filter((result) => result.session)
+    .sort((left, right) => new Date(right.session.updatedAt).getTime() - new Date(left.session.updatedAt).getTime())
+    .slice(0, APP_SEARCH_RESULT_LIMIT);
+}
+
+function nativeThreadSessionMeta(thread, { archived, customTitles, persistedByCodexId, sessionSettings }) {
+  const id = String(thread?.id || "");
+  if (!isValidSessionId(id)) return null;
+  const persisted = persistedByCodexId.get(id) || null;
+  const name = cleanCustomTitle(thread?.name);
+  const sidecarTitle = cleanCustomTitle(customTitles[id]);
+  const generatedTitle = cleanTitle(thread?.preview) || "Untitled session";
+  const updatedAt = unixSecondsToIso(thread?.updatedAt) || unixSecondsToIso(thread?.createdAt) || new Date(0).toISOString();
+  return {
+    id,
+    title: name || sidecarTitle || generatedTitle,
+    originalTitle: generatedTitle,
+    customTitle: name || sidecarTitle,
+    archived,
+    archivedAt: archived ? updatedAt : "",
+    cwd: String(thread?.cwd || ""),
+    project: projectFromCwd(String(thread?.cwd || "")),
+    source: thread?.source || "",
+    cliVersion: String(thread?.cliVersion || ""),
+    createdAt: unixSecondsToIso(thread?.createdAt) || updatedAt,
+    updatedAt,
+    access: normalizeAccessMode(sessionSettings[id]?.access || persisted?.access),
+    forkedFromId: String(thread?.forkedFromId || ""),
+    parentThreadId: String(thread?.parentThreadId || ""),
+    agentNickname: String(thread?.agentNickname || ""),
+    agentRole: String(thread?.agentRole || ""),
+  };
+}
+
+function nativeThreadCatalogEnabled() {
+  if (process.env.AGENT_NATIVE_THREAD_CATALOG === "0") return false;
+  if (process.env.AGENT_NATIVE_THREAD_CATALOG === "1") return true;
+  return path.resolve(CODEX_HOME) === path.resolve(path.join(process.env.HOME, ".codex"));
+}
+
+async function withStandaloneAppServer(run) {
+  const client = await sharedCatalogAppServer();
+  return run(client);
+}
+
+async function sharedCatalogAppServer() {
+  if (catalogAppServerClient?.started && !catalogAppServerClient.closed) return catalogAppServerClient;
+  if (catalogAppServerStart) return catalogAppServerStart;
+
+  catalogAppServerStart = (async () => {
+    const client = new CodexAppServerClient({
+      cwd: WORKSPACE_ROOT,
+      command: process.env.CODEX_APP_SERVER_COMMAND || "codex",
+      env: codexEnvironmentForWeb(`catalog-${cryptoRandomId()}`),
+    });
+    client.on("exit", () => {
+      if (catalogAppServerClient === client) catalogAppServerClient = null;
+    });
+    await client.start();
+    catalogAppServerClient = client;
+    return client;
+  })();
+  try {
+    return await catalogAppServerStart;
+  } finally {
+    catalogAppServerStart = null;
+  }
+}
+
+async function setPersistedThreadName(threadId, title) {
+  const live = [...sessions.values()].find(
+    (session) =>
+      !session.exited &&
+      session.ready &&
+      session.transport === APP_SERVER_TRANSPORT &&
+      session.sessionId === threadId,
+  );
+  if (live) {
+    await live.appServer.setThreadName(title, threadId);
+    return true;
+  }
+  if (!nativeThreadCatalogEnabled()) return false;
+  await withStandaloneAppServer((client) => client.setThreadName(title, threadId));
+  return true;
+}
+
+function publicThreadSearchOccurrence(occurrence) {
+  return {
+    turnId: String(occurrence?.turnId || ""),
+    itemId: String(occurrence?.itemId || ""),
+    snippet: String(occurrence?.snippet || "").slice(0, 4_000),
+    snippetMatchRange: {
+      start: Math.max(0, Number(occurrence?.snippetMatchRange?.start) || 0),
+      end: Math.max(0, Number(occurrence?.snippetMatchRange?.end) || 0),
+    },
+    turnCursor: String(occurrence?.turnCursor || ""),
+  };
+}
+
+async function searchAppServerOccurrencesFallback(session, searchTerm) {
+  const query = searchTerm.toLocaleLowerCase();
+  const occurrences = [];
+  let cursor = null;
+  let scannedTurns = 0;
+
+  while (scannedTurns < APP_SEARCH_HYDRATE_MAX_TURNS * 2) {
+    const page = await session.appServer.listThreadTurns({
+      limit: 50,
+      cursor,
+      sortDirection: "desc",
+      itemsView: "full",
+    });
+    const turns = Array.isArray(page?.data) ? page.data : [];
+    scannedTurns += turns.length;
+    for (const turn of turns) {
+      for (const item of Array.isArray(turn?.items) ? turn.items : []) {
+        let text = "";
+        if (item?.type === "userMessage") text = appServerUserMessageContent(session, item.content).text;
+        if (item?.type === "agentMessage" && item.phase === "final_answer") text = String(item.text || "");
+        const matchIndex = text.toLocaleLowerCase().indexOf(query);
+        if (matchIndex < 0) continue;
+        const snippetStart = Math.max(0, matchIndex - 80);
+        const snippetEnd = Math.min(text.length, matchIndex + searchTerm.length + 140);
+        occurrences.push({
+          turnId: String(turn?.id || ""),
+          itemId: String(item?.id || ""),
+          snippet: `${snippetStart ? "…" : ""}${text.slice(snippetStart, snippetEnd)}${snippetEnd < text.length ? "…" : ""}`,
+          snippetMatchRange: {
+            start: matchIndex - snippetStart + (snippetStart ? 1 : 0),
+            end: matchIndex - snippetStart + (snippetStart ? 1 : 0) + searchTerm.length,
+          },
+          turnCursor: "",
+          startedAt: Number(turn?.startedAt || 0),
+        });
+      }
+    }
+    cursor = page?.nextCursor || null;
+    if (!cursor || !turns.length) break;
+  }
+
+  occurrences.sort((left, right) => left.startedAt - right.startedAt);
+  return {
+    data: occurrences.slice(0, APP_SEARCH_RESULT_LIMIT),
+    nextCursor: null,
+  };
+}
+
+function cleanSearchTerm(value) {
+  return String(value || "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 300);
+}
+
+function unixSecondsToIso(value) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) return "";
+  return new Date(seconds * 1_000).toISOString();
+}
+
+function threadStatusLabel(status) {
+  const type = String(status?.type || status || "");
+  return {
+    active: "运行中",
+    idle: "已完成",
+    notLoaded: "未载入",
+    systemError: "错误",
+  }[type] || type || "未知";
 }
 
 async function listRecentAgentSessions(limit = 40) {

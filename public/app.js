@@ -15,6 +15,9 @@ const logoutButton = document.querySelector("#logout");
 const sessionsList = document.querySelector("#sessions-list");
 const codexSessionsList = document.querySelector("#codex-sessions-list");
 const archivedCodexSessionsList = document.querySelector("#archived-codex-sessions-list");
+const sessionSearchInput = document.querySelector("#session-search-input");
+const sessionSearchSubmit = document.querySelector("#session-search-submit");
+const sessionSearchResults = document.querySelector("#session-search-results");
 const resumeEngineDialog = document.querySelector("#resume-engine-dialog");
 const resumeSessionTitle = document.querySelector("#resume-session-title");
 const resumeAccessMode = document.querySelector("#resume-access-mode");
@@ -23,6 +26,7 @@ const resumeWithTerminal = document.querySelector("#resume-with-terminal");
 const resumeWithAppServer = document.querySelector("#resume-with-app-server");
 const resumeEngineCancel = document.querySelector("#resume-engine-cancel");
 const backButton = document.querySelector("#back");
+const searchCurrentSessionButton = document.querySelector("#search-current-session");
 const disconnectButton = document.querySelector("#disconnect");
 const terminalTabButton = document.querySelector("#terminal-tab");
 const textTabButton = document.querySelector("#text-tab");
@@ -41,11 +45,13 @@ const appSessionMemoryProjects = document.querySelector("#app-session-memory-pro
 const appSessionTaskControl = document.querySelector("#app-session-task-control");
 const appSessionTaskState = document.querySelector("#app-session-task-state");
 const appSessionTaskStop = document.querySelector("#app-session-task-stop");
+const appSessionAgentsButton = document.querySelector("#app-session-agents");
 const archiveSessionButton = document.querySelector("#archive-session");
 const restartSessionButton = document.querySelector("#restart-session");
 const killSessionButton = document.querySelector("#kill-session");
 const sessionMenu = document.querySelector("#session-menu");
 const mobileDisconnectButton = document.querySelector("#mobile-disconnect");
+const mobileSearchCurrentSessionButton = document.querySelector("#mobile-search-current-session");
 const mobileArchiveSessionButton = document.querySelector("#mobile-archive-session");
 const mobileRestartSessionButton = document.querySelector("#mobile-restart-session");
 const mobileKillSessionButton = document.querySelector("#mobile-kill-session");
@@ -57,6 +63,8 @@ const fileInput = document.querySelector("#file-input");
 const promptInput = document.querySelector("#prompt");
 const composer = document.querySelector("#composer");
 const composerAttachments = document.querySelector("#composer-attachments");
+const editForkBanner = document.querySelector("#edit-fork-banner");
+const cancelEditForkButton = document.querySelector("#cancel-edit-fork");
 const composerSuggestions = document.querySelector("#composer-suggestions");
 const uploadStatus = document.querySelector("#upload-status");
 const turnLedger = document.querySelector("#turn-ledger");
@@ -75,6 +83,7 @@ const terminalSessionPreviewResult = document.querySelector("#terminal-session-p
 const terminalSessionPreviewDismiss = document.querySelector("#terminal-session-preview-dismiss");
 const appServerView = document.querySelector("#app-server-view");
 const appServerTranscript = document.querySelector("#app-server-transcript");
+const appTranscriptLatestButton = document.querySelector("#app-transcript-latest");
 const textView = document.querySelector("#text-view");
 const terminalText = document.querySelector("#terminal-text");
 const appCommandDialog = document.querySelector("#app-command-dialog");
@@ -83,6 +92,11 @@ const appCommandTitle = document.querySelector("#app-command-title");
 const appCommandContent = document.querySelector("#app-command-content");
 const appCommandActions = document.querySelector("#app-command-actions");
 const appCommandClose = document.querySelector("#app-command-close");
+const threadSearchDialog = document.querySelector("#thread-search-dialog");
+const threadSearchInput = document.querySelector("#thread-search-input");
+const threadSearchSubmit = document.querySelector("#thread-search-submit");
+const threadSearchResults = document.querySelector("#thread-search-results");
+const threadSearchClose = document.querySelector("#thread-search-close");
 
 if ("scrollRestoration" in history) history.scrollRestoration = "manual";
 
@@ -105,6 +119,7 @@ const CLIENT_RESUME_PROBE_MS = 1_500;
 const CLIENT_ID_KEY = "agent_terminal_client_id";
 const PUSH_DEVICE_ID_KEY = "agent_terminal_push_device_id";
 const SESSION_SNAPSHOT_STORE_KEY = "agent_terminal_session_snapshots";
+const APP_READING_POSITION_STORE_KEY = "agent_terminal_app_reading_positions";
 const SESSION_SNAPSHOT_LIMIT = 8;
 const SESSION_SNAPSHOT_MAX_CHARS = 200_000;
 const TERMINAL_RECENT_HISTORY_MAX_CHARS = 24_000;
@@ -112,6 +127,8 @@ const TERMINAL_HISTORY_QUIET_MS = 1_200;
 const TERMINAL_HISTORY_EMPTY_READY_MS = 120;
 const TERMINAL_DELAYED_HISTORY_GUARD_MS = 60_000;
 const APP_INITIAL_TURN_LIMIT = 10;
+const APP_READING_POSITION_LIMIT = 40;
+const APP_READING_POSITION_SAVE_MS = 120;
 const DEFAULT_TRANSPORT = "app-server";
 const DEFAULT_ACCESS_MODE = "full";
 const APP_COMMANDS = [
@@ -193,6 +210,10 @@ let activeMemoryProjectSource = "global";
 let activeSessionReady = true;
 let activeStartupQueueSupported = false;
 let activeTurnInterruptSupported = false;
+let activeForkedFromId = "";
+let activeForkedFromTitle = "";
+let activeParentThreadId = "";
+let activeParentThreadTitle = "";
 let pendingAgentRequest = null;
 let lastSubmittedPrompt = "";
 let lastSubmittedAttachments = [];
@@ -201,6 +222,11 @@ let appTranscriptItems = [];
 let restoredAppTurnCount = 0;
 let restoredAppHistoryHasMore = false;
 let restoredAppHistoryLoading = false;
+let appTranscriptInitialRestorePending = false;
+let appReadingPositionSaveTimer = null;
+let appTranscriptHasUnseenContent = false;
+let pendingAppReadingRestore = null;
+let pendingEditFork = null;
 let appTranscriptSource = "";
 let cachedSessionPreview = null;
 let sessionPreviewRequestSequence = 0;
@@ -236,6 +262,16 @@ connectButton.addEventListener("click", () => startSession());
 startThinkButton.addEventListener("click", startThinkSession);
 openMemoriesButton.addEventListener("click", openMemoryManager);
 refreshSessionsButton.addEventListener("click", refreshLists);
+sessionSearchSubmit.addEventListener("click", searchSavedSessions);
+sessionSearchInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    void searchSavedSessions();
+  }
+});
+sessionSearchInput.addEventListener("input", () => {
+  if (!sessionSearchInput.value.trim()) sessionSearchResults.classList.add("hidden");
+});
 resumeAccessMode.addEventListener("change", renderResumeAccessWarning);
 resumeWithTerminal.addEventListener("click", () => resumePendingSession("terminal"));
 resumeWithAppServer.addEventListener("click", () => resumePendingSession("app-server"));
@@ -244,7 +280,12 @@ resumeEngineDialog.addEventListener("click", (event) => {
   if (event.target === resumeEngineDialog) closeResumeEngineDialog();
 });
 backButton.addEventListener("click", showStartScreen);
+searchCurrentSessionButton.addEventListener("click", openThreadSearch);
 disconnectButton.addEventListener("click", detach);
+mobileSearchCurrentSessionButton.addEventListener("click", () => {
+  closeSessionMenu();
+  openThreadSearch();
+});
 mobileDisconnectButton.addEventListener("click", () => {
   closeSessionMenu();
   detach();
@@ -268,6 +309,7 @@ sendStatusButton.addEventListener("click", () => command("/status"));
 sendPermissionsButton.addEventListener("click", () => command("/permissions"));
 appSessionPermissionsButton.addEventListener("click", () => runAppCommand("/permissions"));
 appSessionMemoriesButton.addEventListener("click", openMemoryManager);
+appSessionAgentsButton.addEventListener("click", openSubagentList);
 appSessionTaskControl.addEventListener("click", interruptCurrentTurn);
 archiveSessionButton.addEventListener("click", archiveCurrentSession);
 mobileArchiveSessionButton.addEventListener("click", archiveCurrentSession);
@@ -279,10 +321,24 @@ document.addEventListener("click", (event) => {
   if (sessionMenu.open && !sessionMenu.contains(event.target)) closeSessionMenu();
 });
 terminalSessionPreviewDismiss.addEventListener("click", hideTerminalSessionPreview);
+appTranscriptLatestButton.addEventListener("click", () => scrollAppTranscriptToBottom({ smooth: true }));
+appServerView.addEventListener("scroll", handleAppTranscriptScroll, { passive: true });
 appCommandClose.addEventListener("click", () => appCommandDialog.close());
 appCommandDialog.addEventListener("click", (event) => {
   if (event.target === appCommandDialog) appCommandDialog.close();
 });
+threadSearchClose.addEventListener("click", () => threadSearchDialog.close());
+threadSearchDialog.addEventListener("click", (event) => {
+  if (event.target === threadSearchDialog) threadSearchDialog.close();
+});
+threadSearchSubmit.addEventListener("click", searchCurrentThread);
+threadSearchInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    void searchCurrentThread();
+  }
+});
+cancelEditForkButton.addEventListener("click", cancelEditAndFork);
 sendPromptButton.addEventListener("click", () => submitPrompt("auto"));
 queuePromptButton.addEventListener("click", () => submitPrompt("queue"));
 agentRequestAccept.addEventListener("click", () => respondToAgentRequest("accept"));
@@ -457,6 +513,50 @@ async function loadSavedCodexSessions() {
 async function loadArchivedCodexSessions() {
   const data = await apiJson("/api/codex-sessions/archived");
   if (data) renderArchivedCodexSessions(data.sessions || []);
+}
+
+async function searchSavedSessions() {
+  const query = sessionSearchInput.value.trim();
+  if (!query) {
+    sessionSearchResults.classList.add("hidden");
+    sessionSearchResults.replaceChildren();
+    return;
+  }
+
+  sessionSearchSubmit.disabled = true;
+  sessionSearchResults.classList.remove("hidden");
+  sessionSearchResults.replaceChildren(empty("正在搜索历史会话…"));
+  try {
+    const data = await apiJson(`/api/codex-sessions/search?q=${encodeURIComponent(query)}`);
+    if (!data) return;
+    const results = Array.isArray(data.results) ? data.results : [];
+    if (!results.length) {
+      sessionSearchResults.replaceChildren(empty("没有找到匹配的 Session。"));
+      return;
+    }
+    sessionSearchResults.replaceChildren(
+      ...results.map((result) => {
+        const session = result.session || {};
+        const snippet = String(result.snippet || session.title || "").replace(/\s+/g, " ").trim();
+        return sessionCard({
+          title: session.title || "Untitled session",
+          subtitle: `${displayProject(session.project)} · ${formatTime(session.updatedAt)}${snippet ? ` · ${snippet}` : ""}`,
+          action: session.archived ? "已归档" : "Resume",
+          onClick: () => {
+            if (session.archived) {
+              window.alert("这个 Session 已归档，请先在归档列表中恢复。");
+              return;
+            }
+            openResumeEngineDialog(session);
+          },
+        });
+      }),
+    );
+  } catch {
+    sessionSearchResults.replaceChildren(empty("Session 搜索暂时不可用。"));
+  } finally {
+    sessionSearchSubmit.disabled = false;
+  }
 }
 
 function renderLiveSessions(sessions) {
@@ -952,9 +1052,11 @@ function openSocket(params, options = {}) {
   const isReconnect = Boolean(options.reconnect);
   const snapshotKey = sessionSnapshotKey(params);
   saveActiveSessionSnapshot();
+  saveAppReadingPosition();
   closeSocket();
   ensureTerminal();
   activeTransport = params.transport === "app-server" ? "app-server" : "terminal";
+  activeSessionParams = { ...activeSessionParams, ...params };
   const hasSnapshot = !isReconnect && hasSessionSnapshot(snapshotKey);
   const shouldReplay = options.replay !== false;
   const resumesTerminalHistory =
@@ -983,6 +1085,12 @@ function openSocket(params, options = {}) {
     restoredAppTurnCount = 0;
     restoredAppHistoryHasMore = false;
     restoredAppHistoryLoading = false;
+    appTranscriptInitialRestorePending = activeTransport === "app-server";
+    appTranscriptHasUnseenContent = false;
+    pendingAppReadingRestore = null;
+    pendingEditFork = null;
+    renderEditForkBanner();
+    syncAppTranscriptLatestButton();
     appTranscriptSource = "";
     cachedSessionPreview = null;
     appSkills = [];
@@ -990,6 +1098,10 @@ function openSocket(params, options = {}) {
     activeMemoryProjectMode = "auto";
     activeMemoryProjects = [];
     activeMemoryProjectSource = "global";
+    activeForkedFromId = "";
+    activeForkedFromTitle = "";
+    activeParentThreadId = "";
+    activeParentThreadTitle = "";
     hideComposerSuggestions();
     hideTerminalSessionPreview();
     terminalPreviewAllowed = activeTransport === "terminal" && !hasSnapshot && resumesTerminalHistory;
@@ -1014,7 +1126,6 @@ function openSocket(params, options = {}) {
   document.body.classList.toggle("app-server-session", activeTransport === "app-server");
   clearAgentRequest();
   activeSessionId = params.attach || "";
-  activeSessionParams = { ...activeSessionParams, ...params };
   currentSessionExited = false;
   setConnectedState(isReconnect ? "reconnecting" : "connecting");
   showSessionScreen();
@@ -1122,7 +1233,17 @@ function openSocket(params, options = {}) {
       if (message.payload.preservePrompt && (lastSubmittedPrompt || lastSubmittedAttachments.length)) {
         if (lastSubmittedPrompt && !promptInput.value.trim()) promptInput.value = lastSubmittedPrompt;
         uploadController.restoreAttachments(lastSubmittedAttachments);
-        setUploadStatus("发送失败，文字和附件已保留。");
+        setUploadStatus(
+          message.payload.branchCreated
+            ? "已切换到新分支，但消息发送失败；文字和附件已保留，可以直接重试。"
+            : "发送失败，文字和附件已保留。",
+        );
+      }
+      if (message.payload.branchCreated) {
+        pendingEditFork = null;
+        activeSessionParams.sessionId = message.payload.sessionId || activeSessionParams.sessionId;
+        activeSessionParams.title = message.payload.title || activeSessionParams.title;
+        renderEditForkBanner();
       }
       if (message.payload.goHome) {
         currentSessionExited = true;
@@ -1163,27 +1284,36 @@ async function submitPrompt(deliveryMode = "auto") {
     const prompt = promptInput.value.trim();
     const attachments = uploadController.getAttachments();
     if (!prompt && !attachments.length) return;
-    if (!attachments.length && activeTransport === "app-server" && runAppComposerCommand(prompt)) return;
+    if (!pendingEditFork && !attachments.length && activeTransport === "app-server" && runAppComposerCommand(prompt)) return;
     if (notificationTarget.app === "agent") {
       void ensureAgentPushSubscription({ requestPermission: true }).catch(logPushRegistrationError);
     }
-    if (
-      send({
-        type: "submit",
-        data: prompt,
-        attachments,
-        deliveryMode,
-        skills: activeTransport === "app-server" ? extractSkillMentions(prompt) : [],
-        notificationApp: notificationTarget.app,
-        notificationDeviceId: pushDeviceId,
-      })
-    ) {
+    const message = pendingEditFork
+      ? {
+          type: "edit-and-fork",
+          data: prompt,
+          attachments,
+          turnId: pendingEditFork.turnId,
+          itemId: pendingEditFork.itemId,
+          notificationApp: notificationTarget.app,
+          notificationDeviceId: pushDeviceId,
+        }
+      : {
+          type: "submit",
+          data: prompt,
+          attachments,
+          deliveryMode,
+          skills: activeTransport === "app-server" ? extractSkillMentions(prompt) : [],
+          notificationApp: notificationTarget.app,
+          notificationDeviceId: pushDeviceId,
+        };
+    if (send(message)) {
       lastSubmittedPrompt = prompt;
       lastSubmittedAttachments = attachments;
       promptInput.value = "";
       uploadController.clearAttachments();
       hideComposerSuggestions();
-      setUploadStatus("正在发送…");
+      setUploadStatus(pendingEditFork ? "正在创建编辑分支…" : "正在发送…");
     } else {
       setUploadStatus("连接恢复中，文本已保留。");
     }
@@ -1228,6 +1358,19 @@ function handleControlAck(payload = {}) {
     if (payload.turnState) renderTurnState(payload.turnState);
     const skills = activeSkillAckText(payload.skills);
     setUploadStatus(`会话已恢复，任务已经开始。${skills}`, { clear: true });
+    return;
+  }
+  if (payload.kind === "edit-and-fork") {
+    lastSubmittedPrompt = "";
+    lastSubmittedAttachments = [];
+    pendingEditFork = null;
+    renderEditForkBanner();
+    activeSessionParams.sessionId = payload.sessionId || activeSessionParams.sessionId;
+    activeSessionParams.title = payload.title || activeSessionParams.title;
+    appTranscriptInitialRestorePending = false;
+    if (payload.turnState) renderTurnState(payload.turnState);
+    scrollAppTranscriptToBottom();
+    setUploadStatus("已在当前窗口切换到编辑分支，原 Session 保持不变。", { clear: true });
     return;
   }
   if (payload.kind !== "submit") return;
@@ -1391,6 +1534,10 @@ function renderAppCommandResult(payload = {}) {
     renderAppGoal(payload);
     return;
   }
+  if (payload.kind === "subagents") {
+    renderAppSubagents(payload);
+    return;
+  }
   if (payload.kind === "inventory") {
     showAppCommandDialog({
       title: payload.title || "Inventory",
@@ -1458,6 +1605,140 @@ function renderAppCommandResult(payload = {}) {
   }
   if (payload.resetCredits) rows.push(["Limit resets", `${payload.resetCredits} 次可用`]);
   showAppCommandDialog({ title: "Session status", meters: appRateLimitMeters(payload.rateLimits), rows });
+}
+
+function openSubagentList() {
+  showAppCommandDialog({ title: "Subagents", content: "正在读取子 Agent 线程…" });
+  if (!send({ type: "subagents-list" })) {
+    showAppCommandDialog({ title: "Subagents", content: "连接恢复中，请稍后重试。" });
+  }
+}
+
+function renderAppSubagents(payload = {}) {
+  const agents = Array.isArray(payload.agents) ? payload.agents : [];
+  showAppCommandDialog({
+    title: payload.title || "Subagents",
+    rows: agents.map((agent) => [
+      [agent.nickname, agent.role].filter(Boolean).join(" · ") || agent.name || "子 Agent",
+      `${agent.status || "未知"} · ${formatTime(agent.updatedAt)}`,
+    ]),
+    note: payload.note || "",
+    actions: agents.map((agent) => ({
+      label: `打开 ${agent.nickname || agent.name || "子 Agent"}`,
+      action: () =>
+        openSessionTab({
+          cwd: agent.project || activeSessionParams.cwd || ".",
+          sessionId: agent.id,
+          title: agent.name || agent.nickname || "子 Agent",
+          transport: "app-server",
+          access: activeAccessMode,
+        }),
+    })),
+  });
+}
+
+function openThreadSearch() {
+  if (activeTransport !== "app-server" || !activeSessionId) {
+    setUploadStatus("当前搜索只支持 App Server Session。", { clear: true });
+    return;
+  }
+  threadSearchResults.replaceChildren();
+  threadSearchDialog.showModal();
+  requestAnimationFrame(() => threadSearchInput.focus());
+}
+
+async function searchCurrentThread() {
+  const query = threadSearchInput.value.trim();
+  if (!query || !activeSessionId) return;
+  const webSessionId = activeSessionId;
+  threadSearchSubmit.disabled = true;
+  threadSearchResults.replaceChildren(createThreadSearchMessage("正在搜索当前 Session…"));
+  try {
+    const response = await fetch(
+      `/api/sessions/${encodeURIComponent(webSessionId)}/search?q=${encodeURIComponent(query)}`,
+      { cache: "no-store" },
+    );
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "搜索失败");
+    if (activeSessionId !== webSessionId) return;
+    const results = Array.isArray(payload.results) ? payload.results : [];
+    if (!results.length) {
+      threadSearchResults.replaceChildren(createThreadSearchMessage("没有找到匹配内容。"));
+      return;
+    }
+    threadSearchResults.replaceChildren(...results.map(createThreadSearchResult));
+  } catch (error) {
+    threadSearchResults.replaceChildren(createThreadSearchMessage(error.message || "当前会话搜索暂时不可用。"));
+  } finally {
+    threadSearchSubmit.disabled = false;
+  }
+}
+
+function createThreadSearchMessage(text) {
+  const message = document.createElement("p");
+  message.className = "thread-search-message";
+  message.textContent = text;
+  return message;
+}
+
+function createThreadSearchResult(result) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "thread-search-result";
+  const snippet = String(result.snippet || "");
+  const range = result.snippetMatchRange || {};
+  const start = Math.max(0, Math.min(snippet.length, Number(range.start) || 0));
+  const end = Math.max(start, Math.min(snippet.length, Number(range.end) || start));
+  button.append(document.createTextNode(snippet.slice(0, start)));
+  const mark = document.createElement("mark");
+  mark.textContent = snippet.slice(start, end);
+  button.append(mark, document.createTextNode(snippet.slice(end)));
+  button.addEventListener("click", () => void openThreadSearchResult(result, button));
+  return button;
+}
+
+async function openThreadSearchResult(result, button) {
+  const webSessionId = activeSessionId;
+  button.disabled = true;
+  try {
+    if (!findTranscriptElement(result.itemId)) {
+      const endpoint = result.turnCursor ? "search/load" : "history/locate";
+      const response = await fetch(`/api/sessions/${encodeURIComponent(webSessionId)}/${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          turnCursor: result.turnCursor,
+          turnId: result.turnId,
+          itemId: result.itemId,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "历史定位失败");
+    }
+    if (activeSessionId !== webSessionId) return;
+    threadSearchDialog.close();
+    requestAnimationFrame(() => scrollToTranscriptItem(result.itemId));
+  } catch (error) {
+    button.disabled = false;
+    setUploadStatus(error.message || "无法打开这条搜索结果。", { clear: true });
+  }
+}
+
+function findTranscriptElement(itemId) {
+  return [...appServerTranscript.querySelectorAll("[data-transcript-id]")].find(
+    (element) => element.dataset.transcriptId === itemId,
+  );
+}
+
+function scrollToTranscriptItem(itemId) {
+  const element = findTranscriptElement(itemId);
+  if (!element) {
+    setUploadStatus("历史已经加载，但没有找到对应消息。", { clear: true });
+    return;
+  }
+  element.scrollIntoView({ block: "center", behavior: "smooth" });
+  element.classList.add("is-search-match");
+  window.setTimeout(() => element.classList.remove("is-search-match"), 2200);
 }
 
 function renderAppUsage(payload = {}) {
@@ -2061,6 +2342,7 @@ function installClientEventLogging() {
     logClientEvent(`visibility-${document.visibilityState}`);
     if (document.visibilityState === "hidden") {
       saveActiveSessionSnapshot();
+      saveAppReadingPosition();
       return;
     }
     refreshTerminalDisplay();
@@ -2073,6 +2355,7 @@ function installClientEventLogging() {
   });
   window.addEventListener("pagehide", (event) => {
     saveActiveSessionSnapshot();
+    saveAppReadingPosition();
     logClientEvent("pagehide", { persisted: event.persisted }, { beacon: true });
   });
   window.addEventListener("online", () => {
@@ -2084,6 +2367,7 @@ function installClientEventLogging() {
   });
   window.addEventListener("beforeunload", () => {
     saveActiveSessionSnapshot();
+    saveAppReadingPosition();
     logClientEvent("beforeunload", {}, { beacon: true });
   });
 }
@@ -2404,6 +2688,10 @@ function renderStatus(status) {
   activeSessionReady = status.ready !== false;
   activeStartupQueueSupported = Boolean(status.capabilities?.startupQueue);
   activeTurnInterruptSupported = Boolean(status.capabilities?.interruptTurn);
+  activeForkedFromId = String(status.forkedFromId || "");
+  activeForkedFromTitle = String(status.forkedFromTitle || "");
+  activeParentThreadId = String(status.parentThreadId || "");
+  activeParentThreadTitle = String(status.parentThreadTitle || "");
   syncAppSessionToolbar();
   globalThis.AgentMemories?.updateSessionRouting({
     mode: activeMemoryProjectMode,
@@ -2475,8 +2763,7 @@ function renderTurnState(value = {}) {
       return row;
     }),
   );
-  sendPromptButton.textContent = latestTurnState.active ? "追加当前" : "新任务";
-  queuePromptButton.classList.toggle("hidden", !latestTurnState.active);
+  renderEditForkBanner();
   syncAppSessionToolbar();
 }
 
@@ -2516,6 +2803,9 @@ function setConnectedState(state) {
   sendStatusButton.disabled = !connected;
   sendPermissionsButton.disabled = !connected;
   appSessionPermissionsButton.disabled = activeTransport !== "app-server" || !connected;
+  appSessionAgentsButton.disabled = activeTransport !== "app-server" || !connected;
+  searchCurrentSessionButton.disabled = activeTransport !== "app-server" || !connected;
+  mobileSearchCurrentSessionButton.disabled = activeTransport !== "app-server" || !connected;
   const canManageSession = ["connected", "starting", "loading"].includes(state);
   setArchiveSessionDisabled(!activeSessionParams.sessionId || !canManageSession);
   setRestartSessionDisabled(!activeSessionId || !activeSessionParams.sessionId || !canManageSession);
@@ -2979,8 +3269,6 @@ function replaceAppTranscript(payload = {}) {
   const prepended = Boolean(payload.prepended);
   const replacingDiskPreview = appTranscriptSource === "disk";
   const wasAtBottom = isAppTranscriptAtBottom();
-  const previousScrollHeight = appServerView.scrollHeight;
-  const previousScrollTop = appServerView.scrollTop;
   const allItems = Array.isArray(payload.items) ? payload.items : [];
   // A resumed App Server sends an empty transcript before its recent turns are
   // available. Do not let that placeholder win the race against disk history.
@@ -2993,10 +3281,10 @@ function replaceAppTranscript(payload = {}) {
   restoredAppHistoryHasMore = Boolean(payload.hasEarlierTurns);
   restoredAppHistoryLoading = Boolean(payload.loadingEarlier);
   renderAppTranscript({ follow: !prepended && (!replacingDiskPreview || wasAtBottom) });
-  if (prepended) {
-    requestAnimationFrame(() => {
-      appServerView.scrollTop = previousScrollTop + (appServerView.scrollHeight - previousScrollHeight);
-    });
+  if (pendingAppReadingRestore && findScrollAnchor(pendingAppReadingRestore.anchorId)) {
+    const position = pendingAppReadingRestore;
+    pendingAppReadingRestore = null;
+    restoreAppTranscriptAnchor(position);
   }
 }
 
@@ -3017,6 +3305,7 @@ function upsertAppTranscript(payload = {}) {
     return;
   }
   appTranscriptItems.push(item);
+  if (!wasAtBottom) markAppTranscriptUnseen();
   renderAppTranscript({ follow: wasAtBottom });
 }
 
@@ -3028,6 +3317,7 @@ function appendAppTranscriptDelta(payload = {}) {
   item[payload.field] = trimClientTranscriptValue(`${item[payload.field] || ""}${payload.delta}`);
   if (isProcessTranscriptItem(item) && payload.field === "text") renderAppTranscript({ follow: wasAtBottom });
   else replaceAppTranscriptCard(item);
+  if (!wasAtBottom) markAppTranscriptUnseen();
   followAppTranscriptIfNeeded(wasAtBottom);
 }
 
@@ -3046,7 +3336,11 @@ function normalizeClientTranscriptItem(item = {}) {
     exitCode: Number.isFinite(item.exitCode) ? item.exitCode : null,
     turnId: String(item.turnId || ""),
     turnStartedAt: Number.isFinite(item.turnStartedAt) ? item.turnStartedAt : null,
+    turnStatus: String(item.turnStatus || ""),
     historical: Boolean(item.historical),
+    agentThreadId: String(item.agentThreadId || ""),
+    agentPath: String(item.agentPath || ""),
+    activityKind: String(item.activityKind || ""),
     attachments: normalizeClientAttachments(item.attachments),
     memoryCitation: normalizeClientMemoryCitation(item.memoryCitation),
   };
@@ -3090,8 +3384,61 @@ function trimClientTranscriptValue(value) {
 
 function renderAppTranscript({ follow = false } = {}) {
   if (!appServerTranscript) return;
-  const shouldFollow = follow || isAppTranscriptAtBottom();
+  const hasRenderedAnchors = Boolean(appServerTranscript.querySelector("[data-scroll-anchor]"));
+  const wasAtBottom = hasRenderedAnchors && isAppTranscriptAtBottom();
+  const liveAnchor = !follow && !wasAtBottom ? captureAppTranscriptAnchor() : null;
+  const canRestoreInitial =
+    appTranscriptInitialRestorePending &&
+    (appTranscriptItems.length > 0 || Boolean(cachedSessionPreview?.result));
+  const storedPosition = canRestoreInitial ? readAppReadingPosition() : null;
+  let shouldFollow = follow || wasAtBottom;
+  if (canRestoreInitial) {
+    appTranscriptInitialRestorePending = false;
+    shouldFollow = storedPosition ? Boolean(storedPosition.atBottom) : true;
+  }
   const fragment = document.createDocumentFragment();
+
+  if (activeForkedFromId) {
+    const branch = document.createElement("div");
+    branch.className = "app-branch-banner";
+    const copy = document.createElement("span");
+    copy.textContent = `分支来源：${activeForkedFromTitle || "原 Session"}`;
+    const openSource = document.createElement("button");
+    openSource.type = "button";
+    openSource.textContent = "打开原 Session";
+    openSource.addEventListener("click", () => {
+      openSessionTab({
+        cwd: activeSessionParams.cwd || ".",
+        sessionId: activeForkedFromId,
+        title: activeForkedFromTitle || "原 Session",
+        transport: "app-server",
+        access: activeAccessMode,
+      });
+    });
+    branch.append(copy, openSource);
+    fragment.append(branch);
+  }
+
+  if (activeParentThreadId) {
+    const parent = document.createElement("div");
+    parent.className = "app-branch-banner";
+    const copy = document.createElement("span");
+    copy.textContent = `子 Agent · 主线程：${activeParentThreadTitle || "主 Agent"}`;
+    const openParent = document.createElement("button");
+    openParent.type = "button";
+    openParent.textContent = "打开主 Agent";
+    openParent.addEventListener("click", () => {
+      openSessionTab({
+        cwd: activeSessionParams.cwd || ".",
+        sessionId: activeParentThreadId,
+        title: activeParentThreadTitle || "主 Agent",
+        transport: "app-server",
+        access: activeAccessMode,
+      });
+    });
+    parent.append(copy, openParent);
+    fragment.append(parent);
+  }
 
   if (restoredAppTurnCount > 0) {
     const banner = document.createElement("div");
@@ -3214,7 +3561,13 @@ function renderAppTranscript({ follow = false } = {}) {
   if (latestTurnState.interrupted) fragment.append(createInterruptedTurnNotice());
 
   appServerTranscript.replaceChildren(fragment);
-  if (shouldFollow) followAppTranscriptIfNeeded(true);
+  if (canRestoreInitial && storedPosition && !storedPosition.atBottom) {
+    restoreAppTranscriptAnchor(storedPosition);
+  } else if (liveAnchor && !shouldFollow) {
+    restoreAppTranscriptAnchor(liveAnchor);
+  } else if (shouldFollow) {
+    followAppTranscriptIfNeeded(true);
+  }
 }
 
 async function loadSessionPreview(sessionId, requestSequence) {
@@ -3240,9 +3593,9 @@ async function loadSessionPreview(sessionId, requestSequence) {
         appTranscriptSource = "disk";
         restoredAppTurnCount = Array.isArray(data.conversation?.turns) ? data.conversation.turns.length : 0;
         restoredAppHistoryHasMore = Boolean(data.conversation?.hasEarlier);
-        renderAppTranscript({ follow: true });
+        renderAppTranscript({ follow: false });
       } else if (!appTranscriptItems.length) {
-        renderAppTranscript({ follow: true });
+        renderAppTranscript({ follow: false });
       }
     }
   } catch {}
@@ -3263,7 +3616,7 @@ function diskConversationItems(conversation = {}) {
           status: "completed",
           turnId,
           turnStartedAt: Number.isFinite(turnStartedAt) ? turnStartedAt : null,
-          historical: answer.phase !== "final_answer",
+          historical: true,
         }),
       );
     }
@@ -3278,6 +3631,7 @@ function diskConversationItems(conversation = {}) {
           status: "completed",
           turnId,
           turnStartedAt: Number.isFinite(turnStartedAt) ? turnStartedAt : null,
+          historical: answer.phase !== "final_answer",
         }),
       );
     }
@@ -3358,6 +3712,8 @@ function createAppProcessGroup(items, groupNumber = 1) {
   group.className = "app-process-group";
   const turnId = items[0]?.turnId || "";
   const groupId = `${turnId || items[0]?.id || "turn"}:process:${groupNumber}`;
+  group.dataset.scrollAnchor = groupId;
+  group.dataset.turnId = turnId;
   const historical = items.some((item) => item.historical);
   const loadState = historicalProcessLoads.get(turnId);
   const contentItems = historical
@@ -3565,6 +3921,8 @@ function createAppTranscriptCard(item) {
     card.classList.add("app-transcript-commentary");
   }
   card.dataset.transcriptId = item.id;
+  card.dataset.scrollAnchor = item.id;
+  card.dataset.turnId = item.turnId || "";
 
   const header = document.createElement("header");
   const identity = document.createElement("strong");
@@ -3576,6 +3934,8 @@ function createAppTranscriptCard(item) {
     meta.textContent = metaText;
     header.append(meta);
   }
+  const actions = createTranscriptItemActions(item);
+  if (actions) header.append(actions);
   card.append(header);
 
   if (item.text) {
@@ -3614,7 +3974,138 @@ function createAppTranscriptCard(item) {
       : `关联了 ${item.memoryCitation.threadIds.length} 个记忆 Session`;
     card.append(createTranscriptDetails(summary, formatMemoryCitation(item.memoryCitation), false, "memory-citation"));
   }
+  if (item.agentThreadId) {
+    const openAgent = document.createElement("button");
+    openAgent.type = "button";
+    openAgent.className = "app-transcript-agent-link";
+    openAgent.textContent = "查看子 Agent";
+    openAgent.addEventListener("click", () => {
+      openSessionTab({
+        cwd: activeSessionParams.cwd || ".",
+        sessionId: item.agentThreadId,
+        title: item.agentPath || "子 Agent",
+        transport: "app-server",
+        access: activeAccessMode,
+      });
+    });
+    card.append(openAgent);
+  }
   return card;
+}
+
+function createTranscriptItemActions(item) {
+  if (!item.turnId || item.turnId === "session-preview") return null;
+  const canEdit = item.type === "user" && !(latestTurnState.active && latestTurnState.turnId === item.turnId);
+  const canFork =
+    item.type === "assistant" &&
+    item.phase === "final_answer" &&
+    !(latestTurnState.active && latestTurnState.turnId === item.turnId);
+  if (!canEdit && !canFork) return null;
+
+  const actions = document.createElement("span");
+  actions.className = "app-transcript-item-actions";
+  if (canEdit) {
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.textContent = "编辑并分支";
+    edit.addEventListener("click", () => beginEditAndFork(item));
+    actions.append(edit);
+  }
+  if (canFork) {
+    const fork = document.createElement("button");
+    fork.type = "button";
+    fork.textContent = "从这里分支";
+    fork.addEventListener("click", () => void forkFromTurn(item));
+    actions.append(fork);
+  }
+  return actions;
+}
+
+function beginEditAndFork(item) {
+  if (latestTurnState.active) {
+    setUploadStatus("当前任务仍在处理，完成后再编辑历史消息。", { clear: true });
+    return;
+  }
+  if (pendingEditFork) cancelEditAndFork();
+  pendingEditFork = {
+    turnId: item.turnId,
+    itemId: item.id,
+    previousPrompt: promptInput.value,
+    previousAttachments: uploadController.getAttachments(),
+  };
+  promptInput.value = item.text || "";
+  uploadController.clearAttachments();
+  uploadController.restoreAttachments(item.attachments || []);
+  renderEditForkBanner();
+  promptInput.focus();
+  promptInput.setSelectionRange(promptInput.value.length, promptInput.value.length);
+  composer.scrollIntoView({ block: "end", behavior: "smooth" });
+}
+
+function cancelEditAndFork() {
+  if (!pendingEditFork) return;
+  const previous = pendingEditFork;
+  pendingEditFork = null;
+  promptInput.value = previous.previousPrompt || "";
+  uploadController.clearAttachments();
+  uploadController.restoreAttachments(previous.previousAttachments || []);
+  renderEditForkBanner();
+}
+
+function renderEditForkBanner() {
+  editForkBanner.classList.toggle("hidden", !pendingEditFork);
+  sendPromptButton.textContent = pendingEditFork
+    ? "编辑并分支"
+    : latestTurnState.active
+      ? "追加当前"
+      : "新任务";
+  queuePromptButton.classList.toggle("hidden", Boolean(pendingEditFork) || !latestTurnState.active);
+}
+
+async function forkFromTurn(item) {
+  if (!activeSessionId || latestTurnState.active) {
+    setUploadStatus("当前任务完成后才能从这里分支。", { clear: true });
+    return;
+  }
+  saveAppReadingPosition();
+  const target = window.open("", "_blank");
+  if (target) {
+    target.document.title = "正在创建 Codex 分支…";
+    target.document.body.textContent = "正在创建 Codex 分支…";
+  }
+  try {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(activeSessionId)}/fork`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lastTurnId: item.turnId }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "无法创建分支");
+    const url = sessionUrl({
+      cwd: payload.project || activeSessionParams.cwd || ".",
+      sessionId: payload.threadId,
+      title: payload.title || "Codex 分支",
+      transport: "app-server",
+      access: payload.access || activeAccessMode,
+    });
+    if (target) {
+      target.location.replace(url);
+    } else {
+      setUploadStatus("分支已创建。", {
+        actionLabel: "打开新 Session",
+        onAction: () => openSessionTab({
+          cwd: payload.project || activeSessionParams.cwd || ".",
+          sessionId: payload.threadId,
+          title: payload.title || "Codex 分支",
+          transport: "app-server",
+          access: payload.access || activeAccessMode,
+        }),
+      });
+    }
+  } catch (error) {
+    target?.close();
+    setUploadStatus(error.message || "无法创建分支。", { clear: true });
+  }
 }
 
 function createAppTranscriptAttachments(attachments) {
@@ -3759,6 +4250,7 @@ function formatTranscriptTime(unixSeconds) {
 
 function isAppTranscriptAtBottom() {
   if (!appServerView || appServerView.classList.contains("hidden")) return true;
+  if (!appServerTranscript.querySelector("[data-scroll-anchor]")) return false;
   return appServerView.scrollTop + appServerView.clientHeight >= appServerView.scrollHeight - 72;
 }
 
@@ -3766,7 +4258,151 @@ function followAppTranscriptIfNeeded(shouldFollow) {
   if (!shouldFollow || !appServerView) return;
   requestAnimationFrame(() => {
     appServerView.scrollTop = appServerView.scrollHeight;
+    appTranscriptHasUnseenContent = false;
+    syncAppTranscriptLatestButton();
+    scheduleAppReadingPositionSave();
   });
+}
+
+function scrollAppTranscriptToBottom({ smooth = false } = {}) {
+  if (!appServerView) return;
+  appServerView.scrollTo({ top: appServerView.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+  appTranscriptHasUnseenContent = false;
+  syncAppTranscriptLatestButton();
+  scheduleAppReadingPositionSave();
+}
+
+function handleAppTranscriptScroll() {
+  if (isAppTranscriptAtBottom()) {
+    appTranscriptHasUnseenContent = false;
+    syncAppTranscriptLatestButton();
+  }
+  scheduleAppReadingPositionSave();
+}
+
+function markAppTranscriptUnseen() {
+  appTranscriptHasUnseenContent = true;
+  syncAppTranscriptLatestButton();
+}
+
+function syncAppTranscriptLatestButton() {
+  appTranscriptLatestButton.classList.toggle(
+    "hidden",
+    !appTranscriptHasUnseenContent || activeTransport !== "app-server" || isAppTranscriptAtBottom(),
+  );
+}
+
+function scheduleAppReadingPositionSave() {
+  window.clearTimeout(appReadingPositionSaveTimer);
+  appReadingPositionSaveTimer = window.setTimeout(saveAppReadingPosition, APP_READING_POSITION_SAVE_MS);
+}
+
+function appReadingPositionKey() {
+  const threadId = String(activeSessionParams.sessionId || "").trim();
+  if (threadId) return `thread:${threadId}`;
+  const webSessionId = String(activeSessionId || activeSessionParams.attach || "").trim();
+  return webSessionId ? `web:${webSessionId}` : "";
+}
+
+function captureAppTranscriptAnchor() {
+  if (!appServerView || !appServerTranscript) return null;
+  const viewRect = appServerView.getBoundingClientRect();
+  const anchors = [...appServerTranscript.querySelectorAll("[data-scroll-anchor]")];
+  const anchor = anchors.find((element) => element.getBoundingClientRect().bottom > viewRect.top + 1);
+  return {
+    anchorId: anchor?.dataset.scrollAnchor || "",
+    turnId: anchor?.dataset.turnId || "",
+    offset: anchor ? anchor.getBoundingClientRect().top - viewRect.top : 0,
+    scrollTop: appServerView.scrollTop,
+  };
+}
+
+function saveAppReadingPosition() {
+  if (activeTransport !== "app-server" || !appTranscriptItems.length) return;
+  const key = appReadingPositionKey();
+  if (!key) return;
+  const anchor = captureAppTranscriptAnchor();
+  const positions = readAppReadingPositions();
+  positions[key] = {
+    ...anchor,
+    atBottom: isAppTranscriptAtBottom(),
+    savedAt: Date.now(),
+  };
+  trimAppReadingPositions(positions);
+  writeAppReadingPositions(positions);
+}
+
+function readAppReadingPosition() {
+  const key = appReadingPositionKey();
+  return key ? readAppReadingPositions()[key] || null : null;
+}
+
+function restoreAppTranscriptAnchor(position) {
+  if (!appServerView || !position) return;
+  requestAnimationFrame(() => {
+    const anchor = findScrollAnchor(position.anchorId);
+    if (anchor) {
+      const viewRect = appServerView.getBoundingClientRect();
+      appServerView.scrollTop += anchor.getBoundingClientRect().top - viewRect.top - Number(position.offset || 0);
+    } else if (position.turnId && activeSessionId && pendingAppReadingRestore !== position) {
+      pendingAppReadingRestore = position;
+      void hydrateAppReadingPosition(position);
+    } else {
+      appServerView.scrollTop = Math.max(0, Number(position.scrollTop || 0));
+    }
+    syncAppTranscriptLatestButton();
+  });
+}
+
+function findScrollAnchor(anchorId) {
+  return [...appServerTranscript.querySelectorAll("[data-scroll-anchor]")].find(
+    (element) => element.dataset.scrollAnchor === anchorId,
+  );
+}
+
+async function hydrateAppReadingPosition(position) {
+  const webSessionId = activeSessionId;
+  try {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(webSessionId)}/history/locate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        turnId: position.turnId,
+        itemId: position.anchorId,
+      }),
+    });
+    if (!response.ok) throw new Error("reading position hydration failed");
+    if (activeSessionId !== webSessionId || pendingAppReadingRestore !== position) return;
+    requestAnimationFrame(() => {
+      const anchor = findScrollAnchor(position.anchorId);
+      pendingAppReadingRestore = null;
+      if (anchor) restoreAppTranscriptAnchor(position);
+    });
+  } catch {
+    if (pendingAppReadingRestore === position) pendingAppReadingRestore = null;
+  }
+}
+
+function readAppReadingPositions() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(APP_READING_POSITION_STORE_KEY) || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeAppReadingPositions(positions) {
+  try {
+    localStorage.setItem(APP_READING_POSITION_STORE_KEY, JSON.stringify(positions));
+  } catch {
+    // Reading positions are a convenience; ignore unavailable browser storage.
+  }
+}
+
+function trimAppReadingPositions(positions) {
+  const entries = Object.entries(positions).sort((left, right) => (right[1]?.savedAt || 0) - (left[1]?.savedAt || 0));
+  for (const [key] of entries.slice(APP_READING_POSITION_LIMIT)) delete positions[key];
 }
 
 function ensureTerminal() {

@@ -42,12 +42,12 @@ const appSessionTaskControl = document.querySelector("#app-session-task-control"
 const appSessionTaskState = document.querySelector("#app-session-task-state");
 const appSessionTaskStop = document.querySelector("#app-session-task-stop");
 const archiveSessionButton = document.querySelector("#archive-session");
-const sessionRestartAgentButton = document.querySelector("#session-restart-agent");
+const restartSessionButton = document.querySelector("#restart-session");
 const killSessionButton = document.querySelector("#kill-session");
 const sessionMenu = document.querySelector("#session-menu");
 const mobileDisconnectButton = document.querySelector("#mobile-disconnect");
 const mobileArchiveSessionButton = document.querySelector("#mobile-archive-session");
-const mobileRestartAgentButton = document.querySelector("#mobile-restart-agent");
+const mobileRestartSessionButton = document.querySelector("#mobile-restart-session");
 const mobileKillSessionButton = document.querySelector("#mobile-kill-session");
 const attachFileButton = document.querySelector("#attach-file");
 const voiceInputButton = document.querySelector("#voice-input");
@@ -271,8 +271,8 @@ appSessionMemoriesButton.addEventListener("click", openMemoryManager);
 appSessionTaskControl.addEventListener("click", interruptCurrentTurn);
 archiveSessionButton.addEventListener("click", archiveCurrentSession);
 mobileArchiveSessionButton.addEventListener("click", archiveCurrentSession);
-sessionRestartAgentButton.addEventListener("click", restartAgentWeb);
-mobileRestartAgentButton.addEventListener("click", restartAgentWeb);
+restartSessionButton.addEventListener("click", restartCurrentSession);
+mobileRestartSessionButton.addEventListener("click", restartCurrentSession);
 killSessionButton.addEventListener("click", endSession);
 mobileKillSessionButton.addEventListener("click", endSession);
 document.addEventListener("click", (event) => {
@@ -345,11 +345,11 @@ async function logout() {
 }
 
 async function restartAgentWeb() {
-  closeSessionMenu();
   const confirmed = window.confirm("重启 Agent Web？所有页面会短暂断连，正在运行的任务可能中断。");
   if (!confirmed) return;
 
-  setRestartAgentControls(true, "准备重启");
+  restartAgentButton.disabled = true;
+  restartAgentLabel.textContent = "准备重启";
   try {
     const previousInstance = await readAgentInstance();
     const response = await fetch(AGENT_RESTART_ENDPOINT, {
@@ -359,21 +359,15 @@ async function restartAgentWeb() {
     });
     if (!response.ok) throw new Error(`restart request failed (${response.status})`);
 
-    setRestartAgentControls(true, "正在重启");
+    restartAgentLabel.textContent = "正在重启";
     const recovered = await waitForAgentRestart(previousInstance);
     if (!recovered) throw new Error("Agent did not return in time");
     window.location.reload();
   } catch (error) {
-    setRestartAgentControls(false, "重启");
+    restartAgentButton.disabled = false;
+    restartAgentLabel.textContent = "重启";
     window.alert(`重启失败：${error.message}`);
   }
-}
-
-function setRestartAgentControls(disabled, label) {
-  restartAgentButton.disabled = disabled;
-  restartAgentLabel.textContent = label;
-  sessionRestartAgentButton.disabled = disabled;
-  mobileRestartAgentButton.disabled = disabled;
 }
 
 async function readAgentInstance() {
@@ -778,6 +772,60 @@ function closeSessionMenu() {
 function setArchiveSessionDisabled(disabled) {
   archiveSessionButton.disabled = disabled;
   mobileArchiveSessionButton.disabled = disabled;
+}
+
+async function restartCurrentSession() {
+  closeSessionMenu();
+  const webSessionId = String(activeSessionId || "").trim();
+  const sessionId = String(activeSessionParams.sessionId || "").trim();
+  if (!webSessionId || !sessionId) {
+    window.alert("Session 尚未建立完成，暂时无法重启。");
+    return;
+  }
+
+  const message = latestTurnState.active
+    ? "重启当前 Session？本轮任务会中断，但历史记录和其他 Session 不受影响。"
+    : "重启当前 Session？历史记录和其他 Session 不受影响。";
+  if (!window.confirm(message)) return;
+
+  const restartParams = {
+    cwd: activeSessionParams.cwd || ".",
+    sessionId,
+    title: activeSessionParams.title || "",
+    transport: activeSessionParams.transport || activeTransport,
+    access: activeSessionParams.access || activeAccessMode,
+    purpose: activeSessionParams.purpose || "",
+  };
+  saveActiveSessionSnapshot();
+  closeSocket();
+  setConnectedState("starting");
+  setRestartSessionDisabled(true);
+
+  try {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(webSessionId)}/restart`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    if (response.status === 401) {
+      redirectToLogin();
+      return;
+    }
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || "重启失败");
+    }
+    openSocket(restartParams);
+  } catch (error) {
+    setRestartSessionDisabled(false);
+    window.alert(`Session 重启失败：${error.message}`);
+    openSocket(restartParams);
+  }
+}
+
+function setRestartSessionDisabled(disabled) {
+  restartSessionButton.disabled = disabled;
+  mobileRestartSessionButton.disabled = disabled;
 }
 
 function empty(text) {
@@ -2470,6 +2518,7 @@ function setConnectedState(state) {
   appSessionPermissionsButton.disabled = activeTransport !== "app-server" || !connected;
   const canManageSession = ["connected", "starting", "loading"].includes(state);
   setArchiveSessionDisabled(!activeSessionParams.sessionId || !canManageSession);
+  setRestartSessionDisabled(!activeSessionId || !activeSessionParams.sessionId || !canManageSession);
   killSessionButton.disabled = !canManageSession;
   mobileKillSessionButton.disabled = !canManageSession;
 }

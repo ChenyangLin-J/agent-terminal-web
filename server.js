@@ -609,6 +609,44 @@ app.get("/api/sessions", (_req, res) => {
   });
 });
 
+app.post("/api/sessions/:id/restart", (req, res) => {
+  const id = String(req.params.id || "").trim();
+  if (!isValidWebSessionId(id)) {
+    res.status(400).json({ error: "Invalid web session id." });
+    return;
+  }
+
+  const session = sessions.get(id);
+  if (!session || session.exited) {
+    res.status(404).json({ error: "This Session is no longer running." });
+    return;
+  }
+  if (!isValidSessionId(session.sessionId)) {
+    res.status(409).json({ error: "This Session has not finished starting yet." });
+    return;
+  }
+
+  const restart = {
+    sessionId: session.sessionId,
+    project: session.project,
+    title: session.title,
+    transport: session.transport,
+    access: session.access,
+    purpose: session.purpose,
+  };
+  logAgentEvent("session-restart", {
+    webSessionId: session.id,
+    codexSessionId: session.sessionId,
+    transport: session.transport,
+    activeTurn: Boolean(session.turnState?.active),
+  });
+  session.ready = false;
+  session.exited = true;
+  broadcast(session, "status", publicSession(session));
+  killSessionTerminal(session);
+  res.json({ session: restart });
+});
+
 app.get("/api/codex-sessions", async (_req, res) => {
   const codexSessions = await listCodexSessions({ archived: false });
   res.json({ sessions: codexSessions });

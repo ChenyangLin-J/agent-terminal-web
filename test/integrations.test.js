@@ -101,6 +101,8 @@ test("the MCP launcher gives the key to the provider child without requiring it 
       'import fs from "node:fs";',
       `if (process.env.AMAP_MAPS_API_KEY !== ${JSON.stringify(firstKey)}) process.exit(41);`,
       `fs.writeFileSync(${JSON.stringify(marker)}, "received\\n");`,
+      "process.stdout.write(`${JSON.stringify({ result: process.env.AMAP_MAPS_API_KEY })}\\n`);",
+      "process.stderr.write(`provider key=${process.env.AMAP_MAPS_API_KEY}\\n`);",
     ].join("\n"),
     { mode: 0o700 },
   );
@@ -108,6 +110,7 @@ test("the MCP launcher gives the key to the provider child without requiring it 
   const env = {
     ...process.env,
     AGENT_INTEGRATIONS_DIR: store,
+    AGENT_MCP_NODE_BIN: bin,
     PATH: `${bin}${path.delimiter}${process.env.PATH}`,
   };
   delete env.AMAP_MAPS_API_KEY;
@@ -120,6 +123,8 @@ test("the MCP launcher gives the key to the provider child without requiring it 
   assert.equal(result.code, 0, result.output);
   assert.equal(await fs.readFile(marker, "utf8"), "received\n");
   assert.equal(env.AMAP_MAPS_API_KEY, undefined);
+  assert.doesNotMatch(result.output, new RegExp(firstKey));
+  assert.match(result.output, /provider key=\[redacted\]/);
 });
 
 test("authenticated integration settings API supports set, status, replacement, and deletion without returning secrets", async (t) => {

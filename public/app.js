@@ -287,6 +287,7 @@ let restoredAppHistoryLoading = false;
 let appTranscriptInitialRestorePending = false;
 let appReadingPositionSaveTimer = null;
 let appTranscriptHasUnseenContent = false;
+let appTranscriptSubmitFollowActive = false;
 let lastMarkedViewedTurnId = "";
 let markViewedRequestPending = false;
 let pendingAppReadingRestore = null;
@@ -320,7 +321,11 @@ const agentDateTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
 let pushRegistrationPromise = null;
 
 syncStartSelectionsFromUrl(new URLSearchParams(window.location.search));
-window.addEventListener("resize", () => fitTerminal({ delay: 120 }));
+window.addEventListener("resize", () => {
+  fitTerminal({ delay: 120 });
+  followAppTranscriptAfterViewportChange();
+});
+window.visualViewport?.addEventListener("resize", followAppTranscriptAfterViewportChange);
 
 logoutButton.addEventListener("click", logout);
 restartAgentButton.addEventListener("click", restartAgentWeb);
@@ -459,6 +464,8 @@ document.addEventListener("click", (event) => {
 terminalSessionPreviewDismiss.addEventListener("click", hideTerminalSessionPreview);
 appTranscriptLatestButton.addEventListener("click", () => scrollAppTranscriptToBottom({ smooth: true }));
 appServerView.addEventListener("scroll", handleAppTranscriptScroll, { passive: true });
+appServerView.addEventListener("pointerdown", stopAppTranscriptSubmitFollow, { passive: true });
+appServerView.addEventListener("wheel", stopAppTranscriptSubmitFollow, { passive: true });
 appCommandClose.addEventListener("click", () => appCommandDialog.close());
 appCommandDialog.addEventListener("click", (event) => {
   if (event.target === appCommandDialog) appCommandDialog.close();
@@ -1628,6 +1635,7 @@ function openSocket(params, options = {}) {
     restoredAppHistoryLoading = false;
     appTranscriptInitialRestorePending = activeTransport === "app-server";
     appTranscriptHasUnseenContent = false;
+    appTranscriptSubmitFollowActive = false;
     lastMarkedViewedTurnId = "";
     markViewedRequestPending = false;
     pendingAppReadingRestore = null;
@@ -1867,6 +1875,7 @@ async function submitPrompt(deliveryMode = "auto") {
     if (send(message)) {
       lastSubmittedPrompt = prompt;
       lastSubmittedAttachments = attachments;
+      startAppTranscriptSubmitFollow();
       promptInput.value = "";
       uploadController.clearAttachments();
       hideComposerSuggestions();
@@ -3621,6 +3630,7 @@ function setConnectedState(state) {
 
 function showStartScreen() {
   saveActiveSessionSnapshot();
+  stopAppTranscriptSubmitFollow();
   setSessionPageMode(false);
   setDocumentTitle(DEFAULT_DOCUMENT_TITLE);
   clearSessionUrl();
@@ -4103,7 +4113,9 @@ function replaceAppTranscript(payload = {}) {
   restoredAppTurnCount = availableTurnCount;
   restoredAppHistoryHasMore = Boolean(payload.hasEarlierTurns);
   restoredAppHistoryLoading = Boolean(payload.loadingEarlier);
-  renderAppTranscript({ follow: !prepended && (!replacingDiskPreview || wasAtBottom) });
+  renderAppTranscript({
+    follow: !prepended && (appTranscriptSubmitFollowActive || !replacingDiskPreview || wasAtBottom),
+  });
   if (pendingAppReadingRestore && findScrollAnchor(pendingAppReadingRestore.anchorId)) {
     const position = pendingAppReadingRestore;
     pendingAppReadingRestore = null;
@@ -4116,20 +4128,21 @@ function upsertAppTranscript(payload = {}) {
   if (!item.id) return;
   const index = appTranscriptItems.findIndex((entry) => entry.id === item.id);
   const wasAtBottom = isAppTranscriptAtBottom();
+  const shouldFollow = appTranscriptSubmitFollowActive || wasAtBottom;
   if (index >= 0) {
     const previousItem = appTranscriptItems[index];
     appTranscriptItems[index] = { ...previousItem, ...item };
     if (isProcessTranscriptItem(previousItem) || isProcessTranscriptItem(appTranscriptItems[index])) {
-      renderAppTranscript({ follow: wasAtBottom });
+      renderAppTranscript({ follow: shouldFollow });
     } else {
       replaceAppTranscriptCard(appTranscriptItems[index]);
     }
-    followAppTranscriptIfNeeded(wasAtBottom);
+    followAppTranscriptIfNeeded(shouldFollow);
     return;
   }
   appTranscriptItems.push(item);
-  if (!wasAtBottom) markAppTranscriptUnseen();
-  renderAppTranscript({ follow: wasAtBottom });
+  if (!shouldFollow) markAppTranscriptUnseen();
+  renderAppTranscript({ follow: shouldFollow });
 }
 
 function appendAppTranscriptDelta(payload = {}) {
@@ -4137,11 +4150,12 @@ function appendAppTranscriptDelta(payload = {}) {
   const item = appTranscriptItems.find((entry) => entry.id === payload.id);
   if (!item) return;
   const wasAtBottom = isAppTranscriptAtBottom();
+  const shouldFollow = appTranscriptSubmitFollowActive || wasAtBottom;
   item[payload.field] = trimClientTranscriptValue(`${item[payload.field] || ""}${payload.delta}`);
-  if (isProcessTranscriptItem(item) && payload.field === "text") renderAppTranscript({ follow: wasAtBottom });
+  if (isProcessTranscriptItem(item) && payload.field === "text") renderAppTranscript({ follow: shouldFollow });
   else replaceAppTranscriptCard(item);
-  if (!wasAtBottom) markAppTranscriptUnseen();
-  followAppTranscriptIfNeeded(wasAtBottom);
+  if (!shouldFollow) markAppTranscriptUnseen();
+  followAppTranscriptIfNeeded(shouldFollow);
 }
 
 function normalizeClientTranscriptItem(item = {}) {
@@ -4214,10 +4228,10 @@ function renderAppTranscript({ follow = false } = {}) {
     appTranscriptInitialRestorePending &&
     (appTranscriptItems.length > 0 || Boolean(cachedSessionPreview?.result));
   const storedPosition = canRestoreInitial ? readAppReadingPosition() : null;
-  let shouldFollow = follow || wasAtBottom;
+  let shouldFollow = follow || appTranscriptSubmitFollowActive || wasAtBottom;
   if (canRestoreInitial) {
     appTranscriptInitialRestorePending = false;
-    shouldFollow = storedPosition ? Boolean(storedPosition.atBottom) : true;
+    shouldFollow = appTranscriptSubmitFollowActive || (storedPosition ? Boolean(storedPosition.atBottom) : true);
   }
   const fragment = document.createDocumentFragment();
 
@@ -5090,6 +5104,21 @@ function isAppTranscriptAtBottom() {
   if (!appServerView || appServerView.classList.contains("hidden")) return true;
   if (!appServerTranscript.querySelector("[data-scroll-anchor]")) return false;
   return appServerView.scrollTop + appServerView.clientHeight >= appServerView.scrollHeight - 72;
+}
+
+function startAppTranscriptSubmitFollow() {
+  if (activeTransport !== "app-server") return;
+  appTranscriptSubmitFollowActive = true;
+  scrollAppTranscriptToBottom();
+}
+
+function stopAppTranscriptSubmitFollow() {
+  appTranscriptSubmitFollowActive = false;
+}
+
+function followAppTranscriptAfterViewportChange() {
+  if (!appTranscriptSubmitFollowActive || activeTransport !== "app-server") return;
+  followAppTranscriptIfNeeded(true);
 }
 
 function followAppTranscriptIfNeeded(shouldFollow) {

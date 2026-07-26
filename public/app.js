@@ -3462,7 +3462,8 @@ function createAppTranscriptCard(item) {
     if (item.type === "tool" && item.label === "查看图片" && activeSessionId) {
       const link = document.createElement("a");
       link.className = "app-transcript-image-link";
-      link.href = `/api/session-image/${encodeURIComponent(activeSessionId)}/${encodeURIComponent(item.id)}`;
+      const imageHref = `/api/session-image/${encodeURIComponent(activeSessionId)}/${encodeURIComponent(item.id)}`;
+      link.href = item.turnId ? `${imageHref}?turnId=${encodeURIComponent(item.turnId)}` : imageHref;
       link.target = "_blank";
       link.rel = "noopener";
       link.title = "打开图片";

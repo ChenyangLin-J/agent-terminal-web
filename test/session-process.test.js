@@ -132,7 +132,7 @@ test("historical process details load only when a restored group is expanded", a
   ]);
 
   assert.match(server, /app\.get\("\/api\/session-process\/:sessionId\/:turnId"/);
-  assert.match(server, /\(!isRestoredTurn && !isCodexTurnId\)/);
+  assert.match(server, /\(!isRestoredTurn && !isCodexTurnId\(turnId\)\)/);
   assert.match(server, /session\.historyProcessCache \|\|= new Map\(\)/);
   assert.match(server, /logAgentEvent\("session-process-load"/);
   assert.match(app, /group\.addEventListener\("toggle"[\s\S]*loadHistoricalProcessDetails\(turnId\)/);

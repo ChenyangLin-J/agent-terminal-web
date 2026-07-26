@@ -314,7 +314,27 @@ app.use("/api", requireAuth);
 
 app.get("/api/session-image/:sessionId/:itemId", async (req, res) => {
   const session = sessions.get(String(req.params.sessionId || ""));
-  const filePath = viewedImagePath(session, req.params.itemId);
+  const itemId = String(req.params.itemId || "");
+  const turnId = String(req.query.turnId || "");
+  let filePath = viewedImagePath(session, itemId);
+  if (!filePath && session?.sessionId && isCodexTurnId(turnId)) {
+    try {
+      session.historyProcessCache ||= new Map();
+      if (!session.historyProcessCache.has(turnId)) {
+        const file = await findCodexSessionFile(session.sessionId);
+        const items = file ? await extractSessionProcessFromJsonl(file, turnId) : [];
+        session.historyProcessCache.set(turnId, items);
+      }
+      filePath = viewedImagePath(session, itemId);
+    } catch (error) {
+      logAgentEvent("session-image-restore-failed", {
+        webSessionId: session.id,
+        codexSessionId: session.sessionId,
+        turnId,
+        message: error.message,
+      });
+    }
+  }
   if (!filePath) {
     res.status(404).send("This image is not available in the current Agent session.");
     return;
@@ -345,8 +365,7 @@ app.get("/api/session-process/:sessionId/:turnId", async (req, res) => {
   const isRestoredTurn = session?.appTranscript?.some(
     (item) => item.turnId === turnId && item.historical,
   );
-  const isCodexTurnId = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(turnId);
-  if (!session?.sessionId || (!isRestoredTurn && !isCodexTurnId)) {
+  if (!session?.sessionId || (!isRestoredTurn && !isCodexTurnId(turnId))) {
     res.status(404).json({ error: "This historical turn is not available in the current Agent session." });
     return;
   }
@@ -4030,6 +4049,10 @@ function savedAgentSessionAccess(sessionId, persistedRecords = readPersistedWebS
 
 function isValidWebSessionId(value) {
   return /^[a-z0-9-]{8,80}$/i.test(String(value || ""));
+}
+
+function isCodexTurnId(value) {
+  return /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(String(value || ""));
 }
 
 function persistedWorkspacePath(value) {

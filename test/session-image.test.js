@@ -31,9 +31,12 @@ test("App Server image cards link through the authenticated session image route"
 
   assert.match(server, /app\.use\("\/api", requireAuth\)[\s\S]*app\.get\("\/api\/session-image\/:sessionId\/:itemId"/);
   assert.match(server, /presentation\.kind !== "inline" \|\| !presentation\.mime\.startsWith\("image\/"\)/);
-  assert.match(server, /viewedImagePath\(session, req\.params\.itemId\)/);
+  assert.match(server, /viewedImagePath\(session, itemId\)/);
+  assert.match(server, /extractSessionProcessFromJsonl\(file, turnId\)/);
+  assert.match(server, /session\.historyProcessCache\.set\(turnId, items\)/);
   assert.match(app, /item\.type === "tool" && item\.label === "查看图片" && activeSessionId/);
   assert.match(app, /`\/api\/session-image\/\$\{encodeURIComponent\(activeSessionId\)\}\/\$\{encodeURIComponent\(item\.id\)\}`/);
+  assert.match(app, /\?turnId=\$\{encodeURIComponent\(item\.turnId\)\}/);
   assert.match(styles, /\.app-transcript-image-link/);
   const resolver = await readFile(new URL("../lib/session-image.js", import.meta.url), "utf8");
   assert.match(resolver, /session\?\.historyProcessCache instanceof Map/);

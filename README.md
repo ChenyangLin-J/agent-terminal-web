@@ -153,6 +153,23 @@ Private environment values live in:
 /home/ubuntu/.config/private-web.env
 ```
 
+## External integrations
+
+The authenticated Agent home includes an `集成` manager for external tool credentials.
+Credentials are write-only in the browser: a configured value can be replaced or deleted,
+but it is never returned to the page.
+
+Integration credentials are stored outside the repository:
+
+```text
+/home/ubuntu/.config/agent-terminal-web/integrations
+```
+
+The directory is mode `0700` and each credential file is mode `0600`. Codex does not
+receive the integration key in its parent environment. The configured MCP launcher reads
+the credential only when it starts the matching provider process. A newly created or
+reconnected Codex process is required after a credential is changed.
+
 Auth service:
 
 ```text

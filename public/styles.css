@@ -170,6 +170,14 @@ button:disabled {
 }
 
 @media (max-width: 520px) {
+  .start-header {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .start-header-actions {
+    justify-content: flex-end;
+  }
+
   .start-brand {
     gap: 10px;
     align-items: flex-start;

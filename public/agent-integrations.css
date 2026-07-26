@@ -1,0 +1,239 @@
+.integrations-dialog {
+  width: min(620px, calc(100vw - 28px));
+  max-height: min(760px, calc(100dvh - 28px));
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #353c4c;
+  border-radius: 16px;
+  color: #f4f6fb;
+  background: #11151d;
+  box-shadow: 0 24px 80px rgb(0 0 0 / 55%);
+}
+
+.integrations-dialog::backdrop {
+  background: rgb(3 6 12 / 72%);
+  backdrop-filter: blur(4px);
+}
+
+.integrations-shell {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  max-height: inherit;
+}
+
+.integrations-shell > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 18px 10px;
+}
+
+.integrations-shell header span {
+  color: #8994a8;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.integrations-shell h2 {
+  margin: 3px 0 0;
+  font-size: 21px;
+}
+
+#integrations-close {
+  min-width: 38px;
+  min-height: 38px;
+  padding: 0;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.integrations-intro {
+  margin: 0;
+  padding: 0 18px 14px;
+  color: #99a5b9;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.integrations-content {
+  display: grid;
+  gap: 12px;
+  padding: 0 18px 18px;
+  overflow-y: auto;
+}
+
+.integration-card {
+  display: grid;
+  gap: 13px;
+  padding: 15px;
+  border: 1px solid #30394a;
+  border-radius: 13px;
+  background: #151b25;
+}
+
+.integration-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.integration-card-title {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.integration-card-title strong {
+  color: #edf1f8;
+  font-size: 16px;
+}
+
+.integration-card-title p {
+  margin: 0;
+  color: #97a3b7;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.integration-status {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid #596476;
+  border-radius: 999px;
+  color: #b9c2d1;
+  background: #1b222d;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.integration-status[data-state="ready"] {
+  border-color: #315c49;
+  color: #a8e0c4;
+  background: #14251e;
+}
+
+.integration-form {
+  display: grid;
+  gap: 10px;
+}
+
+.integration-field {
+  display: grid;
+  gap: 6px;
+}
+
+.integration-field > span {
+  color: #cbd3e0;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.integration-field input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.integration-field small {
+  color: #7f8ca2;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.integration-meta {
+  color: #7f8ca2;
+  font-size: 11px;
+}
+
+.integration-feedback {
+  min-height: 18px;
+  margin: 0;
+  color: #aeb8c8;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.integration-feedback[data-state="success"] {
+  color: #9de0bd;
+}
+
+.integration-feedback[data-state="error"] {
+  color: #ffb4bf;
+}
+
+.integration-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.integration-actions a {
+  display: inline-flex;
+  min-height: 36px;
+  box-sizing: border-box;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid #3a4352;
+  border-radius: 8px;
+  color: #cdd5e2;
+  background: #171b24;
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.integration-actions .integration-delete {
+  margin-left: auto;
+  border-color: #6f2b36;
+  color: #ffc4cc;
+  background: #35151b;
+}
+
+.integrations-message {
+  margin: 0;
+  padding: 14px;
+  border: 1px solid #30394a;
+  border-radius: 12px;
+  color: #aeb8c8;
+  background: #151b25;
+  font-size: 13px;
+}
+
+.integrations-message[data-state="error"] {
+  border-color: #6f2b36;
+  color: #ffb4bf;
+  background: #28171b;
+}
+
+@media (max-width: 520px) {
+  .integrations-dialog {
+    inset: auto 10px 10px;
+    width: auto;
+    max-height: calc(100dvh - 20px);
+    margin: 0;
+    border-radius: 16px 16px 12px 12px;
+  }
+
+  .integration-card-header {
+    display: grid;
+  }
+
+  .integration-status {
+    width: fit-content;
+  }
+
+  .integration-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .integration-actions > * {
+    justify-content: center;
+  }
+
+  .integration-actions .integration-delete {
+    margin-left: 0;
+  }
+}

@@ -51,6 +51,12 @@ import {
   saveSessionPreview,
 } from "./lib/session-preview.js";
 import { extractSessionProcessFromJsonl } from "./lib/session-process.js";
+import {
+  deleteIntegrationCredential,
+  IntegrationError,
+  listIntegrations,
+  saveIntegrationCredential,
+} from "./lib/integrations.js";
 
 const AGENT_TIME_ZONE = "Asia/Shanghai";
 process.env.TZ = AGENT_TIME_ZONE;
@@ -81,6 +87,10 @@ const CODEX_SESSION_ARCHIVE_FILE = path.join(CODEX_HOME, "session-archive.json")
 const AGENT_WEB_SESSIONS_FILE = path.join(CODEX_HOME, "agent-web-sessions.json");
 const AGENT_SESSION_SETTINGS_FILE = path.join(CODEX_HOME, "agent-session-settings.json");
 const CODEX_SESSION_PREVIEWS_FILE = path.join(CODEX_HOME, "agent-session-previews.json");
+const AGENT_INTEGRATIONS_DIR = path.resolve(
+  process.env.AGENT_INTEGRATIONS_DIR ||
+    path.join(process.env.HOME, ".config", "agent-terminal-web", "integrations"),
+);
 const UPLOADS_ROOT = path.resolve(process.env.UPLOADS_ROOT || path.join(WORKSPACE_ROOT, "uploads"));
 const OBSIDIAN_VAULT_ROOT = path.resolve(
   process.env.OBSIDIAN_VAULT_PATH || path.join(WORKSPACE_ROOT, "obsidian", "MainVault"),
@@ -123,6 +133,7 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/terminal" });
 const sessions = new Map();
+const integrationMutationAttempts = new Map();
 const agentInstanceId = cryptoRandomId();
 const personalMemoryScheduler = createPersonalMemoryScheduler({
   delayMs: PERSONAL_MEMORY_SETTLE_MS,
@@ -311,6 +322,49 @@ app.get("/open/local", async (req, res) => {
 });
 
 app.use("/api", requireAuth);
+
+app.get("/api/integrations", async (_req, res) => {
+  res.set("Cache-Control", "private, no-store");
+  try {
+    res.json({ integrations: await listIntegrations({ root: AGENT_INTEGRATIONS_DIR }) });
+  } catch (error) {
+    logAgentEvent("integration-status-failed", { message: cleanClientLogValue(error.message, 200) });
+    res.status(500).json({ error: "暂时无法读取集成状态。" });
+  }
+});
+
+app.put("/api/integrations/:integrationId", requireSafeIntegrationMutation, async (req, res) => {
+  const integrationId = String(req.params.integrationId || "");
+  try {
+    const integration = await saveIntegrationCredential(integrationId, req.body?.values, {
+      root: AGENT_INTEGRATIONS_DIR,
+    });
+    logAgentEvent("integration-saved", { integrationId });
+    res.set("Cache-Control", "private, no-store");
+    res.json({ integration });
+  } catch (error) {
+    sendIntegrationError(res, error, "暂时无法保存这个集成。");
+  }
+});
+
+app.delete("/api/integrations/:integrationId", requireSafeIntegrationMutation, async (req, res) => {
+  const integrationId = String(req.params.integrationId || "");
+  if (req.body?.confirm !== true) {
+    res.status(400).json({ error: "删除集成需要明确确认。" });
+    return;
+  }
+
+  try {
+    const removed = await deleteIntegrationCredential(integrationId, {
+      root: AGENT_INTEGRATIONS_DIR,
+    });
+    logAgentEvent("integration-deleted", { integrationId, removed });
+    res.set("Cache-Control", "private, no-store");
+    res.json({ ok: true, removed });
+  } catch (error) {
+    sendIntegrationError(res, error, "暂时无法删除这个集成。");
+  }
+});
 
 app.get("/api/session-image/:sessionId/:itemId", async (req, res) => {
   const session = sessions.get(String(req.params.sessionId || ""));
@@ -852,6 +906,41 @@ async function requireAuth(req, res, next) {
     return;
   }
   res.status(401).json({ error: "Not authenticated." });
+}
+
+function requireSafeIntegrationMutation(req, res, next) {
+  const origin = String(req.get("origin") || "");
+  const sameOrigin = origin
+    ? origin === getOrigin(req)
+    : String(req.get("sec-fetch-site") || "") === "same-origin";
+  if (!sameOrigin) {
+    res.status(403).json({ error: "无法确认请求来自当前 Agent 页面。" });
+    return;
+  }
+
+  const key = String(req.socket.remoteAddress || "unknown");
+  const now = Date.now();
+  const recent = (integrationMutationAttempts.get(key) || []).filter(
+    (timestamp) => now - timestamp < 10 * 60 * 1000,
+  );
+  if (recent.length >= 10) {
+    res.status(429).json({ error: "集成设置操作过于频繁，请稍后重试。" });
+    return;
+  }
+  recent.push(now);
+  integrationMutationAttempts.set(key, recent);
+  next();
+}
+
+function sendIntegrationError(res, error, fallback) {
+  if (error instanceof IntegrationError) {
+    res.status(error.status).json({ error: error.message, code: error.code });
+    return;
+  }
+  logAgentEvent("integration-mutation-failed", {
+    message: cleanClientLogValue(error?.message, 200),
+  });
+  res.status(500).json({ error: fallback });
 }
 
 async function isAuthenticated(req) {

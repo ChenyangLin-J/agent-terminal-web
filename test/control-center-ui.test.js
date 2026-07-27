@@ -18,7 +18,7 @@ test("the default Agent home is a two-destination Session control center", () =>
   assert.match(page, /data-session-filter="all"[\s\S]*清除筛选/);
   assert.equal((page.match(/data-summary-filter=/g) || []).length, 5);
   assert.match(page, /data-summary-filter="unread"[\s\S]*新结果/);
-  assert.match(page, /data-summary-filter="ready"[\s\S]*空闲/);
+  assert.match(page, /data-summary-filter="ready"[\s\S]*可继续[\s\S]*空闲 \/ 已暂停/);
   assert.match(app, /function setControlCenterFilter\(filter\)/);
   assert.match(app, /function syncControlCenterFilterReset\(\)/);
 });

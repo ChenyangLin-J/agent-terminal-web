@@ -935,13 +935,13 @@ function liveSessionPresentation(session) {
   if (session?.turnState?.interrupted) {
     return { kind: "attention", state: "interrupted", label: "需要继续", pendingRequestCount: 0 };
   }
-  if (session?.ready === false) {
-    if (session?.released || session?.suspended) {
-      if (session?.hasUnreadResult) {
-        return { kind: "unread", state: "unread", label: "新结果", pendingRequestCount: 0 };
-      }
-      return { kind: "released", state: "released", label: "已暂停", pendingRequestCount: 0 };
+  if (session?.released || session?.suspended) {
+    if (session?.hasUnreadResult) {
+      return { kind: "unread", state: "unread", label: "新结果", pendingRequestCount: 0 };
     }
+    return { kind: "released", state: "released", label: "已暂停", pendingRequestCount: 0 };
+  }
+  if (session?.ready === false) {
     return { kind: "running", state: "restoring", label: "恢复中", pendingRequestCount: 0 };
   }
   if (session?.turnState?.active || session?.turnState?.stopping) {
@@ -2715,7 +2715,7 @@ function runAppCommand(value) {
       showAppCommandDialog({
         title: "Session status",
         rows: [
-          ["State", activeSessionParams.sessionId ? "仅查看，尚未恢复" : "尚未创建"],
+          ["State", activeSessionParams.sessionId ? "已暂停 · 仅查看" : "尚未创建"],
           ["Project", displayProject(activeSessionParams.cwd || ".")],
           ["Permissions", appAccessLabel(activeAccessMode)],
         ],
@@ -3634,7 +3634,7 @@ function shortSessionMemoryProject(value) {
 function appSessionTaskStateValue() {
   if (activeSessionPreviewOnly) {
     return activeSessionParams.sessionId
-      ? { value: "preview", label: "发送时恢复" }
+      ? { value: "preview", label: "已暂停" }
       : { value: "preview", label: "待发送" };
   }
   if (!activeSessionReady) return { value: "connecting", label: "连接中" };
@@ -4343,7 +4343,7 @@ function setConnectedState(state) {
   keyDownButton.disabled = !connected;
   keyEnterButton.disabled = !connected;
   keyEscButton.disabled = !connected;
-  sendStatusButton.disabled = !connected;
+  sendStatusButton.disabled = !canCompose;
   sendPermissionsButton.disabled = !canCompose;
   appSessionPermissionsButton.disabled = activeTransport !== "app-server" || !canCompose;
   appSessionAgentsButton.disabled =

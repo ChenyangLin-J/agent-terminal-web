@@ -38,6 +38,15 @@ test("the first message activates a previewed Session and keeps permissions loca
   );
   assert.match(app, /发送第一条消息时会使用这里选择的权限/);
   assert.match(app, /sendPromptButton\.disabled = !canCompose/);
+  assert.match(app, /sendStatusButton\.disabled = !canCompose/);
   assert.match(app, /queuePromptButton\.disabled = !connected \|\| activeSessionPreviewOnly/);
   assert.match(app, /sessionMenu\.classList\.toggle\("hidden", activeSessionPreviewOnly\)/);
+  assert.match(
+    app,
+    /if \(activeSessionPreviewOnly\) \{[\s\S]*commandName === "\/status"[\s\S]*"已暂停 · 仅查看"/,
+  );
+  assert.match(
+    app,
+    /function appSessionTaskStateValue\(\) \{[\s\S]*activeSessionPreviewOnly[\s\S]*label: "已暂停"/,
+  );
 });

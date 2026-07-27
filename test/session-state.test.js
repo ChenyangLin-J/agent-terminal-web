@@ -210,7 +210,7 @@ test("the control center separates execution, reading, and resource state", asyn
     readFile(new URL("../public/index.html", import.meta.url), "utf8"),
   ]);
   assert.match(page, /data-summary-filter="unread"[\s\S]*新结果/);
-  assert.match(page, /data-summary-filter="ready"[\s\S]*空闲/);
+  assert.match(page, /data-summary-filter="ready"[\s\S]*可继续[\s\S]*空闲 \/ 已暂停/);
   assert.match(app, /session\?\.hasUnreadResult[\s\S]*kind: "unread"[\s\S]*label: "新结果"/);
   assert.match(app, /kind: "ready", state: "waiting", label: "空闲"/);
   assert.match(app, /unreadTurnId: session\.hasUnreadResult \? session\.lastCompletedTurnId \|\| "" : ""/);

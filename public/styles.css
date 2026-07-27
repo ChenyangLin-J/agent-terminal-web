@@ -2078,15 +2078,6 @@ input {
   opacity: 1;
 }
 
-.app-session-task-control[data-state="preview"] {
-  border-color: #3f526f;
-  background: #151d2a;
-}
-
-.app-session-task-control[data-state="preview"] strong {
-  color: #b8c8e3;
-}
-
 .app-session-tools button[data-access="full"] {
   border-color: #8b4d57;
   background: #2a171c;
@@ -3892,7 +3883,7 @@ input {
 }
 
 .session-switcher-item[data-state="released"] .session-switcher-dot {
-  background: #707b8d;
+  background: #73d99e;
 }
 
 .session-switcher-item > span {

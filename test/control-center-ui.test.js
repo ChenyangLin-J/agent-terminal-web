@@ -48,7 +48,7 @@ test("desktop, Pad, and phone keep the same navigation responsibilities", () => 
   );
   assert.match(
     styles,
-    /body\.session-active \.session-screen \{[\s\S]*height: calc\(100dvh - 66px - env\(safe-area-inset-bottom\)\)/,
+    /@media \(max-width: 820px\)[\s\S]*\.app \{[\s\S]*grid-template-rows: minmax\(0, 1fr\) auto;[\s\S]*body\.session-active \.session-screen \{[\s\S]*height: 100%/,
   );
 });
 

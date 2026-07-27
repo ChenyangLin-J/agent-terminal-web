@@ -8,12 +8,23 @@ const [app, html, styles] = await Promise.all([
   readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
 ]);
 
-test("mobile navigation is anchored to the app shell instead of the iOS fixed layer", () => {
+test("mobile navigation occupies its own app row instead of an iOS positioned layer", () => {
   assert.match(html, /viewport-fit=cover/);
-  assert.match(styles, /\.app \{\s+position: relative;/);
   assert.match(
     styles,
-    /@media \(max-width: 820px\)[\s\S]*?\.app-primary-nav \{\s+position: absolute;[\s\S]*?inset: auto 0 0;/,
+    /@media \(max-width: 820px\)[\s\S]*?\.app \{[\s\S]*?grid-template-rows: minmax\(0, 1fr\) auto;[\s\S]*?overflow: hidden;/,
+  );
+  assert.match(
+    styles,
+    /\.app-primary-nav \{\s+position: relative;\s+inset: auto;\s+grid-column: 1;\s+grid-row: 2;/,
+  );
+  assert.match(
+    styles,
+    /\.start-screen \{[\s\S]*?grid-row: 1;[\s\S]*?height: 100%;[\s\S]*?overflow-y: auto;/,
+  );
+  assert.match(
+    styles,
+    /body\.session-active \.session-screen \{[\s\S]*?grid-row: 1;[\s\S]*?height: 100%;/,
   );
 });
 

@@ -68,7 +68,7 @@ test("App Server exposes slash commands and structured Skill mentions", async ()
   assert.match(app, /function receiveAppSkills\(payload = \{\}\)/);
   assert.match(app, /function renderAppCommandResult\(payload = \{\}\)/);
   assert.match(app, /function syncAppSessionToolbar\(\)/);
-  assert.match(app, /appSessionPermissionsButton\.addEventListener\("click", \(\) => runAppCommand\("\/permissions"\)\)/);
+  assert.match(app, /appSessionPermissionsButton\.addEventListener\("click", openPermissionsPanel\)/);
   assert.match(app, /appSessionTaskControl\.addEventListener\("click", interruptCurrentTurn\)/);
   assert.match(app, /function appSessionTaskStateValue\(\)/);
   assert.match(app, /return \{ value: "working", label: "正在处理" \}/);

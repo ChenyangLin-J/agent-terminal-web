@@ -35,9 +35,9 @@
         background: #0f1115;
       }
     </style>
-    <link rel="stylesheet" href="/agent-hosts.css?v=20260727-1" />
     <link rel="stylesheet" href="/vendor/xterm-css/xterm.css?v=20260625-5" />
-    <link rel="stylesheet" href="/styles.css?v=20260727-session-favorites-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260727-session-favorites-lazy-resume-1" />
+    <link rel="stylesheet" href="/agent-hosts.css?v=20260727-1" />
     <link rel="stylesheet" href="/session-focus-mode.css?v=20260720-app-toolbar-1" />
     <link rel="stylesheet" href="/thinking-session.css?v=20260716-1" />
     <link rel="stylesheet" href="/agent-memories.css?v=20260723-pending-merge-1" />
@@ -154,36 +154,15 @@
             </label>
 
             <label>
-              <span>Launch</span>
-              <select id="launch-mode">
-                <option value="new">New session</option>
-                <option value="resume-last">Resume last</option>
-              </select>
-            </label>
-
-            <label>
-              <span>Engine</span>
-              <select id="transport">
-                <option value="app-server" selected>App Server（默认）</option>
-                <option value="terminal">Terminal（完整 CLI）</option>
-              </select>
-            </label>
-
-            <label>
-              <span>Access</span>
+              <span>Permissions</span>
               <select id="access-mode">
                 <option value="full" selected>全部允许（默认，高风险）</option>
                 <option value="safe">按需确认</option>
               </select>
             </label>
-
-            <label>
-              <span>Session ID</span>
-              <input id="session-id" type="text" spellcheck="false" placeholder="optional" />
-            </label>
           </div>
           <div class="start-actions">
-            <button id="connect" class="primary" type="button">开始</button>
+            <button id="connect" class="primary" type="button">打开空白会话</button>
             <button id="start-think" type="button">Think</button>
           </div>
         </section>
@@ -303,7 +282,7 @@
           </section>
         </section>
 
-        <section id="app-server-view" class="app-server-view hidden" aria-label="App Server conversation">
+        <section id="app-server-view" class="app-server-view hidden" aria-label="Session conversation">
           <button id="app-transcript-latest" class="app-transcript-latest hidden" type="button">有新内容 ↓</button>
           <div id="app-server-transcript" class="app-server-transcript" aria-live="polite"></div>
         </section>
@@ -323,7 +302,7 @@
           <button id="send-permissions" type="button">/permissions</button>
         </section>
 
-        <section id="app-session-tools" class="app-session-tools" aria-label="App Server session tools">
+        <section id="app-session-tools" class="app-session-tools" aria-label="Session tools">
           <button
             id="app-session-task-control"
             class="app-session-task-control"
@@ -385,7 +364,7 @@
           <section id="agent-request" class="agent-request hidden" aria-live="assertive">
             <header>
               <strong id="agent-request-title">Codex 需要确认</strong>
-              <span>App Server</span>
+              <span>需要你的操作</span>
             </header>
             <pre id="agent-request-detail"></pre>
             <textarea id="agent-request-answer" class="hidden" rows="2" placeholder="输入回答"></textarea>
@@ -420,7 +399,7 @@
             <textarea
               id="prompt"
               rows="5"
-              placeholder="输入任务，或点麦克风说话；发送前可以修改。"
+              placeholder="输入任务，或点麦克风说话…"
             ></textarea>
             <button id="voice-input" class="voice-button" type="button" aria-label="语音输入" title="语音输入">
               <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -441,44 +420,11 @@
       </section>
     </main>
 
-    <dialog id="resume-engine-dialog" class="resume-engine-dialog" aria-labelledby="resume-engine-title">
-      <form method="dialog">
-        <header>
-          <div>
-            <span>Resume session</span>
-            <h2 id="resume-engine-title">选择恢复方式</h2>
-          </div>
-          <button id="resume-engine-cancel" class="dialog-close" type="button" aria-label="取消">×</button>
-        </header>
-        <strong id="resume-session-title" class="resume-session-title"></strong>
-        <label class="resume-access-field">
-          <span>Access</span>
-          <select id="resume-access-mode">
-            <option value="safe">按需确认（推荐）</option>
-            <option value="full">全部允许（高风险）</option>
-          </select>
-        </label>
-        <p id="resume-access-warning" class="resume-access-warning hidden">
-          不再询问，并允许访问服务器网络及工作区以外的文件。只在你信任当前任务时使用。
-        </p>
-        <div class="resume-engine-options">
-          <button id="resume-with-terminal" class="engine-choice" type="button">
-            <strong>Terminal（完整 CLI）</strong>
-            <span>超大 Session 首次恢复较慢</span>
-          </button>
-          <button id="resume-with-app-server" class="engine-choice primary" type="button">
-            <strong>App Server（推荐）</strong>
-            <span>快速恢复最近内容，精确处理追加</span>
-          </button>
-        </div>
-      </form>
-    </dialog>
-
     <dialog id="app-command-dialog" class="app-command-dialog" aria-labelledby="app-command-title">
       <form method="dialog">
         <header>
           <div>
-            <span id="app-command-eyebrow">App Server</span>
+            <span id="app-command-eyebrow">Session</span>
             <h2 id="app-command-title">Session status</h2>
           </div>
           <button id="app-command-close" class="dialog-close" type="button" aria-label="关闭">×</button>
@@ -656,7 +602,7 @@
     <script src="/agent-upload.js?v=20260725-attachment-wait-1"></script>
     <script src="/agent-voice-input.js?v=20260717-recovery-2"></script>
     <script src="/agent-realtime.js?v=20260726-1"></script>
-    <script src="/app.js?v=20260727-session-favorites-1"></script>
+    <script src="/app.js?v=20260727-lazy-resume-1"></script>
     <script src="/session-focus-mode.js?v=20260716-app-chrome-1"></script>
   </body>
 </html>

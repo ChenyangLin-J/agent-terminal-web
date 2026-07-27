@@ -12,7 +12,7 @@ test("mobile navigation occupies its own app row instead of an iOS positioned la
   assert.match(html, /viewport-fit=cover/);
   assert.match(
     styles,
-    /@media \(max-width: 820px\)[\s\S]*?\.app \{[\s\S]*?grid-template-rows: minmax\(0, 1fr\) auto;[\s\S]*?overflow: hidden;/,
+    /@media \(max-width: 720px\)[\s\S]*?\.app \{[\s\S]*?grid-template-rows: minmax\(0, 1fr\) auto;[\s\S]*?overflow: hidden;/,
   );
   assert.match(
     styles,

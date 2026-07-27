@@ -51,20 +51,20 @@ test("frequent Sessions can be starred and pinned above the control center", () 
   );
 });
 
-test("desktop, Pad, and phone keep the same navigation responsibilities", () => {
+test("desktop and Pad retain the compact switcher while phones use bottom navigation", () => {
   assert.match(page, /id="session-switcher"/);
-  assert.match(styles, /@media \(min-width: 821px\)[\s\S]*grid-template-areas:[\s\S]*"switcher header"/);
+  assert.match(styles, /@media \(min-width: 721px\)[\s\S]*grid-template-areas:[\s\S]*"switcher header"/);
   assert.match(
     styles,
-    /@media \(min-width: 821px\) and \(max-width: 1100px\)[\s\S]*grid-template-columns: 188px minmax\(0, 1fr\)/,
+    /@media \(min-width: 721px\) and \(max-width: 1100px\)[\s\S]*grid-template-columns: 176px minmax\(0, 1fr\)/,
   );
   assert.match(
     styles,
-    /@media \(max-width: 820px\)[\s\S]*\.app-primary-nav \{[\s\S]*grid-template-columns: repeat\(2, 1fr\)/,
+    /@media \(max-width: 720px\)[\s\S]*\.app-primary-nav \{[\s\S]*grid-template-columns: repeat\(2, 1fr\)/,
   );
   assert.match(
     styles,
-    /@media \(max-width: 820px\)[\s\S]*\.app \{[\s\S]*grid-template-rows: minmax\(0, 1fr\) auto;[\s\S]*body\.session-active \.session-screen \{[\s\S]*height: 100%/,
+    /@media \(max-width: 720px\)[\s\S]*\.app \{[\s\S]*grid-template-rows: minmax\(0, 1fr\) auto;[\s\S]*body\.session-active \.session-screen \{[\s\S]*height: 100%/,
   );
 });
 

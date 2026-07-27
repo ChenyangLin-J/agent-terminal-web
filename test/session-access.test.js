@@ -41,9 +41,9 @@ test("Saved Sessions and direct resume defer to persisted access", async () => {
     readFile(new URL("../server.js", import.meta.url), "utf8"),
   ]);
 
-  assert.match(app, /resumeAccessMode\.value = session\.access === "full" \? "full" : "safe"/);
-  assert.match(app, /params\.has\("access"\)/);
-  assert.match(app, /params\.access === "safe" \? "safe" : ""/);
+  assert.match(app, /function openSavedSessionPreview\(session\)[\s\S]*access: session\.access === "full" \? "full" : "safe"/);
+  assert.match(app, /const access = params\.get\("access"\) === "safe" \? "safe" : "full"/);
+  assert.match(app, /activeAccessMode = params\.access === "safe" \? "safe" : "full"/);
   assert.match(server, /savedAgentSessionAccess\(sessionId, agentHost\) \|\| FULL_ACCESS_MODE/);
   assert.match(server, /savedSetting\.access \|\| persistedByCodexId\.get\(meta\.id\)\?\.access/);
   assert.match(server, /rememberAgentSessionAccess\(session\.sessionId, session\.access, session\.hostId\)/);

@@ -79,7 +79,7 @@ test("App Server resume restores structured history and keeps raw text available
   assert.doesNotMatch(styles, /\.app-server-session #prompt/);
   assert.doesNotMatch(styles, /\.app-server-session \.composer(?:\s|\{|:)/);
   assert.match(app, /statusEls\.project\.textContent = sessionLabel/);
-  assert.match(app, /activeTransport === "app-server" \? "App Server · " : "Terminal · "/);
+  assert.match(app, /activeTransport === "terminal" \? "Terminal · " : ""/);
   assert.match(styles, /\.app-server-session \.view-tabs \{[\s\S]*display: none/);
   assert.match(styles, /\.app-server-session \.turn-ledger \{[\s\S]*display: none !important/);
   assert.match(styles, /@keyframes app-activity-wave/);

@@ -18,10 +18,7 @@ const controlLiveCount = document.querySelector("#control-live-count");
 const controlSummaryButtons = document.querySelectorAll("[data-summary-filter]");
 const agentHostTabs = document.querySelector("#agent-host-tabs");
 const projectSelect = document.querySelector("#project");
-const launchModeSelect = document.querySelector("#launch-mode");
-const transportSelect = document.querySelector("#transport");
 const accessModeSelect = document.querySelector("#access-mode");
-const sessionIdInput = document.querySelector("#session-id");
 const connectButton = document.querySelector("#connect");
 const startThinkButton = document.querySelector("#start-think");
 const openMemoriesButton = document.querySelector("#open-memories");
@@ -39,13 +36,6 @@ const controlCenterHistorySections = document.querySelectorAll("[data-control-se
 const sessionSearchInput = document.querySelector("#session-search-input");
 const sessionSearchSubmit = document.querySelector("#session-search-submit");
 const sessionSearchResults = document.querySelector("#session-search-results");
-const resumeEngineDialog = document.querySelector("#resume-engine-dialog");
-const resumeSessionTitle = document.querySelector("#resume-session-title");
-const resumeAccessMode = document.querySelector("#resume-access-mode");
-const resumeAccessWarning = document.querySelector("#resume-access-warning");
-const resumeWithTerminal = document.querySelector("#resume-with-terminal");
-const resumeWithAppServer = document.querySelector("#resume-with-app-server");
-const resumeEngineCancel = document.querySelector("#resume-engine-cancel");
 const backButton = document.querySelector("#back");
 const searchCurrentSessionButton = document.querySelector("#search-current-session");
 const disconnectButton = document.querySelector("#disconnect");
@@ -285,7 +275,8 @@ let activeParentThreadTitle = "";
 let pendingAgentRequest = null;
 let lastSubmittedPrompt = "";
 let lastSubmittedAttachments = [];
-let pendingResumeSession = null;
+let activeSessionPreviewOnly = false;
+let pendingPreviewSubmission = null;
 let appTranscriptItems = [];
 let restoredAppTurnCount = 0;
 let restoredAppHistoryHasMore = false;
@@ -337,17 +328,20 @@ logoutButton.addEventListener("click", logout);
 restartAgentButton.addEventListener("click", restartAgentWeb);
 navControlCenterButton.addEventListener("click", showStartScreen);
 navCurrentSessionButton.addEventListener("click", () => {
-  if (!activeSessionId && !activeSessionParams.sessionId) return;
+  if (!activeSessionId && !activeSessionParams.sessionId && !activeSessionPreviewOnly) return;
   showSessionScreen();
-  syncSessionUrl({
-    id: activeSessionId,
-    project: activeSessionParams.cwd || ".",
-    sessionId: activeSessionParams.sessionId || "",
-    title: activeSessionParams.title || "",
-    transport: activeSessionParams.transport || activeTransport,
-    access: activeSessionParams.access || activeAccessMode,
-    purpose: activeSessionParams.purpose || "",
-  });
+  if (activeSessionPreviewOnly) syncPreviewSessionUrl();
+  else {
+    syncSessionUrl({
+      id: activeSessionId,
+      project: activeSessionParams.cwd || ".",
+      sessionId: activeSessionParams.sessionId || "",
+      title: activeSessionParams.title || "",
+      transport: activeSessionParams.transport || activeTransport,
+      access: activeSessionParams.access || activeAccessMode,
+      purpose: activeSessionParams.purpose || "",
+    });
+  }
 });
 openNewSessionButton.addEventListener("click", () => toggleNewSessionPanel(true));
 closeNewSessionButton.addEventListener("click", () => toggleNewSessionPanel(false));
@@ -365,7 +359,7 @@ for (const button of controlSummaryButtons) {
 controlCenterMenu.addEventListener("click", (event) => {
   if (event.target.closest("button")) controlCenterMenu.removeAttribute("open");
 });
-connectButton.addEventListener("click", () => startSession());
+connectButton.addEventListener("click", () => openNewSessionDraft());
 startThinkButton.addEventListener("click", startThinkSession);
 openMemoriesButton.addEventListener("click", openMemoryManager);
 refreshSessionsButton.addEventListener("click", refreshLists);
@@ -380,13 +374,6 @@ sessionSearchInput.addEventListener("input", () => {
   if (!sessionSearchInput.value.trim()) sessionSearchResults.classList.add("hidden");
   applyControlCenterFilter();
   syncControlCenterFilterReset();
-});
-resumeAccessMode.addEventListener("change", renderResumeAccessWarning);
-resumeWithTerminal.addEventListener("click", () => resumePendingSession("terminal"));
-resumeWithAppServer.addEventListener("click", () => resumePendingSession("app-server"));
-resumeEngineCancel.addEventListener("click", closeResumeEngineDialog);
-resumeEngineDialog.addEventListener("click", (event) => {
-  if (event.target === resumeEngineDialog) closeResumeEngineDialog();
 });
 backButton.addEventListener("click", showStartScreen);
 sessionSwitcherNewButton.addEventListener("click", () => {
@@ -420,8 +407,8 @@ keyDownButton.addEventListener("click", () => sendTerminalKey("\x1b[B"));
 keyEnterButton.addEventListener("click", () => sendTerminalKey("\r"));
 keyEscButton.addEventListener("click", () => sendTerminalKey("\x1b"));
 sendStatusButton.addEventListener("click", () => command("/status"));
-sendPermissionsButton.addEventListener("click", () => command("/permissions"));
-appSessionPermissionsButton.addEventListener("click", () => runAppCommand("/permissions"));
+sendPermissionsButton.addEventListener("click", openPermissionsPanel);
+appSessionPermissionsButton.addEventListener("click", openPermissionsPanel);
 appSessionMemoriesButton.addEventListener("click", openMemoryManager);
 appSessionAgentsButton.addEventListener("click", () => {
   closeAppSessionMoreMenu();
@@ -576,7 +563,7 @@ async function bootstrap() {
     if (globalThis.Notification?.permission === "granted") {
       void ensureAgentPushSubscription().catch(logPushRegistrationError);
     }
-    if (openInitialSessionFromUrl()) return;
+    if (await openInitialSessionFromUrl()) return;
     showStartScreen();
   } else {
     redirectToLogin(data.loginUrl);
@@ -807,13 +794,16 @@ async function searchSavedSessions() {
         return sessionCard({
           title: session.title || "Untitled session",
           subtitle: `${displayProject(session.project)} · ${formatTime(session.updatedAt)}${snippet ? ` · ${snippet}` : ""}`,
-          action: session.archived ? "已归档" : "Resume",
+          sessionId: session.id,
+          favorited: Boolean(session.favorited),
+          onFavoriteClick: () => setCodexSessionFavorite(session.id, !session.favorited),
+          action: session.archived ? "已归档" : "打开",
           onClick: () => {
             if (session.archived) {
               window.alert("这个 Session 已归档，请先在归档列表中恢复。");
               return;
             }
-            openResumeEngineDialog(session);
+            openSavedSessionPreview(session);
           },
         });
       }),
@@ -884,9 +874,7 @@ function renderLiveSessions(sessions) {
               ? "处理"
               : group.kind === "running" || group.kind === "unread"
                 ? "查看"
-                : group.kind === "released"
-                  ? "恢复"
-                  : "打开",
+                : "打开",
           onClick: () => openSessionFromList(liveSessionOpenParams(session)),
         }),
       );
@@ -979,16 +967,17 @@ function liveSessionMeta(session, presentation = liveSessionPresentation(session
 }
 
 function liveSessionOpenParams(session) {
-  const hostId = session.hostId || activeAgentHostId;
+  const previewOnly = Boolean(session.released || session.suspended);
   return {
-    host: hostId,
-    attach: session.id,
+    host: session.hostId || activeAgentHostId,
+    attach: previewOnly ? "" : session.id,
     cwd: session.project || ".",
     sessionId: session.sessionId || "",
     title: session.title || "New Codex session",
-    transport: hostId === "personal" ? session.transport || "terminal" : "app-server",
+    transport: "app-server",
     access: session.access || "safe",
     purpose: session.purpose || "",
+    preview: previewOnly ? "1" : "",
   };
 }
 
@@ -1015,8 +1004,8 @@ function renderSavedCodexSessions(sessions) {
         sessionId: session.id,
         favorited: Boolean(session.favorited),
         onFavoriteClick: () => setCodexSessionFavorite(session.id, !session.favorited),
-        action: "恢复",
-        onClick: () => openResumeEngineDialog(session),
+        action: "打开",
+        onClick: () => openSavedSessionPreview(session),
         secondaryAction: "重命名",
         onSecondaryClick: () => renameCodexSession(session),
         tertiaryAction: "归档",
@@ -1099,9 +1088,7 @@ function renderFavoriteSessions() {
             ? "处理"
             : ["running", "unread"].includes(presentation.kind)
               ? "查看"
-              : presentation.kind === "released"
-                ? "恢复"
-                : "打开",
+              : "打开",
         onClick: () => openSessionFromList(liveSessionOpenParams(session)),
       }),
     );
@@ -1117,8 +1104,8 @@ function renderFavoriteSessions() {
         sessionId: session.id,
         favorited: true,
         onFavoriteClick: () => setCodexSessionFavorite(session.id, false),
-        action: "恢复",
-        onClick: () => openFavoriteSavedSession(session),
+        action: "打开",
+        onClick: () => openSavedSessionPreview(session),
       }),
     );
   }
@@ -1126,14 +1113,6 @@ function renderFavoriteSessions() {
   const count = liveFavorites.length + savedFavorites.length;
   favoriteSessionsCount.textContent = `${count} 个置顶`;
   favoriteSessionsSection.classList.toggle("hidden", count === 0);
-}
-
-function openFavoriteSavedSession(session) {
-  if (typeof openSavedSessionPreview === "function") {
-    openSavedSessionPreview(session);
-    return;
-  }
-  openResumeEngineDialog(session);
 }
 
 function toggleNewSessionPanel(open) {
@@ -1310,40 +1289,20 @@ function openSessionInCurrentPage(params) {
   activeAgentHostId = cleanAgentHostId(scopedParams.host) || activeAgentHostId;
   renderAgentHostTabs();
   window.history.pushState(null, "", sessionUrl(scopedParams));
-  openSocket(scopedParams);
+  if (scopedParams.preview === "1") openSessionPreview(scopedParams);
+  else openSocket(scopedParams);
 }
 
-function openResumeEngineDialog(session) {
-  pendingResumeSession = session;
-  resumeSessionTitle.textContent = session.title || "Untitled session";
-  resumeAccessMode.value = session.access === "full" ? "full" : "safe";
-  renderResumeAccessWarning();
-  resumeEngineDialog.showModal();
-}
-
-function closeResumeEngineDialog() {
-  pendingResumeSession = null;
-  if (resumeEngineDialog.open) resumeEngineDialog.close();
-}
-
-function renderResumeAccessWarning() {
-  resumeAccessWarning.classList.toggle("hidden", resumeAccessMode.value !== "full");
-}
-
-function resumePendingSession(transport) {
-  const session = pendingResumeSession;
-  if (!session) return;
+function openSavedSessionPreview(session) {
   const hostId = session.hostId || activeAgentHostId;
-  const access = resumeAccessMode.value === "full" ? "full" : "safe";
-  pendingResumeSession = null;
-  resumeEngineDialog.close();
   openSessionFromList({
     host: hostId,
     cwd: projectForSession(session),
     sessionId: session.id,
     title: session.title || "Untitled session",
-    transport: hostId === "personal" ? transport : "app-server",
-    access,
+    transport: "app-server",
+    access: session.access === "full" ? "full" : "safe",
+    preview: hostId === "personal" ? "1" : "",
   });
 }
 
@@ -1565,15 +1524,19 @@ async function saveCurrentSessionRename() {
     statusEls.project.textContent = savedTitle;
     statusEls.project.title = savedTitle;
     setDocumentTitle(savedTitle);
-    syncSessionUrl({
-      id: activeSessionId,
-      project: activeSessionParams.cwd || ".",
-      sessionId,
-      title: savedTitle,
-      transport: activeSessionParams.transport || activeTransport,
-      access: activeSessionParams.access || activeAccessMode,
-      purpose: activeSessionParams.purpose || "",
-    });
+    if (activeSessionPreviewOnly) {
+      syncPreviewSessionUrl();
+    } else {
+      syncSessionUrl({
+        id: activeSessionId,
+        project: activeSessionParams.cwd || ".",
+        sessionId,
+        title: savedTitle,
+        transport: activeSessionParams.transport || activeTransport,
+        access: activeSessionParams.access || activeAccessMode,
+        purpose: activeSessionParams.purpose || "",
+      });
+    }
     finishCurrentSessionRename();
     setUploadStatus(`Session 已重命名为“${savedTitle}”。`, { clear: true });
   } catch (error) {
@@ -1725,37 +1688,45 @@ function empty(text) {
 }
 
 function startSession(overrides = {}) {
-  const hasSessionIdOverride = Object.prototype.hasOwnProperty.call(overrides, "sessionId");
-  const sessionId = hasSessionIdOverride ? String(overrides.sessionId || "").trim() : sessionIdInput.value.trim();
-  const hostId = overrides.host || activeAgentHostId;
+  const sessionId = String(overrides.sessionId || "").trim();
   const params = {
-    host: hostId,
-    cwd: overrides.cwd || projectSelect.value,
-    mode: overrides.mode || (sessionId ? "new" : launchModeSelect.value),
+    host: overrides.host || activeSessionParams.host || activeAgentHostId,
+    cwd: overrides.cwd || projectSelect.value || ".",
+    mode: overrides.mode || (sessionId ? "resume-id" : "new"),
     sessionId,
-    transport: hostId === "personal" ? overrides.transport || transportSelect.value || DEFAULT_TRANSPORT : "app-server",
+    transport: DEFAULT_TRANSPORT,
     purpose: overrides.purpose === "think" ? "think" : "",
+    access: overrides.access === "safe" ? "safe" : "full",
+    title: overrides.title || "",
   };
-  const access = overrides.access || (!sessionId ? accessModeSelect.value || DEFAULT_ACCESS_MODE : "");
-  if (access) params.access = access;
   openSocket(params);
 }
 
-function startThinkSession() {
-  startSession({
-    cwd: ".",
+function openNewSessionDraft(overrides = {}) {
+  toggleNewSessionPanel(false);
+  openSessionInCurrentPage({
+    host: activeAgentHostId,
+    cwd: overrides.cwd || projectSelect.value || ".",
     mode: "new",
     sessionId: "",
-    transport: transportSelect.value || DEFAULT_TRANSPORT,
+    title: overrides.title || "New Session",
+    transport: DEFAULT_TRANSPORT,
+    access: overrides.access === "safe" ? "safe" : accessModeSelect.value || DEFAULT_ACCESS_MODE,
+    purpose: overrides.purpose === "think" ? "think" : "",
+    preview: "1",
+    new: "1",
+  });
+}
+
+function startThinkSession() {
+  openNewSessionDraft({
+    cwd: ".",
     access: accessModeSelect.value || DEFAULT_ACCESS_MODE,
     purpose: "think",
   });
 }
 
 function syncStartSelectionsFromUrl(params) {
-  if (params.has("transport")) {
-    transportSelect.value = params.get("transport") === "app-server" ? "app-server" : "terminal";
-  }
   if (params.has("access")) {
     accessModeSelect.value = params.get("access") === "full" ? "full" : "safe";
   }
@@ -1765,50 +1736,57 @@ function attachSession(id, extra = {}) {
   openSocket({ attach: id, ...extra });
 }
 
-function openInitialSessionFromUrl() {
+async function openInitialSessionFromUrl() {
   const params = new URLSearchParams(window.location.search);
   const attach = params.get("attach") || "";
   const sessionId = params.get("sessionId") || "";
   const title = params.get("title") || "";
   const startNew = params.get("new") === "1";
+  const previewOnly = params.get("preview") === "1";
+  const access = params.get("access") === "safe" ? "safe" : "full";
+  const purpose = params.get("purpose") === "think" ? "think" : "";
   const host = cleanAgentHostId(params.get("host")) || activeAgentHostId;
   activeAgentHostId = host;
-  const transport = host !== "personal"
-    ? "app-server"
-    : params.has("transport")
-    ? params.get("transport") === "terminal"
-      ? "terminal"
-      : "app-server"
-    : DEFAULT_TRANSPORT;
-  const access = params.has("access") ? (params.get("access") === "full" ? "full" : "safe") : "";
-  const purpose = params.get("purpose") === "think" ? "think" : "";
   syncStartSelectionsFromUrl(params);
   const launch = {
     host,
     cwd: params.get("cwd") || ".",
     sessionId,
-    transport,
+    title,
+    transport: DEFAULT_TRANSPORT,
+    access,
     purpose,
   };
-  if (access) launch.access = access;
 
   if (title) setDocumentTitle(title);
 
+  if (previewOnly) {
+    openSessionPreview({ ...launch, preview: "1", new: startNew ? "1" : "" });
+    return true;
+  }
+
   if (attach) {
+    try {
+      const data = await apiJson("/api/sessions");
+      const live = Array.isArray(data?.sessions) ? data.sessions.find((session) => session.id === attach) : null;
+      if (!live || live.released || live.suspended || live.exited) {
+        if (sessionId) {
+          openSessionPreview({ ...launch, preview: "1" });
+          return true;
+        }
+      }
+    } catch {}
     attachSession(attach, launch);
     return true;
   }
 
   if (sessionId) {
-    startSession(launch);
+    openSessionPreview({ ...launch, preview: "1" });
     return true;
   }
 
   if (startNew) {
-    startSession({
-      ...launch,
-      mode: "new",
-    });
+    openSessionPreview({ ...launch, mode: "new", preview: "1", new: "1" });
     return true;
   }
 
@@ -1836,6 +1814,79 @@ function sessionUrl(params) {
   return url.toString();
 }
 
+function openSessionPreview(params = {}) {
+  saveActiveSessionSnapshot();
+  saveAppReadingPosition();
+  closeSocket();
+  activeSessionPreviewOnly = true;
+  pendingPreviewSubmission = null;
+  setUploadStatus("");
+  activeTransport = DEFAULT_TRANSPORT;
+  activeAccessMode = params.access === "safe" ? "safe" : "full";
+  activeSessionParams = {
+    host: params.host || activeAgentHostId,
+    attach: "",
+    cwd: params.cwd || ".",
+    mode: params.mode || (params.sessionId ? "resume-id" : "new"),
+    sessionId: String(params.sessionId || "").trim(),
+    title: params.title || (params.sessionId ? "Untitled session" : "New Session"),
+    transport: DEFAULT_TRANSPORT,
+    access: activeAccessMode,
+    purpose: params.purpose === "think" ? "think" : "",
+    preview: "1",
+    new: params.sessionId ? "" : "1",
+  };
+  activeSessionId = "";
+  currentSessionExited = false;
+  historySyncPending = false;
+  activeSessionReady = false;
+  activeStartupQueueSupported = false;
+  activeTurnInterruptSupported = false;
+  activeSessionCapabilities = {};
+  activeForkedFromId = "";
+  activeForkedFromTitle = "";
+  activeParentThreadId = "";
+  activeParentThreadTitle = "";
+  activeMemoryProjectMode = "auto";
+  activeMemoryProjects = [];
+  activeMemoryProjectSource = "global";
+  appTranscriptItems = [];
+  restoredAppTurnCount = 0;
+  restoredAppHistoryHasMore = false;
+  restoredAppHistoryLoading = false;
+  appTranscriptInitialRestorePending = true;
+  appTranscriptHasUnseenContent = false;
+  appTranscriptSubmitFollowActive = false;
+  lastMarkedViewedTurnId = "";
+  markViewedRequestPending = false;
+  pendingAppReadingRestore = null;
+  pendingEditFork = null;
+  appTranscriptSource = "";
+  cachedSessionPreview = null;
+  appSkills = [];
+  appSkillsRequested = false;
+  sessionPreviewRequestSequence += 1;
+  openAppProcessGroups.clear();
+  historicalProcessLoads.clear();
+  clearAgentRequest();
+  renderTurnState({});
+  renderEditForkBanner();
+  syncAppTranscriptLatestButton();
+  document.body.classList.add("app-server-session");
+  updateSessionViewLabels();
+  const title = activeSessionParams.title;
+  statusEls.project.textContent = title;
+  statusEls.project.title = title;
+  setDocumentTitle(title);
+  renderAppTranscript();
+  showSessionScreen();
+  setConnectedState("preview");
+  syncPreviewSessionUrl();
+  if (activeSessionParams.sessionId && activeAgentHostId === "personal") {
+    void loadSessionPreview(activeSessionParams.sessionId, sessionPreviewRequestSequence);
+  }
+}
+
 function openSocket(params, options = {}) {
   const isReconnect = Boolean(options.reconnect);
   activeAgentHostId = cleanAgentHostId(params.host) || activeAgentHostId;
@@ -1845,9 +1896,10 @@ function openSocket(params, options = {}) {
   saveActiveSessionSnapshot();
   saveAppReadingPosition();
   closeSocket();
+  activeSessionPreviewOnly = false;
   ensureTerminal();
   activeTransport = params.transport === "app-server" ? "app-server" : "terminal";
-  activeSessionParams = { ...activeSessionParams, ...params };
+  activeSessionParams = { ...activeSessionParams, ...params, preview: "", new: "" };
   const hasSnapshot = !isReconnect && hasSessionSnapshot(snapshotKey);
   const shouldReplay = options.replay !== false;
   const resumesTerminalHistory =
@@ -2065,6 +2117,13 @@ function openSocket(params, options = {}) {
     stopClientHeartbeat();
     if (socket === event.currentTarget) socket = null;
     if (event.currentTarget.intentionalClose) return;
+    if (pendingPreviewSubmission) {
+      const previewParams = { ...activeSessionParams, preview: "1" };
+      pendingPreviewSubmission = null;
+      openSessionPreview(previewParams);
+      setUploadStatus("连接失败，消息和附件已保留，可以直接重试。");
+      return;
+    }
     logClientEvent("ws-close", { closeCode: event.code, wasClean: event.wasClean });
     if (document.visibilityState !== "visible") {
       setConnectedState("detached");
@@ -2119,6 +2178,23 @@ async function submitPrompt(deliveryMode = "auto") {
           notificationApp: notificationTarget.app,
           notificationDeviceId: pushDeviceId,
         };
+    if (activeSessionPreviewOnly) {
+      if (pendingPreviewSubmission) {
+        setUploadStatus("上一条消息正在等待 Session 恢复，请稍候。");
+        return;
+      }
+      pendingPreviewSubmission = { message, prompt, attachments };
+      setUploadStatus(activeSessionParams.sessionId ? "正在恢复 Session，消息会自动发送…" : "正在创建 Session…");
+      startSession({
+        cwd: activeSessionParams.cwd || ".",
+        mode: activeSessionParams.sessionId ? "resume-id" : "new",
+        sessionId: activeSessionParams.sessionId || "",
+        title: activeSessionParams.title || "",
+        access: activeAccessMode,
+        purpose: activeSessionParams.purpose || "",
+      });
+      return;
+    }
     if (send(message)) {
       lastSubmittedPrompt = prompt;
       lastSubmittedAttachments = attachments;
@@ -2133,6 +2209,20 @@ async function submitPrompt(deliveryMode = "auto") {
   } finally {
     promptSubmissionPending = false;
   }
+}
+
+function flushPendingPreviewSubmission() {
+  const pending = pendingPreviewSubmission;
+  if (!pending || !socket || socket.readyState !== WebSocket.OPEN) return;
+  if (!send(pending.message)) return;
+  pendingPreviewSubmission = null;
+  lastSubmittedPrompt = pending.prompt;
+  lastSubmittedAttachments = pending.attachments;
+  startAppTranscriptSubmitFollow();
+  promptInput.value = "";
+  uploadController.clearAttachments();
+  hideComposerSuggestions();
+  setUploadStatus("Session 正在恢复，消息已排队…");
 }
 
 function handleControlAck(payload = {}) {
@@ -2288,12 +2378,30 @@ function runAppCommand(value) {
     openMemoryManager();
     return;
   }
+  if (commandName === "/permissions") {
+    openPermissionsPanel();
+    return;
+  }
+  if (activeSessionPreviewOnly) {
+    if (commandName === "/status") {
+      showAppCommandDialog({
+        title: "Session status",
+        rows: [
+          ["State", activeSessionParams.sessionId ? "仅查看，尚未恢复" : "尚未创建"],
+          ["Project", displayProject(activeSessionParams.cwd || ".")],
+          ["Permissions", appAccessLabel(activeAccessMode)],
+        ],
+        note: "发送第一条消息后再连接 Session。",
+      });
+      return;
+    }
+    setUploadStatus("发送第一条消息并恢复 Session 后，才能使用这个命令。", { clear: true });
+    return;
+  }
   if (commandName === "/status") {
-    showAppCommandDialog({ title: "Session status", content: "正在读取真实 App Server 状态…" });
+    showAppCommandDialog({ title: "Session status", content: "正在读取 Session 状态…" });
   } else if (commandName === "/usage") {
     showAppCommandDialog({ title: "Account usage", content: "正在读取额度和 Token 活动…" });
-  } else if (commandName === "/permissions") {
-    showAppCommandDialog({ title: "Permissions", content: "正在读取当前权限…" });
   } else if (commandName === "/skills") {
     if (!appSkills.length) showAppCommandDialog({ title: "Skills", content: "正在读取可用 Skills…" });
   } else {
@@ -2370,7 +2478,7 @@ function renderAppCommandResult(payload = {}) {
     return;
   }
   if (payload.kind === "notice") {
-    showAppCommandDialog({ title: payload.title || "App Server", content: payload.content || "已完成。" });
+    showAppCommandDialog({ title: payload.title || "Session", content: payload.content || "已完成。" });
     return;
   }
   if (payload.kind === "text") {
@@ -2389,7 +2497,6 @@ function renderAppCommandResult(payload = {}) {
     ["Session", payload.title || "未命名"],
     ["Session ID", payload.sessionId || "尚未建立"],
     ["Codex", payload.cliVersion ? `v${payload.cliVersion}` : "未知"],
-    ["Engine", payload.engine || "App Server"],
     ["Model", [payload.model, payload.reasoningEffort].filter(Boolean).join(" · ")],
     ["Provider", payload.modelProvider || "default"],
     ["Service tier", payload.serviceTier === "priority" ? "Fast" : payload.serviceTier || "default"],
@@ -2504,6 +2611,7 @@ function createAgentCard(agent) {
       title: agent.name || agent.nickname || "子 Agent",
       transport: "app-server",
       access: activeAccessMode,
+      preview: "1",
     }),
   );
   actions.append(open);
@@ -2595,6 +2703,7 @@ function appendThreadTreeNodes(host, children, parentId, visited) {
           title: node.name,
           transport: "app-server",
           access: activeAccessMode,
+          preview: "1",
         }),
       );
     }
@@ -2682,7 +2791,7 @@ function renderSideChatError(payload = {}) {
 
 function openThreadSearch() {
   if (activeTransport !== "app-server" || !activeSessionId) {
-    setUploadStatus("当前搜索只支持 App Server Session。", { clear: true });
+    setUploadStatus("发送消息、连接 Session 后再搜索。", { clear: true });
     return;
   }
   threadSearchResults.replaceChildren();
@@ -2859,7 +2968,11 @@ async function copyLatestAppAnswer() {
 }
 
 function renderAppPermissions(payload = {}) {
-  const activeNote = payload.activeTurn ? "当前任务已经开始；新权限会从下一轮任务生效。" : "新权限会从下一轮任务生效。";
+  const activeNote = activeSessionPreviewOnly
+    ? "发送第一条消息时会使用这里选择的权限。"
+    : payload.activeTurn
+      ? "当前任务已经开始；新权限会从下一轮任务生效。"
+      : "新权限会从下一轮任务生效。";
   showAppCommandDialog({
     title: "Permissions",
     rows: [
@@ -2883,7 +2996,24 @@ function renderAppPermissions(payload = {}) {
   });
 }
 
+function openPermissionsPanel() {
+  renderAppPermissions({
+    access: activeAccessMode,
+    activeTurn: latestTurnState.active,
+  });
+}
+
 function setAppAccess(access) {
+  if (activeSessionPreviewOnly) {
+    activeAccessMode = access === "safe" ? "safe" : "full";
+    activeSessionParams.access = activeAccessMode;
+    accessModeSelect.value = activeAccessMode;
+    syncAppSessionToolbar();
+    syncPreviewSessionUrl();
+    appCommandDialog.close();
+    setUploadStatus(`发送时将使用${appAccessLabel(activeAccessMode)}。`, { clear: true });
+    return;
+  }
   if (!send({ type: "set-access", access })) return;
   appCommandDialog.close();
   setUploadStatus(`正在切换为${appAccessLabel(access)}…`);
@@ -2898,7 +3028,7 @@ function showAppCommandDialog({
   actions = [],
   preformatted = false,
 }) {
-  appCommandEyebrow.textContent = "App Server";
+  appCommandEyebrow.textContent = "Session";
   appCommandTitle.textContent = title;
   const fragment = document.createDocumentFragment();
   if (content) {
@@ -3174,6 +3304,11 @@ function shortSessionMemoryProject(value) {
 }
 
 function appSessionTaskStateValue() {
+  if (activeSessionPreviewOnly) {
+    return activeSessionParams.sessionId
+      ? { value: "preview", label: "发送时恢复" }
+      : { value: "preview", label: "待发送" };
+  }
   if (!activeSessionReady) return { value: "connecting", label: "连接中" };
   if (latestTurnState.interrupted) return { value: "interrupted", label: "已中断" };
   if (latestTurnState.stopping || interruptRequestPending) return { value: "stopping", label: "正在停止" };
@@ -3273,6 +3408,8 @@ function detach(goHome = true) {
   saveActiveSessionSnapshot();
   closeSocket();
   if (goHome) {
+    activeSessionPreviewOnly = false;
+    pendingPreviewSubmission = null;
     activeSessionId = "";
     activeSessionParams = {};
     showStartScreen();
@@ -3720,6 +3857,7 @@ function sendResize() {
 }
 
 function renderStatus(status) {
+  activeSessionPreviewOnly = false;
   activeAgentHostId = cleanAgentHostId(status.hostId) || activeAgentHostId;
   renderAgentHostTabs();
   activeSessionId = status.id || activeSessionId;
@@ -3780,6 +3918,7 @@ function renderStatus(status) {
     updateComposerSuggestions();
   }
   syncSessionUrl(status);
+  if (!status.exited) flushPendingPreviewSubmission();
 }
 
 function renderTurnState(value = {}) {
@@ -3840,8 +3979,9 @@ function setConnectedState(state) {
     loading: "已连接 · 恢复最新记录中",
     detached: "已离开",
     exited: "已停止",
+    preview: activeSessionParams.sessionId ? "仅查看 · 发送时恢复" : "发送第一条消息时创建",
   };
-  const transport = activeTransport === "app-server" ? "App Server · " : "Terminal · ";
+  const transport = activeTransport === "terminal" ? "Terminal · " : "";
   const access = activeTransport === "terminal" && activeAccessMode ? ` · ${appAccessLabel(activeAccessMode)}` : "";
   const stateLabel = connectionStates[state] || state;
   statusEls.connection.textContent = `${transport}${stateLabel}${access}`;
@@ -3855,8 +3995,9 @@ function setConnectedState(state) {
     ["starting", "loading", "connected"].includes(state) &&
     socket?.readyState === WebSocket.OPEN;
   const connected = ((state === "connected" || terminalCanAcceptInput) && activeSessionReady) || appServerCanQueueStartup;
-  sendPromptButton.disabled = !connected;
-  queuePromptButton.disabled = !connected;
+  const canCompose = connected || activeSessionPreviewOnly;
+  sendPromptButton.disabled = !canCompose;
+  queuePromptButton.disabled = !connected || activeSessionPreviewOnly;
   textTabButton.disabled = !connected;
   pageUpButton.disabled = !connected;
   pageDownButton.disabled = !connected;
@@ -3865,8 +4006,8 @@ function setConnectedState(state) {
   keyEnterButton.disabled = !connected;
   keyEscButton.disabled = !connected;
   sendStatusButton.disabled = !connected;
-  sendPermissionsButton.disabled = !connected;
-  appSessionPermissionsButton.disabled = activeTransport !== "app-server" || !connected;
+  sendPermissionsButton.disabled = !canCompose;
+  appSessionPermissionsButton.disabled = activeTransport !== "app-server" || !canCompose;
   appSessionAgentsButton.disabled =
     activeTransport !== "app-server" || !connected || !activeSessionCapabilities.subagents;
   appSessionTreeButton.disabled =
@@ -3878,7 +4019,22 @@ function setConnectedState(state) {
   );
   searchCurrentSessionButton.disabled = activeTransport !== "app-server" || !connected;
   mobileSearchCurrentSessionButton.disabled = activeTransport !== "app-server" || !connected;
-  const canManageSession = ["connected", "starting", "loading"].includes(state);
+  for (const control of [
+    disconnectButton,
+    mobileDisconnectButton,
+    searchCurrentSessionButton,
+    mobileSearchCurrentSessionButton,
+    archiveSessionButton,
+    mobileArchiveSessionButton,
+    restartSessionButton,
+    mobileRestartSessionButton,
+    killSessionButton,
+    mobileKillSessionButton,
+  ]) {
+    control.classList.toggle("hidden", activeSessionPreviewOnly);
+  }
+  sessionMenu.classList.toggle("hidden", activeSessionPreviewOnly);
+  const canManageSession = !activeSessionPreviewOnly && ["connected", "starting", "loading"].includes(state);
   syncSessionTitleControl();
   setArchiveSessionDisabled(!activeSessionParams.sessionId || !canManageSession);
   setRestartSessionDisabled(!activeSessionId || !activeSessionParams.sessionId || !canManageSession);
@@ -3928,7 +4084,7 @@ function syncPrimaryNavigation(screen) {
   navControlCenterButton.toggleAttribute("aria-current", onControlCenter);
   navCurrentSessionButton.classList.toggle("active", !onControlCenter);
   navCurrentSessionButton.toggleAttribute("aria-current", !onControlCenter);
-  navCurrentSessionButton.disabled = !activeSessionId && !activeSessionParams.sessionId;
+  navCurrentSessionButton.disabled = !activeSessionId && !activeSessionParams.sessionId && !activeSessionPreviewOnly;
   renderSessionSwitcher();
 }
 
@@ -3959,6 +4115,26 @@ function syncSessionUrl(status) {
   if (status.transport === "app-server") url.searchParams.set("transport", "app-server");
   if (status.access === "full") url.searchParams.set("access", "full");
   if (status.purpose === "think") url.searchParams.set("purpose", "think");
+  appendNotificationTarget(url);
+  window.history.replaceState(null, "", url.toString());
+}
+
+function syncPreviewSessionUrl() {
+  if (!activeSessionPreviewOnly || sessionScreen.classList.contains("hidden")) return;
+  const url = new URL(window.location.href);
+  url.search = "";
+  if (activeAgentHostId !== "personal") url.searchParams.set("host", activeAgentHostId);
+  url.searchParams.set("preview", "1");
+  url.searchParams.set("cwd", activeSessionParams.cwd || ".");
+  if (activeSessionParams.sessionId) {
+    url.searchParams.set("sessionId", activeSessionParams.sessionId);
+  } else {
+    url.searchParams.set("new", "1");
+  }
+  if (activeSessionParams.title) url.searchParams.set("title", activeSessionParams.title);
+  if (activeAccessMode === "full") url.searchParams.set("access", "full");
+  else url.searchParams.set("access", "safe");
+  if (activeSessionParams.purpose === "think") url.searchParams.set("purpose", "think");
   appendNotificationTarget(url);
   window.history.replaceState(null, "", url.toString());
 }
@@ -4347,7 +4523,7 @@ function updateSessionViewLabels() {
   terminalTabButton.textContent = isAppServer ? "对话" : "Terminal";
   textTabButton.textContent = isAppServer ? "原始" : "Text";
   terminalTabButton.setAttribute("aria-label", isAppServer ? "查看整理后的对话" : "查看终端");
-  textTabButton.setAttribute("aria-label", isAppServer ? "查看 App Server 原始文本" : "查看纯文本");
+  textTabButton.setAttribute("aria-label", isAppServer ? "查看 Session 原始文本" : "查看纯文本");
 }
 
 function syncPrimarySessionView() {
@@ -4517,6 +4693,7 @@ function renderAppTranscript({ follow = false } = {}) {
         title: activeForkedFromTitle || "原 Session",
         transport: "app-server",
         access: activeAccessMode,
+        preview: "1",
       });
     });
     branch.append(copy, openSource);
@@ -4538,6 +4715,7 @@ function renderAppTranscript({ follow = false } = {}) {
         title: activeParentThreadTitle || "主 Agent",
         transport: "app-server",
         access: activeAccessMode,
+        preview: "1",
       });
     });
     parent.append(copy, openParent);
@@ -4555,7 +4733,7 @@ function renderAppTranscript({ follow = false } = {}) {
     banner.append(title);
     if (appTranscriptSource === "disk") {
       const note = document.createElement("span");
-      note.textContent = "App Server 正在后台连接";
+      note.textContent = activeSessionPreviewOnly ? "仅查看 · 发送消息时恢复" : "正在连接 Session";
       banner.append(note);
     } else if (restoredAppHistoryHasMore) {
       const loadEarlier = document.createElement("button");
@@ -4586,7 +4764,11 @@ function renderAppTranscript({ follow = false } = {}) {
     const title = document.createElement("strong");
     title.textContent = "上次完成";
     const note = document.createElement("span");
-    note.textContent = activeSessionReady ? "最近记录已恢复" : "完整会话正在后台连接";
+    note.textContent = activeSessionPreviewOnly
+      ? "仅查看 · 发送消息时恢复"
+      : activeSessionReady
+        ? "最近记录已恢复"
+        : "正在连接 Session";
     banner.append(title, note);
     fragment.append(banner);
     if (cachedSessionPreview.prompt) {
@@ -4629,9 +4811,21 @@ function renderAppTranscript({ follow = false } = {}) {
     const emptyState = document.createElement("div");
     emptyState.className = "app-transcript-empty";
     const title = document.createElement("strong");
-    title.textContent = activeSessionReady ? "还没有对话" : "正在恢复会话…";
+    title.textContent = activeSessionPreviewOnly
+      ? activeSessionParams.sessionId
+        ? "还没有可显示的记录"
+        : "新 Session"
+      : activeSessionReady
+        ? "还没有对话"
+        : "正在恢复会话…";
     const note = document.createElement("span");
-    note.textContent = activeSessionReady ? "在下面输入内容，第一条消息会显示在这里。" : "历史内容准备好后会自动显示。";
+    note.textContent = activeSessionPreviewOnly
+      ? activeSessionParams.sessionId
+        ? "发送消息时会恢复这个 Session。"
+        : "输入第一条消息后再创建 Session。"
+      : activeSessionReady
+        ? "在下面输入内容，第一条消息会显示在这里。"
+        : "历史内容准备好后会自动显示。";
     emptyState.append(title, note);
     fragment.append(emptyState);
   } else {
@@ -5103,6 +5297,7 @@ function createAppTranscriptCard(item) {
         title: item.agentPath || "子 Agent",
         transport: "app-server",
         access: activeAccessMode,
+        preview: "1",
       });
     });
     card.append(openAgent);
@@ -5166,11 +5361,15 @@ function renderEditForkBanner() {
   editForkBanner.classList.toggle("hidden", !pendingEditFork);
   composer.classList.toggle("editing-history", Boolean(pendingEditFork));
   syncEditForkSourceHighlight();
-  sendPromptButton.textContent = pendingEditFork
-    ? "提交编辑"
-    : latestTurnState.active
-      ? "追加当前"
-      : "新任务";
+  sendPromptButton.textContent = activeSessionPreviewOnly
+    ? activeSessionParams.sessionId
+      ? "发送并恢复"
+      : "发送并创建"
+    : pendingEditFork
+      ? "提交编辑"
+      : latestTurnState.active
+        ? "追加当前"
+        : "新任务";
   queuePromptButton.classList.toggle("hidden", Boolean(pendingEditFork) || !latestTurnState.active);
 }
 
@@ -5207,6 +5406,7 @@ async function forkFromTurn(item) {
       title: payload.title || "Codex 分支",
       transport: "app-server",
       access: payload.access || activeAccessMode,
+      preview: "1",
     });
     if (target) {
       target.location.replace(url);
@@ -5220,6 +5420,7 @@ async function forkFromTurn(item) {
           title: payload.title || "Codex 分支",
           transport: "app-server",
           access: payload.access || activeAccessMode,
+          preview: "1",
         }),
       });
     }
@@ -5677,13 +5878,6 @@ function redirectToLogin(loginUrl = "") {
     loginUrl || `https://auth.chenyanglin.com/login?next=${encodeURIComponent(window.location.href)}`;
 }
 
-function formatLaunch(status) {
-  const transport = status.transport === "app-server" ? "App Server · " : "Terminal · ";
-  if (status.sessionId) return `${transport}恢复`;
-  if (status.mode === "resume-last") return `${transport}恢复最近`;
-  return `${transport}新建`;
-}
-
 function formatTime(value) {
   if (!value) return "-";
   return agentDateTimeFormatter.format(new Date(value));
@@ -5710,7 +5904,7 @@ function clearSessionUrl() {
   if (!window.location.search) return;
 
   const url = new URL(window.location.href);
-  for (const key of ["attach", "cwd", "sessionId", "title", "purpose"]) {
+  for (const key of ["attach", "cwd", "sessionId", "title", "purpose", "preview", "new", "transport", "access"]) {
     url.searchParams.delete(key);
   }
   if (url.toString() !== window.location.href) {

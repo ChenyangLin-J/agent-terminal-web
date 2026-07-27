@@ -315,21 +315,6 @@ input {
   font-size: 14px;
 }
 
-.resume-engine-dialog {
-  width: min(440px, calc(100vw - 28px));
-  padding: 0;
-  border: 1px solid #353c4c;
-  border-radius: 16px;
-  color: #f4f6fb;
-  background: #11151d;
-  box-shadow: 0 24px 80px rgb(0 0 0 / 55%);
-}
-
-.resume-engine-dialog::backdrop {
-  background: rgb(3 6 12 / 72%);
-  backdrop-filter: blur(4px);
-}
-
 .app-command-dialog {
   width: min(520px, calc(100vw - 28px));
   max-height: min(720px, calc(100dvh - 28px));
@@ -830,95 +815,12 @@ input {
   grid-template-columns: minmax(0, 1fr) auto auto;
 }
 
-.resume-engine-dialog form {
-  display: grid;
-  gap: 16px;
-  padding: 18px;
-}
-
-.resume-engine-dialog header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.resume-engine-dialog header span {
-  color: #8994a8;
-  font-size: 12px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.resume-engine-dialog h2 {
-  margin: 3px 0 0;
-  font-size: 20px;
-}
-
-.resume-engine-dialog .dialog-close {
-  min-width: 38px;
-  min-height: 38px;
-  padding: 0;
-  font-size: 24px;
-  line-height: 1;
-}
-
-.resume-session-title {
-  overflow: hidden;
-  color: #dfe5f1;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.resume-access-field {
-  gap: 7px;
-}
-
-.resume-access-warning {
-  margin: -7px 0 0;
-  padding: 10px;
-  border: 1px solid #74552c;
-  border-radius: 9px;
-  color: #e9c98f;
-  background: #211a11;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.resume-engine-options {
-  display: grid;
-  gap: 9px;
-}
-
-.resume-engine-options .engine-choice {
-  display: grid;
-  height: auto;
-  min-height: 64px;
-  padding: 11px 13px;
-  text-align: left;
-}
-
-.engine-choice strong,
-.engine-choice span {
-  display: block;
-}
-
-.engine-choice span {
-  margin-top: 4px;
-  color: #aeb7c8;
-  font-size: 12px;
-}
-
-.engine-choice.primary span {
-  color: #e1e7ff;
-}
-
 @media (max-width: 520px) {
-  .resume-engine-dialog,
   .app-command-dialog,
   .feature-dialog {
     inset: auto 10px 10px;
     width: auto;
+    max-width: none;
     max-height: calc(100dvh - 20px);
     margin: 0;
     overflow-y: auto;
@@ -2159,6 +2061,15 @@ input {
   opacity: 1;
 }
 
+.app-session-task-control[data-state="preview"] {
+  border-color: #3f526f;
+  background: #151d2a;
+}
+
+.app-session-task-control[data-state="preview"] strong {
+  color: #b8c8e3;
+}
+
 .app-session-tools button[data-access="full"] {
   border-color: #8b4d57;
   background: #2a171c;
@@ -3316,7 +3227,7 @@ input {
 }
 
 .start-launch-panel .start-grid {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 9px;
 }
 
@@ -3731,7 +3642,7 @@ input {
   font-size: 11px;
 }
 
-@media (min-width: 821px) {
+@media (min-width: 721px) {
   .session-screen {
     width: calc(100% - 72px);
     max-width: none;
@@ -3743,7 +3654,7 @@ input {
       "switcher quick-actions"
       "switcher session-tools"
       "switcher composer";
-    grid-template-columns: 244px minmax(0, 1fr);
+    grid-template-columns: 220px minmax(0, 1fr);
   }
 
   .session-header,
@@ -3767,7 +3678,7 @@ input {
   }
 }
 
-@media (min-width: 821px) and (max-width: 1100px) {
+@media (min-width: 721px) and (max-width: 1100px) {
   .app-primary-nav {
     width: 62px;
     padding-inline: 5px;
@@ -3786,7 +3697,7 @@ input {
   .session-screen {
     width: calc(100% - 62px);
     margin-left: 62px;
-    grid-template-columns: 188px minmax(0, 1fr);
+    grid-template-columns: 176px minmax(0, 1fr);
   }
 
   .session-header {
@@ -3813,7 +3724,7 @@ input {
   }
 }
 
-@media (max-width: 820px) {
+@media (max-width: 720px) {
   .app {
     display: grid;
     height: 100vh;

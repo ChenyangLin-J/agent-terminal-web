@@ -17,6 +17,10 @@ test("the desktop and Pad Session switcher collapses and exposes contextual acti
   assert.match(app, /function setSessionSwitcherCollapsed\(collapsed/);
   assert.match(styles, /\.session-screen\.session-switcher-collapsed \{[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
   assert.match(styles, /\.session-screen\.session-switcher-collapsed \.session-switcher \{\s*display: none/);
+  assert.match(
+    styles,
+    /\.session-screen\.session-switcher-collapsed \.session-header \{[\s\S]*column-gap: 12px;[\s\S]*padding-left: 12px;/,
+  );
   assert.match(styles, /\.session-screen\.session-switcher-collapsed \.session-switcher-open \{\s*display: grid/);
   assert.match(app, /row\.className = "session-switcher-row"/);
   assert.match(app, /actions\.className = "session-switcher-actions"/);

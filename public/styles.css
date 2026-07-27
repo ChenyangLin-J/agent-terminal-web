@@ -4037,6 +4037,8 @@ input {
 
   .session-screen.session-switcher-collapsed .session-header {
     grid-template-columns: auto minmax(0, 1fr) auto;
+    column-gap: 12px;
+    padding-left: 12px;
   }
 
   .session-screen.session-switcher-collapsed .session-switcher-open {

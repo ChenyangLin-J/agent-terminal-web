@@ -499,43 +499,56 @@ app.get("/api/session-shares", async (req, res) => {
 });
 
 app.post("/api/session-shares", async (req, res) => {
+  const agentHost = requestAgentHost(req, res);
+  if (!agentHost) return;
   const webSessionId = String(req.body?.webSessionId || "").trim();
-  if (!isValidWebSessionId(webSessionId)) {
+  const requestedSessionId = String(req.body?.sessionId || "").trim();
+  if (webSessionId && !isValidWebSessionId(webSessionId)) {
     res.status(400).json({ error: "Invalid web session id." });
     return;
   }
-  const session = sessions.get(webSessionId);
-  if (!session || session.exited) {
-    res.status(404).json({ error: "这个 Session 已不在运行，无法创建静态快照。" });
+  if (requestedSessionId && !isValidSessionId(requestedSessionId)) {
+    res.status(400).json({ error: "Invalid session id." });
     return;
   }
-  if (
-    session.transport !== APP_SERVER_TRANSPORT ||
-    !session.ready ||
-    !isValidSessionId(session.sessionId)
-  ) {
+  const liveSession = webSessionId ? sessions.get(webSessionId) : null;
+  const session =
+    liveSession &&
+    !liveSession.exited &&
+    (liveSession.hostId || PERSONAL_AGENT_HOST.id) === agentHost.id
+      ? liveSession
+      : null;
+  const sessionId = String(requestedSessionId || session?.sessionId || "").trim();
+  if (!isValidSessionId(sessionId)) {
     res.status(409).json({ error: "Session 历史尚未准备好，请稍后再试。" });
     return;
   }
 
   try {
-    const snapshot = await sessionShareSnapshot(session);
+    const canUseLiveSession =
+      session?.transport === APP_SERVER_TRANSPORT &&
+      session.ready &&
+      session.sessionId === sessionId;
+    const stored = canUseLiveSession
+      ? { title: session.title, snapshot: await sessionShareSnapshot(session) }
+      : await sessionShareSnapshotFromStoredThread(agentHost, sessionId);
+    const snapshot = stored.snapshot;
     if (!snapshot.messages.length) {
       res.status(409).json({ error: "这个 Session 还没有可分享的用户消息和最终回答。" });
       return;
     }
     const created = await sessionShareStore.create({
-      hostId: session.hostId || PERSONAL_AGENT_HOST.id,
-      sessionId: session.sessionId,
-      title: session.title,
+      hostId: agentHost.id,
+      sessionId,
+      title: stored.title,
       messages: snapshot.messages,
       truncated: snapshot.truncated,
     });
     const url = new URL(`/share/${created.token}`, getOrigin(req)).toString();
     logAgentEvent("session-share-created", {
       shareId: created.share.id,
-      hostId: session.hostId || PERSONAL_AGENT_HOST.id,
-      codexSessionId: session.sessionId,
+      hostId: agentHost.id,
+      codexSessionId: sessionId,
       messageCount: created.share.messageCount,
       expiresAt: created.share.expiresAt,
     });
@@ -544,7 +557,8 @@ app.post("/api/session-shares", async (req, res) => {
   } catch (error) {
     logAgentEvent("session-share-create-failed", {
       webSessionId,
-      codexSessionId: session.sessionId,
+      hostId: agentHost.id,
+      codexSessionId: sessionId,
       message: cleanClientLogValue(error.message, 300),
     });
     res.status(500).json({ error: "静态快照暂时无法创建。" });
@@ -5277,6 +5291,32 @@ function appServerUserMessageContent(session, content) {
 }
 
 async function sessionShareSnapshot(session) {
+  return sessionShareSnapshotFromAppServer(session.appServer, {
+    threadId: session.sessionId,
+    transcript: session.appTranscript,
+    webSessionId: session.id,
+    hostId: session.hostId || PERSONAL_AGENT_HOST.id,
+  });
+}
+
+async function sessionShareSnapshotFromStoredThread(agentHost, sessionId) {
+  return withStandaloneAppServer(agentHost, async (client) => {
+    const thread = await client.readThread({ threadId: sessionId, includeTurns: false });
+    if (!thread) throw new Error("Codex Session not found.");
+    return {
+      title: cleanCustomTitle(thread.name) || cleanTitle(thread.preview) || "Untitled session",
+      snapshot: await sessionShareSnapshotFromAppServer(client, {
+        threadId: sessionId,
+        hostId: agentHost.id,
+      }),
+    };
+  });
+}
+
+async function sessionShareSnapshotFromAppServer(
+  appServer,
+  { threadId, transcript = [], webSessionId = "", hostId = PERSONAL_AGENT_HOST.id } = {},
+) {
   const candidates = new Map();
   let sequence = 0;
   let cursor = null;
@@ -5286,7 +5326,8 @@ async function sessionShareSnapshot(session) {
   try {
     const turnsById = new Map();
     do {
-      const page = await session.appServer.listThreadTurns({
+      const page = await appServer.listThreadTurns({
+        threadId,
         limit: SESSION_SHARE_PAGE_LIMIT,
         cursor,
         sortDirection: "desc",
@@ -5315,13 +5356,15 @@ async function sessionShareSnapshot(session) {
     }
   } catch (error) {
     logAgentEvent("session-share-history-fallback", {
-      webSessionId: session.id,
-      codexSessionId: session.sessionId,
+      webSessionId,
+      hostId,
+      codexSessionId: threadId,
       message: cleanClientLogValue(error.message, 300),
     });
+    if (!transcript.length) throw error;
   }
 
-  for (const item of session.appTranscript) {
+  for (const item of transcript) {
     const candidate = sessionShareCandidateFromTranscriptItem(item, sequence++);
     if (candidate) candidates.set(candidate.sourceId, candidate);
   }

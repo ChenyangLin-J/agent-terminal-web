@@ -89,6 +89,25 @@ test("app-server client resumes with its initial paginated turn page", async (t)
   assert.equal(fake.received.some((message) => message.method === "thread/turns/list"), false);
 });
 
+test("app-server client can read turns for an explicit thread without resuming it", async (t) => {
+  const fake = createFakeAppServer();
+  const client = new CodexAppServerClient({ spawnImpl: () => fake.child, requestTimeoutMs: 1_000 });
+  t.after(() => client.close());
+
+  await client.start();
+  await client.listThreadTurns({ threadId: "thread-paused", limit: 40 });
+
+  const request = fake.received.find((message) => message.method === "thread/turns/list");
+  assert.deepEqual(request.params, {
+    threadId: "thread-paused",
+    limit: 40,
+    cursor: null,
+    sortDirection: "desc",
+    itemsView: "full",
+  });
+  assert.equal(client.threadId, "");
+});
+
 test("a turn that completes in the same output chunk is not left active", async (t) => {
   const fake = createFakeAppServer({ completeTurnImmediately: true });
   const client = new CodexAppServerClient({ spawnImpl: () => fake.child, requestTimeoutMs: 1_000 });

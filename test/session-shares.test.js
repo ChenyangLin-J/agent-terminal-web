@@ -171,9 +171,15 @@ test("the Agent UI exposes explicit create, copy, and revoke controls", async ()
   assert.match(client, /function createSessionShare\(\)/);
   assert.match(client, /function revokeSessionShare\(\)/);
   assert.match(client, /SESSION_SHARE_LINKS_STORE_KEY/);
+  assert.match(client, /body: JSON\.stringify\(\{ webSessionId, sessionId \}\)/);
+  assert.match(
+    client,
+    /appSessionShareButton\.disabled = activeTransport !== "app-server" \|\| !activeSessionParams\.sessionId/,
+  );
   assert.match(server, /app\.get\("\/share\/:token"/);
   assert.match(server, /app\.post\("\/api\/session-shares"/);
   assert.match(server, /app\.delete\("\/api\/session-shares\/:id"/);
+  assert.match(server, /sessionShareSnapshotFromStoredThread\(agentHost, sessionId\)/);
 });
 
 async function listen(server) {

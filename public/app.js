@@ -3324,8 +3324,7 @@ function appendThreadTreeNodes(host, children, parentId, visited) {
 
 async function openSessionShare() {
   const sessionId = String(activeSessionParams.sessionId || "").trim();
-  const webSessionId = String(activeSessionId || "").trim();
-  if (!sessionId || !webSessionId || activeTransport !== "app-server") {
+  if (!sessionId || activeTransport !== "app-server") {
     window.alert("当前 Session 的历史尚未准备好，暂时无法创建快照。");
     return;
   }
@@ -3361,7 +3360,8 @@ async function openSessionShare() {
 
 async function createSessionShare() {
   const webSessionId = String(activeSessionId || "").trim();
-  if (!webSessionId) return;
+  const sessionId = String(activeSessionParams.sessionId || "").trim();
+  if (!sessionId) return;
   if (
     currentSessionShare &&
     !window.confirm("生成新链接后，当前分享链接会立即失效。继续生成吗？")
@@ -3377,7 +3377,7 @@ async function createSessionShare() {
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ webSessionId }),
+        body: JSON.stringify({ webSessionId, sessionId }),
       },
     );
     if (response.status === 401) {
@@ -4887,11 +4887,7 @@ function setConnectedState(state) {
     activeTransport !== "app-server" || !connected || !activeSessionCapabilities.subagents;
   appSessionTreeButton.disabled =
     activeTransport !== "app-server" || !connected || !activeSessionCapabilities.threadTree;
-  appSessionShareButton.disabled =
-    activeTransport !== "app-server" ||
-    !connected ||
-    !activeSessionId ||
-    !activeSessionParams.sessionId;
+  appSessionShareButton.disabled = activeTransport !== "app-server" || !activeSessionParams.sessionId;
   appSessionSideChatButton.disabled =
     activeTransport !== "app-server" || !connected || !activeSessionCapabilities.sideChat;
   realtimeController.setEnabled(

@@ -36,8 +36,8 @@
       }
     </style>
     <link rel="stylesheet" href="/vendor/xterm-css/xterm.css?v=20260625-5" />
-    <link rel="stylesheet" href="/styles.css?v=20260727-session-switcher-overlay-1" />
-    <link rel="stylesheet" href="/agent-hosts.css?v=20260727-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260727-account-control-center-1" />
+    <link rel="stylesheet" href="/agent-hosts.css?v=20260727-account-control-center-1" />
     <link rel="stylesheet" href="/session-focus-mode.css?v=20260720-app-toolbar-1" />
     <link rel="stylesheet" href="/thinking-session.css?v=20260716-1" />
     <link rel="stylesheet" href="/agent-memories.css?v=20260723-pending-merge-1" />
@@ -98,33 +98,23 @@
           </div>
         </header>
 
-        <nav id="agent-host-tabs" class="agent-host-tabs" aria-label="Codex 执行主机"></nav>
+        <nav id="agent-host-tabs" class="agent-host-tabs" aria-label="Session 账号筛选"></nav>
 
         <section class="control-center-summary" aria-label="Session 状态概览">
-          <button type="button" data-summary-kind="attention" data-summary-filter="attention">
-            <span>需要你</span>
-            <strong id="control-attention-count">0</strong>
-            <small>权限 / 决策 / 中断</small>
+          <button type="button" data-summary-kind="pending" data-summary-filter="pending">
+            <span>待处理</span>
+            <strong id="control-pending-count">0</strong>
+            <small id="control-pending-detail">0 需操作 · 0 新结果</small>
           </button>
           <button type="button" data-summary-kind="running" data-summary-filter="running">
             <span>进行中</span>
             <strong id="control-running-count">0</strong>
             <small>持续有变化</small>
           </button>
-          <button type="button" data-summary-kind="unread" data-summary-filter="unread">
-            <span>新结果</span>
-            <strong id="control-unread-count">0</strong>
-            <small>尚未查看</small>
-          </button>
           <button type="button" data-summary-kind="ready" data-summary-filter="ready">
-            <span>可继续</span>
+            <span>空闲</span>
             <strong id="control-ready-count">0</strong>
-            <small>空闲 / 已暂停</small>
-          </button>
-          <button type="button" data-summary-kind="history" data-summary-filter="history">
-            <span>历史</span>
-            <strong id="control-history-count">0</strong>
-            <small>保存与归档</small>
+            <small>已查看 · 暂无下一步</small>
           </button>
         </section>
 
@@ -148,6 +138,11 @@
             <button id="close-new-session" type="button" aria-label="关闭新建 Session">×</button>
           </header>
           <div class="start-grid">
+            <label>
+              <span>Account</span>
+              <select id="session-host"></select>
+            </label>
+
             <label>
               <span>Project</span>
               <select id="project"></select>
@@ -195,6 +190,7 @@
               <h2>最近历史</h2>
               <span>手动结束的 Session 会保存在这里</span>
             </div>
+            <small id="control-history-count">0 个历史</small>
           </header>
           <div id="codex-sessions-list" class="sessions-list"></div>
         </section>
@@ -209,7 +205,7 @@
         <aside id="session-switcher" class="session-switcher collapsed" aria-label="快速切换 Session">
           <header>
             <div>
-              <strong>快速切换</strong>
+              <strong>当前 Session</strong>
               <span id="session-switcher-count">0 个当前</span>
             </div>
             <button
@@ -227,6 +223,11 @@
             <span class="hidden">搜索 Session</span>
             <input id="session-switcher-search" type="search" placeholder="搜索 Session…" />
           </label>
+          <nav
+            id="session-switcher-host-tabs"
+            class="session-switcher-host-tabs"
+            aria-label="会话账号筛选"
+          ></nav>
           <div id="session-switcher-list" class="session-switcher-list"></div>
           <button id="session-switcher-new" class="session-switcher-new" type="button">＋ 新建 Session</button>
         </aside>
@@ -623,7 +624,7 @@
     <script src="/agent-upload.js?v=20260725-attachment-wait-1"></script>
     <script src="/agent-voice-input.js?v=20260717-recovery-2"></script>
     <script src="/agent-realtime.js?v=20260726-1"></script>
-    <script src="/app.js?v=20260727-session-switcher-overlay-1"></script>
+    <script src="/app.js?v=20260727-account-control-center-1"></script>
     <script src="/session-focus-mode.js?v=20260716-app-chrome-1"></script>
   </body>
 </html>

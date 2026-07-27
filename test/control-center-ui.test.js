@@ -16,10 +16,12 @@ test("the default Agent home is a two-destination Session control center", () =>
   assert.match(page, /id="open-new-session"[\s\S]*新建/);
   assert.equal((page.match(/data-session-filter=/g) || []).length, 1);
   assert.match(page, /data-session-filter="all"[\s\S]*清除筛选/);
-  assert.equal((page.match(/data-summary-filter=/g) || []).length, 5);
-  assert.match(page, /data-summary-filter="unread"[\s\S]*新结果/);
-  assert.match(page, /data-summary-filter="ready"[\s\S]*可继续[\s\S]*空闲 \/ 已暂停/);
+  assert.equal((page.match(/data-summary-filter=/g) || []).length, 3);
+  assert.match(page, /data-summary-filter="pending"[\s\S]*待处理[\s\S]*需操作 · 0 新结果/);
+  assert.match(page, /data-summary-filter="ready"[\s\S]*空闲[\s\S]*已查看 · 暂无下一步/);
+  assert.match(page, /最近历史[\s\S]*id="control-history-count"/);
   assert.match(app, /function setControlCenterFilter\(filter\)/);
+  assert.match(app, /function controlStatusFilterMatches\(kind\)/);
   assert.match(app, /function syncControlCenterFilterReset\(\)/);
 });
 
@@ -80,16 +82,27 @@ test("saved Session history is compact, responsive, and renames inline", () => {
   );
 });
 
-test("desktop and Pad retain the compact switcher while phones use bottom navigation", () => {
+test("desktop and Pad retain the compact switcher while phones open it as a drawer", () => {
   assert.match(page, /id="session-switcher"/);
   assert.match(styles, /@media \(min-width: 721px\)[\s\S]*grid-template-areas:[\s\S]*"switcher header"/);
   assert.match(
     styles,
     /@media \(min-width: 721px\) and \(max-width: 1100px\)[\s\S]*grid-template-columns: 176px minmax\(0, 1fr\)/,
   );
+  assert.match(page, /id="session-switcher-host-tabs"[\s\S]*aria-label="会话账号筛选"/);
+  assert.match(app, /function renderSessionSwitcherHostTabs\(\)/);
+  assert.match(app, /sessionSwitcherAccountFilter = filter\.id/);
   assert.match(
     styles,
     /@media \(max-width: 720px\)[\s\S]*\.app-primary-nav \{[\s\S]*grid-template-columns: repeat\(2, 1fr\)/,
+  );
+  assert.match(
+    styles,
+    /@media \(max-width: 720px\)[\s\S]*\.session-switcher:not\(\.collapsed\) \{[\s\S]*position: fixed;[\s\S]*display: flex;/,
+  );
+  assert.match(
+    app,
+    /window\.matchMedia\("\(max-width: 720px\)"\)\.matches \? true : readSessionSwitcherCollapsed\(\)/,
   );
   assert.match(
     styles,

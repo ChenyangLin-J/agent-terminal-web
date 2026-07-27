@@ -12,9 +12,12 @@ test("the desktop and Pad Session switcher collapses and exposes contextual acti
 
   assert.match(page, /id="session-switcher-toggle"[\s\S]*aria-label="收起快速切换"/);
   assert.match(page, /id="session-switcher-open"[\s\S]*aria-label="展开快速切换"/);
+  assert.match(page, /id="session-switcher-host-tabs"[\s\S]*aria-label="会话账号筛选"/);
   assert.match(app, /const SESSION_SWITCHER_COLLAPSED_STORE_KEY/);
-  assert.match(app, /return stored === null \? true : stored !== "0"/);
+  assert.match(app, /return stored === null \? false : stored !== "0"/);
   assert.match(app, /function setSessionSwitcherCollapsed\(collapsed/);
+  assert.match(app, /function renderSessionSwitcherHostTabs\(\)/);
+  assert.match(app, /sessionSwitcherAccountFilter = filter\.id/);
   assert.match(styles, /\.session-screen\.session-switcher-collapsed \{[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
   assert.match(styles, /\.session-screen\.session-switcher-collapsed \.session-switcher \{\s*display: none/);
   assert.match(
@@ -31,16 +34,20 @@ test("the desktop and Pad Session switcher collapses and exposes contextual acti
   assert.match(app, /end\.textContent = "结束"/);
   assert.match(app, /function archiveSessionFromSwitcher\(session\)/);
   assert.match(app, /function endSessionFromSwitcher\(session\)/);
-  assert.ok(
-    app.includes(
-      'fetch(agentHostApiUrl(`/api/sessions/${encodeURIComponent(webSessionId)}/end`), {\n      method: "POST"',
-    ),
+  assert.match(
+    app,
+    /function archiveSessionFromSwitcher\(session\)[\s\S]*agentHostApiUrl\([\s\S]*session\.hostId \|\| activeAgentHostId/,
+  );
+  assert.match(
+    app,
+    /agentHostApiUrl\(`\/api\/sessions\/\$\{encodeURIComponent\(webSessionId\)\}\/end`, session\.hostId \|\| activeAgentHostId\)/,
   );
   assert.match(
     styles,
     /\.session-switcher-row:hover \.session-switcher-actions > summary,[\s\S]*opacity: 1;[\s\S]*pointer-events: auto;/,
   );
   assert.match(styles, /@media \(hover: none\)[\s\S]*\.session-switcher-actions > summary/);
+  assert.match(styles, /\.session-switcher-host-tabs \{[\s\S]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
   assert.ok(server.includes('app.post("/api/sessions/:id/end"'));
   assert.match(
     server,

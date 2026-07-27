@@ -3069,7 +3069,7 @@ input {
 
 .control-center-summary {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 14px;
 }
@@ -3119,7 +3119,7 @@ input {
   font-size: 10px;
 }
 
-.control-center-summary [data-summary-kind="attention"] strong {
+.control-center-summary [data-summary-kind="pending"] strong {
   color: #f5be65;
 }
 
@@ -3127,8 +3127,8 @@ input {
   color: #5edbd0;
 }
 
-.control-center-summary [data-summary-kind="unread"] strong {
-  color: #8eb5ff;
+.control-center-summary [data-summary-kind="ready"] strong {
+  color: #73d99e;
 }
 
 .session-search {
@@ -3243,7 +3243,7 @@ input {
 }
 
 .start-launch-panel .start-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 9px;
 }
 
@@ -3279,7 +3279,7 @@ input {
 
 #sessions-list {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
   align-items: start;
 }
@@ -3316,7 +3316,7 @@ input {
   background: #728095;
 }
 
-.control-session-group-attention > header strong i {
+.control-session-group-pending > header strong i {
   background: #f5be65;
   box-shadow: 0 0 12px rgb(245 190 101 / 34%);
 }
@@ -3326,13 +3326,9 @@ input {
   box-shadow: 0 0 12px rgb(94 219 208 / 34%);
 }
 
-.control-session-group-unread > header strong i {
-  background: #8eb5ff;
-  box-shadow: 0 0 12px rgb(142 181 255 / 34%);
-}
-
 .control-session-group-ready > header strong i {
   background: #73d99e;
+  box-shadow: 0 0 12px rgb(115 217 158 / 28%);
 }
 
 .control-session-group > header span {
@@ -3809,6 +3805,36 @@ input {
   font-size: 11px;
 }
 
+.session-switcher-host-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 3px;
+  margin: 0 9px 5px;
+  padding: 3px;
+  border: 1px solid #252d39;
+  border-radius: 8px;
+  background: #090c11;
+}
+
+.session-switcher-host-tabs button {
+  min-width: 0;
+  min-height: 28px;
+  padding: 3px 4px;
+  overflow: hidden;
+  border-color: transparent;
+  color: #738096;
+  background: transparent;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-switcher-host-tabs button.active {
+  border-color: #354153;
+  color: #dce3ed;
+  background: #202936;
+}
+
 .session-switcher-list {
   flex: 1;
   min-height: 0;
@@ -4099,7 +4125,7 @@ input {
   }
 
   .start-launch-panel .start-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   #sessions-list,
@@ -4229,6 +4255,10 @@ input {
     font-size: 21px;
   }
 
+  .control-center-summary small {
+    display: none;
+  }
+
   .session-search {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -4317,13 +4347,27 @@ input {
     display: none;
   }
 
+  .session-switcher:not(.collapsed) {
+    position: fixed;
+    z-index: 70;
+    inset: 0 auto calc(66px + env(safe-area-inset-bottom)) 0;
+    display: flex;
+    width: min(82vw, 310px);
+    border-right-color: #354153;
+    box-shadow: 22px 0 55px rgb(0 0 0 / 56%);
+  }
+
   .session-header {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     padding: 8px 10px;
   }
 
   .session-header > #back {
     display: none;
+  }
+
+  .session-switcher-open {
+    display: grid;
   }
 
   .session-title-display strong {

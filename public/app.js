@@ -9,14 +9,15 @@ const closeNewSessionButton = document.querySelector("#close-new-session");
 const newSessionPanel = document.querySelector("#new-session-panel");
 const controlCenterMenu = document.querySelector("#control-center-menu");
 const controlCenterFilters = document.querySelector("#control-center-filters");
-const controlAttentionCount = document.querySelector("#control-attention-count");
+const controlPendingCount = document.querySelector("#control-pending-count");
+const controlPendingDetail = document.querySelector("#control-pending-detail");
 const controlRunningCount = document.querySelector("#control-running-count");
-const controlUnreadCount = document.querySelector("#control-unread-count");
 const controlReadyCount = document.querySelector("#control-ready-count");
 const controlHistoryCount = document.querySelector("#control-history-count");
 const controlLiveCount = document.querySelector("#control-live-count");
 const controlSummaryButtons = document.querySelectorAll("[data-summary-filter]");
 const agentHostTabs = document.querySelector("#agent-host-tabs");
+const newSessionHostSelect = document.querySelector("#session-host");
 const projectSelect = document.querySelector("#project");
 const accessModeSelect = document.querySelector("#access-mode");
 const connectButton = document.querySelector("#connect");
@@ -148,6 +149,7 @@ const sessionSwitcherToggle = document.querySelector("#session-switcher-toggle")
 const sessionSwitcherOpenButton = document.querySelector("#session-switcher-open");
 const sessionSwitcherNewButton = document.querySelector("#session-switcher-new");
 const sessionSwitcherSearch = document.querySelector("#session-switcher-search");
+const sessionSwitcherHostTabs = document.querySelector("#session-switcher-host-tabs");
 const sessionSwitcherList = document.querySelector("#session-switcher-list");
 const sessionSwitcherCount = document.querySelector("#session-switcher-count");
 
@@ -250,6 +252,8 @@ let archivedSessionsCache = [];
 let openSessionSwitcherActionId = "";
 let agentHosts = [];
 let activeAgentHostId = cleanAgentHostId(new URLSearchParams(window.location.search).get("host")) || "personal";
+let activeAccountFilter = "all";
+let sessionSwitcherAccountFilter = "all";
 let activeControlCenterFilter = "all";
 let archivedSessionsExpanded = false;
 let savedSessionsExpanded = false;
@@ -334,7 +338,10 @@ const compactSessionTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
 let pushRegistrationPromise = null;
 
 syncStartSelectionsFromUrl(new URLSearchParams(window.location.search));
-setSessionSwitcherCollapsed(readSessionSwitcherCollapsed(), { persist: false });
+setSessionSwitcherCollapsed(
+  window.matchMedia("(max-width: 720px)").matches ? true : readSessionSwitcherCollapsed(),
+  { persist: false },
+);
 window.addEventListener("resize", () => {
   fitTerminal({ delay: 120 });
   followAppTranscriptAfterViewportChange();
@@ -347,6 +354,7 @@ navControlCenterButton.addEventListener("click", showStartScreen);
 navCurrentSessionButton.addEventListener("click", openCurrentSessionNavigation);
 openNewSessionButton.addEventListener("click", () => toggleNewSessionPanel(true));
 closeNewSessionButton.addEventListener("click", () => toggleNewSessionPanel(false));
+newSessionHostSelect.addEventListener("change", () => switchNewSessionHost(newSessionHostSelect.value));
 controlCenterFilters.addEventListener("click", (event) => {
   const button = event.target.closest("[data-session-filter]");
   if (!button) return;
@@ -663,9 +671,10 @@ function wait(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
-async function loadProjects() {
-  const data = await apiJson("/api/projects");
+async function loadProjects(hostId = activeAgentHostId) {
+  const data = await apiJsonForHost("/api/projects", hostId);
   if (!data) return;
+  if ((cleanAgentHostId(hostId) || "personal") !== activeAgentHostId) return;
 
   projectSelect.innerHTML = "";
   const rootOption = document.createElement("option");
@@ -691,25 +700,69 @@ async function loadAgentHosts() {
   if (!agentHosts.some((host) => host.id === activeAgentHostId)) {
     activeAgentHostId = cleanAgentHostId(data.defaultHostId) || "personal";
   }
+  renderNewSessionHostOptions();
   renderAgentHostTabs();
 }
 
 function renderAgentHostTabs() {
   if (!agentHostTabs) return;
   agentHostTabs.replaceChildren();
-  for (const host of agentHosts) {
+  const filters = [
+    { id: "all", label: "全部", type: "all", count: liveSessionsCache.length },
+    ...agentHosts.map((host) => ({
+      ...host,
+      count: liveSessionsCache.filter((session) => session.hostId === host.id).length,
+    })),
+  ];
+  for (const host of filters) {
     const button = document.createElement("button");
     button.type = "button";
     button.dataset.hostId = host.id;
     button.dataset.hostType = host.type;
-    button.classList.toggle("active", host.id === activeAgentHostId);
-    button.toggleAttribute("aria-current", host.id === activeAgentHostId);
-    button.textContent = host.label || host.id;
-    button.addEventListener("click", () => switchAgentHost(host.id));
+    button.classList.toggle("active", host.id === activeAccountFilter);
+    button.toggleAttribute("aria-current", host.id === activeAccountFilter);
+    const label = document.createElement("span");
+    label.textContent = host.label || host.id;
+    const count = document.createElement("small");
+    count.textContent = String(host.count || 0);
+    button.append(label, count);
+    button.addEventListener("click", () => setAccountFilter(host.id));
     agentHostTabs.append(button);
   }
   agentHostTabs.classList.toggle("hidden", agentHosts.length < 2);
-  syncAgentHostCapabilities();
+}
+
+function renderNewSessionHostOptions() {
+  newSessionHostSelect.replaceChildren(
+    ...agentHosts.map((host) => {
+      const option = document.createElement("option");
+      option.value = host.id;
+      option.textContent = host.label || host.id;
+      return option;
+    }),
+  );
+  newSessionHostSelect.value = activeAgentHostId;
+}
+
+function filteredAgentHosts(filter = activeAccountFilter) {
+  return filter === "all" ? agentHosts : agentHosts.filter((host) => host.id === filter);
+}
+
+function agentHostLabel(hostId) {
+  const id = cleanAgentHostId(hostId) || "personal";
+  return agentHosts.find((host) => host.id === id)?.label || (id === "personal" ? "个人" : id);
+}
+
+function accountMatches(session, filter = activeAccountFilter) {
+  return filter === "all" || (cleanAgentHostId(session?.hostId) || "personal") === filter;
+}
+
+function filteredControlLiveSessions() {
+  return liveSessionsCache.filter((session) => accountMatches(session));
+}
+
+function hostSessionKey(hostId, sessionId) {
+  return `${cleanAgentHostId(hostId) || "personal"}:${String(sessionId || "")}`;
 }
 
 function syncAgentHostCapabilities() {
@@ -724,22 +777,29 @@ function syncAgentHostCapabilities() {
     : "查看当前 Session 的个人记忆路由";
 }
 
-async function switchAgentHost(hostId) {
+async function switchNewSessionHost(hostId) {
   const nextHostId = cleanAgentHostId(hostId);
   if (!nextHostId || nextHostId === activeAgentHostId) return;
   if (!agentHosts.some((host) => host.id === nextHostId)) return;
   activeAgentHostId = nextHostId;
-  renderAgentHostTabs();
+  newSessionHostSelect.value = activeAgentHostId;
   syncControlCenterHostUrl();
-  liveSessionsCache = [];
-  savedSessionsCache = [];
-  archivedSessionsCache = [];
-  liveSessionsByCodexId = new Map();
-  sessionSearchInput.value = "";
-  sessionSearchResults.classList.add("hidden");
   await loadProjects();
-  await refreshLists();
-  syncPrimaryNavigation("center");
+  syncAgentHostCapabilities();
+}
+
+function setAccountFilter(filter) {
+  const next = filter === "all" || agentHosts.some((host) => host.id === filter) ? filter : "all";
+  if (next === activeAccountFilter) return;
+  activeAccountFilter = next;
+  sessionSearchResults.classList.add("hidden");
+  sessionSearchResults.replaceChildren();
+  renderAgentHostTabs();
+  renderSavedCodexSessions(savedSessionsCache);
+  renderArchivedCodexSessions(archivedSessionsCache);
+  renderFavoriteSessions();
+  updateControlCenterSummary();
+  applyControlCenterFilter();
 }
 
 function syncControlCenterHostUrl() {
@@ -758,28 +818,38 @@ async function refreshLists() {
 }
 
 async function loadLiveSessions() {
-  const data = await apiJson("/api/sessions");
-  if (data) renderLiveSessions(data.sessions || []);
+  const sessions = await loadSessionsAcrossHosts("/api/sessions");
+  renderLiveSessions(sessions);
 }
 
 async function loadSavedCodexSessions() {
-  const data = await apiJson("/api/codex-sessions");
-  if (data?.error) {
-    savedSessionsCache = [];
-    codexSessionsList.replaceChildren(empty(`${data.host?.label || "远端主机"}当前不可用。`));
-    return;
-  }
-  if (data) renderSavedCodexSessions(data.sessions || []);
+  const sessions = await loadSessionsAcrossHosts("/api/codex-sessions");
+  renderSavedCodexSessions(sessions);
 }
 
 async function loadArchivedCodexSessions() {
-  const data = await apiJson("/api/codex-sessions/archived");
-  if (data?.error) {
-    archivedSessionsCache = [];
-    archivedCodexSessionsList.replaceChildren();
-    return;
-  }
-  if (data) renderArchivedCodexSessions(data.sessions || []);
+  const sessions = await loadSessionsAcrossHosts("/api/codex-sessions/archived");
+  renderArchivedCodexSessions(sessions);
+}
+
+async function loadSessionsAcrossHosts(path) {
+  const hosts = agentHosts.length ? agentHosts : [{ id: activeAgentHostId, label: activeAgentHostId }];
+  const payloads = await Promise.all(
+    hosts.map(async (host) => {
+      try {
+        const data = await apiJsonForHost(path, host.id);
+        if (!data || data.error) return [];
+        return (Array.isArray(data.sessions) ? data.sessions : []).map((session) => ({
+          ...session,
+          hostId: session.hostId || data.host?.id || host.id,
+          hostLabel: session.hostLabel || data.host?.label || host.label || host.id,
+        }));
+      } catch {
+        return [];
+      }
+    }),
+  );
+  return payloads.flat();
 }
 
 async function searchSavedSessions() {
@@ -794,9 +864,25 @@ async function searchSavedSessions() {
   sessionSearchResults.classList.remove("hidden");
   sessionSearchResults.replaceChildren(empty("正在搜索历史会话…"));
   try {
-    const data = await apiJson(`/api/codex-sessions/search?q=${encodeURIComponent(query)}`);
-    if (!data) return;
-    const results = Array.isArray(data.results) ? data.results : [];
+    const hosts = filteredAgentHosts(activeAccountFilter);
+    const payloads = await Promise.all(
+      hosts.map(async (host) => {
+        try {
+          const data = await apiJsonForHost(`/api/codex-sessions/search?q=${encodeURIComponent(query)}`, host.id);
+          return (Array.isArray(data?.results) ? data.results : []).map((result) => ({
+            ...result,
+            session: {
+              ...(result.session || {}),
+              hostId: result.session?.hostId || host.id,
+              hostLabel: result.session?.hostLabel || host.label || host.id,
+            },
+          }));
+        } catch {
+          return [];
+        }
+      }),
+    );
+    const results = payloads.flat();
     if (!results.length) {
       sessionSearchResults.replaceChildren(empty("没有找到匹配的 Session。"));
       return;
@@ -808,9 +894,11 @@ async function searchSavedSessions() {
         return sessionCard({
           title: session.title || "Untitled session",
           subtitle: `${displayProject(session.project)} · ${formatTime(session.updatedAt)}${snippet ? ` · ${snippet}` : ""}`,
+          meta: [agentHostLabel(session.hostId)],
+          hostId: session.hostId,
           sessionId: session.id,
           favorited: Boolean(session.favorited),
-          onFavoriteClick: () => setCodexSessionFavorite(session.id, !session.favorited),
+          onFavoriteClick: () => setCodexSessionFavorite(session.id, !session.favorited, session.hostId),
           action: session.archived ? "已归档" : "打开",
           onClick: () => {
             if (session.archived) {
@@ -833,7 +921,9 @@ function renderLiveSessions(sessions) {
   const uniqueSessions = uniqueLiveSessions(sessions);
   liveSessionsCache = uniqueSessions;
   liveSessionsByCodexId = new Map(
-    uniqueSessions.filter((session) => session.sessionId).map((session) => [session.sessionId, session]),
+    uniqueSessions
+      .filter((session) => session.sessionId)
+      .map((session) => [hostSessionKey(session.hostId, session.sessionId), session]),
   );
   sessionsList.replaceChildren();
   renderSessionSwitcher();
@@ -849,15 +939,15 @@ function renderLiveSessions(sessions) {
   }
 
   const groups = [
-    { kind: "attention", label: "需要你处理", note: "优先看" },
-    { kind: "running", label: "正在运行", note: "持续更新" },
-    { kind: "unread", label: "新结果", note: "尚未查看" },
-    { kind: "ready", label: "空闲", note: "已查看 · 暂无下一步" },
-    { kind: "released", label: "已暂停", note: "上下文已保留" },
+    { kind: "pending", label: "待处理", presentationKinds: ["attention", "unread"] },
+    { kind: "running", label: "进行中", presentationKinds: ["running"] },
+    { kind: "ready", label: "空闲", presentationKinds: ["ready", "released"] },
   ];
 
   for (const group of groups) {
-    const groupSessions = uniqueSessions.filter((session) => liveSessionPresentation(session).kind === group.kind);
+    const groupSessions = uniqueSessions.filter((session) =>
+      group.presentationKinds.includes(liveSessionPresentation(session).kind),
+    );
     if (group.kind === "ready") groupSessions.sort(compareIdleSessionOrder);
     if (!groupSessions.length) continue;
     const section = document.createElement("section");
@@ -867,7 +957,8 @@ function renderLiveSessions(sessions) {
     const title = document.createElement("strong");
     title.innerHTML = `<i aria-hidden="true"></i>${group.label}`;
     const note = document.createElement("span");
-    note.textContent = `${groupSessions.length} · ${group.note}`;
+    note.dataset.sessionGroupCount = "";
+    note.textContent = `${groupSessions.length} 个`;
     header.append(title, note);
     const list = document.createElement("div");
     list.className = "control-session-group-list";
@@ -879,15 +970,17 @@ function renderLiveSessions(sessions) {
           title: session.title || "New Codex session",
           subtitle: displayProject(session.project),
           description: liveSessionCurrentTask(session),
-          meta: liveSessionMeta(session, presentation),
-          kind: group.kind,
+          meta: [agentHostLabel(session.hostId), ...liveSessionMeta(session, presentation)],
+          kind: presentation.kind,
+          hostId: session.hostId,
           sessionId: session.sessionId,
           favorited: Boolean(session.favorited),
-          onFavoriteClick: () => setCodexSessionFavorite(session.sessionId, !session.favorited),
+          onFavoriteClick: () =>
+            setCodexSessionFavorite(session.sessionId, !session.favorited, session.hostId),
           action:
-            group.kind === "attention"
+            presentation.kind === "attention"
               ? "处理"
-              : group.kind === "running" || group.kind === "unread"
+              : presentation.kind === "running" || presentation.kind === "unread"
                 ? "查看"
                 : "打开",
           onClick: () => openSessionFromList(liveSessionOpenParams(session)),
@@ -904,7 +997,7 @@ function uniqueLiveSessions(sessions) {
   const byKey = new Map();
 
   for (const session of sessions) {
-    const key = session.sessionId || session.id;
+    const key = hostSessionKey(session.hostId, session.sessionId || session.id);
     const current = byKey.get(key);
     if (!current || compareLiveSession(session, current) > 0) {
       byKey.set(key, session);
@@ -1008,7 +1101,11 @@ function liveSessionOpenParams(session) {
 function renderSavedCodexSessions(sessions) {
   savedSessionsCache = sessions;
   codexSessionsList.replaceChildren();
-  const nonLiveSessions = sessions.filter((session) => !liveSessionsByCodexId.has(session.id));
+  const nonLiveSessions = sessions.filter(
+    (session) =>
+      accountMatches(session) &&
+      !liveSessionsByCodexId.has(hostSessionKey(session.hostId, session.id)),
+  );
   updateControlCenterSummary();
   renderFavoriteSessions();
 
@@ -1029,13 +1126,14 @@ function renderSavedCodexSessions(sessions) {
       sessionCard({
         title: session.title || "Untitled session",
         subtitle: displayProject(session.project),
-        meta: [formatCompactSessionTime(session.updatedAt)],
+        meta: [agentHostLabel(session.hostId), formatCompactSessionTime(session.updatedAt)],
         kind: "history",
         compact: true,
         actionIcon: "↗",
+        hostId: session.hostId,
         sessionId: session.id,
         favorited: Boolean(session.favorited),
-        onFavoriteClick: () => setCodexSessionFavorite(session.id, !session.favorited),
+        onFavoriteClick: () => setCodexSessionFavorite(session.id, !session.favorited, session.hostId),
         action: "打开",
         onClick: () => openSavedSessionPreview(session),
         onTitleSave: (title) => saveSessionCardTitle(session, title),
@@ -1065,28 +1163,30 @@ function renderArchivedCodexSessions(sessions) {
   archivedSessionsCache = sessions;
   archivedCodexSessionsList.replaceChildren();
   updateControlCenterSummary();
-  if (!sessions.length) {
+  const filteredSessions = sessions.filter((session) => accountMatches(session));
+  if (!filteredSessions.length) {
     archivedCodexSessionsList.append(empty("没有已归档的 Session。"));
     applyControlCenterFilter();
     return;
   }
 
   const visibleSessions = archivedSessionsExpanded
-    ? sessions
-    : sessions.slice(0, ARCHIVED_SESSIONS_PREVIEW_COUNT);
+    ? filteredSessions
+    : filteredSessions.slice(0, ARCHIVED_SESSIONS_PREVIEW_COUNT);
 
   for (const session of visibleSessions) {
     archivedCodexSessionsList.append(
       sessionCard({
         title: session.title || "Untitled session",
         subtitle: displayProject(session.project),
-        meta: [formatCompactSessionTime(session.archivedAt || session.updatedAt)],
+        meta: [agentHostLabel(session.hostId), formatCompactSessionTime(session.archivedAt || session.updatedAt)],
         kind: "history",
         compact: true,
         actionIcon: "↩",
+        hostId: session.hostId,
         sessionId: session.id,
         favorited: Boolean(session.favorited),
-        onFavoriteClick: () => setCodexSessionFavorite(session.id, !session.favorited),
+        onFavoriteClick: () => setCodexSessionFavorite(session.id, !session.favorited, session.hostId),
         action: "恢复",
         onClick: () => archiveCodexSession(session, false),
         onTitleSave: (title) => saveSessionCardTitle(session, title),
@@ -1094,13 +1194,13 @@ function renderArchivedCodexSessions(sessions) {
     );
   }
 
-  if (sessions.length > ARCHIVED_SESSIONS_PREVIEW_COUNT) {
+  if (filteredSessions.length > ARCHIVED_SESSIONS_PREVIEW_COUNT) {
     const toggleButton = document.createElement("button");
     toggleButton.type = "button";
     toggleButton.className = "archive-toggle";
     toggleButton.textContent = archivedSessionsExpanded
       ? "收起归档"
-      : `显示其余 ${sessions.length - ARCHIVED_SESSIONS_PREVIEW_COUNT} 个`;
+      : `显示其余 ${filteredSessions.length - ARCHIVED_SESSIONS_PREVIEW_COUNT} 个`;
     toggleButton.addEventListener("click", () => {
       archivedSessionsExpanded = !archivedSessionsExpanded;
       renderArchivedCodexSessions(sessions);
@@ -1112,9 +1212,14 @@ function renderArchivedCodexSessions(sessions) {
 
 function renderFavoriteSessions() {
   favoriteSessionsList.replaceChildren();
-  const liveFavorites = liveSessionsCache.filter((session) => session.favorited && session.sessionId);
+  const liveFavorites = liveSessionsCache.filter(
+    (session) => accountMatches(session) && session.favorited && session.sessionId,
+  );
   const savedFavorites = savedSessionsCache.filter(
-    (session) => session.favorited && !liveSessionsByCodexId.has(session.id),
+    (session) =>
+      accountMatches(session) &&
+      session.favorited &&
+      !liveSessionsByCodexId.has(hostSessionKey(session.hostId, session.id)),
   );
 
   for (const session of liveFavorites) {
@@ -1124,11 +1229,12 @@ function renderFavoriteSessions() {
         title: session.title || "New Codex session",
         subtitle: displayProject(session.project),
         description: liveSessionCurrentTask(session),
-        meta: liveSessionMeta(session, presentation),
+        meta: [agentHostLabel(session.hostId), ...liveSessionMeta(session, presentation)],
         kind: presentation.kind,
+        hostId: session.hostId,
         sessionId: session.sessionId,
         favorited: true,
-        onFavoriteClick: () => setCodexSessionFavorite(session.sessionId, false),
+        onFavoriteClick: () => setCodexSessionFavorite(session.sessionId, false, session.hostId),
         action:
           presentation.kind === "attention"
             ? "处理"
@@ -1145,11 +1251,12 @@ function renderFavoriteSessions() {
       sessionCard({
         title: session.title || "Untitled session",
         subtitle: displayProject(session.project),
-        meta: [session.updatedAt ? `更新于 ${formatTime(session.updatedAt)}` : ""],
+        meta: [agentHostLabel(session.hostId), session.updatedAt ? `更新于 ${formatTime(session.updatedAt)}` : ""],
         kind: "history",
+        hostId: session.hostId,
         sessionId: session.id,
         favorited: true,
-        onFavoriteClick: () => setCodexSessionFavorite(session.id, false),
+        onFavoriteClick: () => setCodexSessionFavorite(session.id, false, session.hostId),
         action: "打开",
         onTitleSave: (title) => saveSessionCardTitle(session, title),
         onClick: () => openSavedSessionPreview(session),
@@ -1176,21 +1283,26 @@ function toggleNewSessionPanel(open) {
 
 function updateControlCenterSummary() {
   const counts = { attention: 0, running: 0, unread: 0, ready: 0, released: 0 };
-  for (const session of liveSessionsCache) {
+  const filteredLiveSessions = liveSessionsCache.filter((session) => accountMatches(session));
+  for (const session of filteredLiveSessions) {
     const kind = liveSessionPresentation(session).kind;
     if (Object.prototype.hasOwnProperty.call(counts, kind)) counts[kind] += 1;
   }
-  const nonLiveSaved = savedSessionsCache.filter((session) => !liveSessionsByCodexId.has(session.id)).length;
-  const historyCount = nonLiveSaved + archivedSessionsCache.length;
-  controlAttentionCount.textContent = String(counts.attention);
+  const nonLiveSaved = savedSessionsCache.filter(
+    (session) =>
+      accountMatches(session) &&
+      !liveSessionsByCodexId.has(hostSessionKey(session.hostId, session.id)),
+  ).length;
+  const historyCount = nonLiveSaved + archivedSessionsCache.filter((session) => accountMatches(session)).length;
+  controlPendingCount.textContent = String(counts.attention + counts.unread);
+  controlPendingDetail.textContent = `${counts.attention} 需操作 · ${counts.unread} 新结果`;
   controlRunningCount.textContent = String(counts.running);
-  controlUnreadCount.textContent = String(counts.unread);
   controlReadyCount.textContent = String(counts.ready + counts.released);
-  controlHistoryCount.textContent = String(historyCount);
-  controlLiveCount.textContent = `${liveSessionsCache.length} 个当前`;
-  sessionSwitcherCount.textContent = `${liveSessionsCache.length} 个当前`;
-  navAttentionCount.textContent = String(counts.attention);
-  navAttentionCount.classList.toggle("hidden", counts.attention === 0);
+  controlHistoryCount.textContent = `${historyCount} 个历史`;
+  controlLiveCount.textContent = `${filteredLiveSessions.length} 个当前`;
+  navAttentionCount.textContent = String(counts.attention + counts.unread);
+  navAttentionCount.classList.toggle("hidden", counts.attention + counts.unread === 0);
+  renderAgentHostTabs();
 }
 
 function applyControlCenterFilter() {
@@ -1201,12 +1313,10 @@ function applyControlCenterFilter() {
 
   for (const card of favoriteSessionsList.querySelectorAll(".session-card")) {
     const kind = card.dataset.sessionKind || "ready";
-    const filterMatches =
-      activeControlCenterFilter === "all" ||
-      activeControlCenterFilter === kind ||
-      (activeControlCenterFilter === "ready" && kind === "released");
+    const filterMatches = controlStatusFilterMatches(kind);
+    const accountMatchesCard = card.dataset.hostId === activeAccountFilter || activeAccountFilter === "all";
     const queryMatches = !query || card.textContent.toLocaleLowerCase().includes(query);
-    const visible = filterMatches && queryMatches;
+    const visible = filterMatches && accountMatchesCard && queryMatches;
     card.classList.toggle("hidden", !visible);
     if (visible) visibleFavoriteCards += 1;
   }
@@ -1217,26 +1327,28 @@ function applyControlCenterFilter() {
 
   for (const card of sessionsList.querySelectorAll(".session-card")) {
     const kind = card.dataset.sessionKind || "ready";
-    const filterMatches =
-      activeControlCenterFilter === "all" ||
-      activeControlCenterFilter === kind ||
-      (activeControlCenterFilter === "ready" && kind === "released");
+    const filterMatches = controlStatusFilterMatches(kind);
+    const accountMatchesCard = card.dataset.hostId === activeAccountFilter || activeAccountFilter === "all";
     const queryMatches = !query || card.textContent.toLocaleLowerCase().includes(query);
-    const visible = filterMatches && queryMatches;
+    const visible = filterMatches && accountMatchesCard && queryMatches;
     card.classList.toggle("hidden", !visible);
     if (visible) visibleLiveCards += 1;
   }
 
   for (const group of sessionsList.querySelectorAll(".control-session-group")) {
-    group.classList.toggle("hidden", !group.querySelector(".session-card:not(.hidden)"));
+    const visibleCards = group.querySelectorAll(".session-card:not(.hidden)");
+    group.classList.toggle("hidden", visibleCards.length === 0);
+    const count = group.querySelector("[data-session-group-count]");
+    if (count) count.textContent = `${visibleCards.length} 个`;
   }
 
-  const historyVisible = ["all", "history"].includes(activeControlCenterFilter);
+  const historyVisible = activeControlCenterFilter === "all";
   for (const section of controlCenterHistorySections) {
     const cards = [...section.querySelectorAll(".session-card")];
     for (const card of cards) {
+      const accountMatchesCard = card.dataset.hostId === activeAccountFilter || activeAccountFilter === "all";
       const queryMatches = !query || card.textContent.toLocaleLowerCase().includes(query);
-      card.classList.toggle("hidden", !historyVisible || !queryMatches);
+      card.classList.toggle("hidden", !historyVisible || !accountMatchesCard || !queryMatches);
     }
     const hasVisibleCards = cards.some((card) => !card.classList.contains("hidden"));
     section.classList.toggle("hidden", !historyVisible || (Boolean(query) && cards.length > 0 && !hasVisibleCards));
@@ -1245,15 +1357,13 @@ function applyControlCenterFilter() {
   if (liveSection) {
     liveSection.classList.toggle(
       "hidden",
-      activeControlCenterFilter === "history" || (Boolean(query) && liveSessionsCache.length > 0 && visibleLiveCards === 0),
+      Boolean(query) && filteredControlLiveSessions().length > 0 && visibleLiveCards === 0,
     );
   }
 }
 
 function setControlCenterFilter(filter) {
-  activeControlCenterFilter = ["attention", "running", "unread", "ready", "history"].includes(filter)
-    ? filter
-    : "all";
+  activeControlCenterFilter = ["pending", "running", "ready"].includes(filter) ? filter : "all";
   for (const option of controlCenterFilters.querySelectorAll("[data-session-filter]")) {
     const active = option.dataset.sessionFilter === activeControlCenterFilter;
     option.classList.toggle("active", active);
@@ -1268,6 +1378,13 @@ function setControlCenterFilter(filter) {
   applyControlCenterFilter();
 }
 
+function controlStatusFilterMatches(kind) {
+  if (activeControlCenterFilter === "all") return true;
+  if (activeControlCenterFilter === "pending") return ["attention", "unread"].includes(kind);
+  if (activeControlCenterFilter === "ready") return ["ready", "released"].includes(kind);
+  return activeControlCenterFilter === kind;
+}
+
 function syncControlCenterFilterReset() {
   const hasFilter = activeControlCenterFilter !== "all" || Boolean(sessionSearchInput.value.trim());
   controlCenterFilters.classList.toggle("hidden", !hasFilter);
@@ -1276,7 +1393,12 @@ function syncControlCenterFilterReset() {
 function renderSessionSwitcher() {
   const query = sessionSwitcherSearch.value.trim().toLocaleLowerCase();
   sessionSwitcherList.replaceChildren();
-  const visible = liveSessionsCache.filter((session) => {
+  renderSessionSwitcherHostTabs();
+  const accountSessions = liveSessionsCache.filter((session) =>
+    accountMatches(session, sessionSwitcherAccountFilter),
+  );
+  sessionSwitcherCount.textContent = `${accountSessions.length} 个当前`;
+  const visible = accountSessions.filter((session) => {
     if (!query) return true;
     return [session.title, session.project, liveSessionCurrentTask(session)]
       .filter(Boolean)
@@ -1292,14 +1414,15 @@ function renderSessionSwitcher() {
   }
 
   const groups = [
-    { kind: "attention", label: "需要你" },
-    { kind: "running", label: "运行中" },
-    { kind: "unread", label: "新结果" },
-    { kind: "ready", label: "空闲" },
-    { kind: "released", label: "已暂停" },
+    { kind: "pending", label: "待处理", presentationKinds: ["attention", "unread"] },
+    { kind: "running", label: "进行中", presentationKinds: ["running"] },
+    { kind: "ready", label: "空闲", presentationKinds: ["ready", "released"] },
   ];
   for (const group of groups) {
-    const groupSessions = visible.filter((session) => liveSessionPresentation(session).kind === group.kind);
+    const groupSessions = visible.filter((session) =>
+      group.presentationKinds.includes(liveSessionPresentation(session).kind),
+    );
+    if (group.kind === "ready") groupSessions.sort(compareIdleSessionOrder);
     if (!groupSessions.length) continue;
     const heading = document.createElement("div");
     heading.className = "session-switcher-heading";
@@ -1316,8 +1439,10 @@ function renderSessionSwitcher() {
       button.dataset.state = presentation.state;
       button.classList.toggle(
         "active",
-        session.id === activeSessionId ||
-          (session.sessionId && session.sessionId === activeSessionParams.sessionId),
+        (cleanAgentHostId(session.hostId) || "personal") ===
+          (cleanAgentHostId(activeSessionParams.host) || activeAgentHostId) &&
+          (session.id === activeSessionId ||
+            (session.sessionId && session.sessionId === activeSessionParams.sessionId)),
       );
       const dot = document.createElement("i");
       dot.className = "session-switcher-dot";
@@ -1325,17 +1450,20 @@ function renderSessionSwitcher() {
       const title = document.createElement("strong");
       title.textContent = session.title || "New Codex session";
       const status = document.createElement("small");
-      status.textContent = formatTime(session.lastActivityAt);
+      status.textContent = `${agentHostLabel(session.hostId)} · ${displayProject(session.project)}`;
       copy.append(title, status);
       button.append(dot, copy);
       button.addEventListener("click", () => {
         openSessionSwitcherActionId = "";
+        if (window.matchMedia("(max-width: 720px)").matches) {
+          setSessionSwitcherCollapsed(true, { persist: false });
+        }
         openSessionInCurrentPage(liveSessionOpenParams(session));
       });
 
       const actions = document.createElement("details");
       actions.className = "session-switcher-actions";
-      const sessionKey = String(session.id || session.sessionId || "");
+      const sessionKey = hostSessionKey(session.hostId, session.id || session.sessionId);
       actions.dataset.sessionKey = sessionKey;
       actions.open = sessionKey === openSessionSwitcherActionId;
       actions.addEventListener("toggle", () => {
@@ -1385,12 +1513,35 @@ function renderSessionSwitcher() {
   }
 }
 
+function renderSessionSwitcherHostTabs() {
+  sessionSwitcherHostTabs.replaceChildren();
+  const filters = [
+    { id: "all", label: "全部" },
+    ...agentHosts.map((host) => ({ id: host.id, label: host.label || host.id })),
+  ];
+  for (const filter of filters) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.hostFilter = filter.id;
+    button.textContent = filter.label;
+    button.classList.toggle("active", filter.id === sessionSwitcherAccountFilter);
+    button.setAttribute("aria-pressed", String(filter.id === sessionSwitcherAccountFilter));
+    button.addEventListener("click", () => {
+      sessionSwitcherAccountFilter = filter.id;
+      openSessionSwitcherActionId = "";
+      renderSessionSwitcher();
+    });
+    sessionSwitcherHostTabs.append(button);
+  }
+  sessionSwitcherHostTabs.classList.toggle("hidden", agentHosts.length < 2);
+}
+
 function readSessionSwitcherCollapsed() {
   try {
     const stored = localStorage.getItem(SESSION_SWITCHER_COLLAPSED_STORE_KEY);
-    return stored === null ? true : stored !== "0";
+    return stored === null ? false : stored !== "0";
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -1423,6 +1574,8 @@ function openSessionInCurrentPage(params) {
   activeSessionUnreadTurnId = String(scopedParams.unreadTurnId || "").trim();
   delete scopedParams.unreadTurnId;
   activeAgentHostId = cleanAgentHostId(scopedParams.host) || activeAgentHostId;
+  if (newSessionHostSelect.options.length) newSessionHostSelect.value = activeAgentHostId;
+  syncAgentHostCapabilities();
   rememberSessionNavigation(scopedParams);
   renderAgentHostTabs();
   window.history.pushState(null, "", sessionUrl(scopedParams));
@@ -1455,7 +1608,11 @@ function openCurrentSessionNavigation() {
 
   const remembered = rememberedSessionNavigation(activeAgentHostId);
   if (!remembered) return;
-  const live = liveSessionsCache.find((session) => session.sessionId === remembered.sessionId);
+  const live = liveSessionsCache.find(
+    (session) =>
+      session.sessionId === remembered.sessionId &&
+      (cleanAgentHostId(session.hostId) || "personal") === remembered.host,
+  );
   openSessionInCurrentPage(live ? liveSessionOpenParams(live) : remembered);
 }
 
@@ -1480,6 +1637,7 @@ function sessionCard({
   kind = "history",
   compact = false,
   actionIcon = "",
+  hostId = "",
   sessionId = "",
   favorited = false,
   onFavoriteClick,
@@ -1494,6 +1652,7 @@ function sessionCard({
   const card = document.createElement("div");
   card.className = "session-card";
   card.dataset.sessionKind = kind;
+  card.dataset.hostId = cleanAgentHostId(hostId) || activeAgentHostId;
   if (compact) card.dataset.cardLayout = "compact";
   card.tabIndex = 0;
   card.setAttribute("role", "button");
@@ -1701,14 +1860,17 @@ function sessionCard({
   return card;
 }
 
-async function setCodexSessionFavorite(sessionId, favorited) {
+async function setCodexSessionFavorite(sessionId, favorited, hostId = activeAgentHostId) {
   if (!sessionId) return;
   try {
-    const response = await fetch(agentHostApiUrl(`/api/codex-sessions/${encodeURIComponent(sessionId)}/favorite`), {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ favorited }),
-    });
+    const response = await fetch(
+      agentHostApiUrl(`/api/codex-sessions/${encodeURIComponent(sessionId)}/favorite`, hostId),
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ favorited }),
+      },
+    );
     if (response.status === 401) {
       redirectToLogin();
       return;
@@ -1727,11 +1889,11 @@ async function setCodexSessionFavorite(sessionId, favorited) {
 }
 
 async function saveSessionCardTitle(session, title) {
-  const payload = await saveCodexSessionTitle(session.id, title);
+  const payload = await saveCodexSessionTitle(session.id, title, session.hostId);
   const savedTitle = String(payload.customTitle || title);
   for (const sessions of [savedSessionsCache, archivedSessionsCache]) {
     for (const candidate of sessions) {
-      if (candidate.id !== session.id) continue;
+      if (hostSessionKey(candidate.hostId, candidate.id) !== hostSessionKey(session.hostId, session.id)) continue;
       candidate.title = savedTitle;
       candidate.customTitle = savedTitle;
     }
@@ -1742,8 +1904,8 @@ async function saveSessionCardTitle(session, title) {
   return savedTitle;
 }
 
-async function saveCodexSessionTitle(sessionId, title) {
-  const response = await fetch(agentHostApiUrl(`/api/codex-sessions/${encodeURIComponent(sessionId)}/title`), {
+async function saveCodexSessionTitle(sessionId, title, hostId = activeAgentHostId) {
+  const response = await fetch(agentHostApiUrl(`/api/codex-sessions/${encodeURIComponent(sessionId)}/title`, hostId), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title }),
@@ -1849,11 +2011,14 @@ async function archiveCodexSession(session, archived) {
   const ok = archived ? window.confirm("Archive this session?") : true;
   if (!ok) return;
 
-  const response = await fetch(agentHostApiUrl(`/api/codex-sessions/${encodeURIComponent(session.id)}/archive`), {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ archived }),
-  });
+  const response = await fetch(
+    agentHostApiUrl(`/api/codex-sessions/${encodeURIComponent(session.id)}/archive`, session.hostId),
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived }),
+    },
+  );
   if (response.status === 401) {
     redirectToLogin();
     return;
@@ -1920,11 +2085,17 @@ async function archiveSessionFromSwitcher(session) {
   if (!window.confirm(message)) return;
 
   try {
-    const response = await fetch(agentHostApiUrl(`/api/codex-sessions/${encodeURIComponent(sessionId)}/archive`), {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ archived: true, endLiveSession: true }),
-    });
+    const response = await fetch(
+      agentHostApiUrl(
+        `/api/codex-sessions/${encodeURIComponent(sessionId)}/archive`,
+        session.hostId || activeAgentHostId,
+      ),
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ archived: true, endLiveSession: true }),
+      },
+    );
     if (response.status === 401) {
       redirectToLogin();
       return;
@@ -1937,7 +2108,11 @@ async function archiveSessionFromSwitcher(session) {
       host: session.hostId || activeAgentHostId,
       sessionId,
     });
-    if (session.id === activeSessionId || sessionId === activeSessionParams.sessionId) detach(true);
+    const isCurrentSession =
+      (cleanAgentHostId(session.hostId) || "personal") ===
+        (cleanAgentHostId(activeSessionParams.host) || activeAgentHostId) &&
+      (session.id === activeSessionId || sessionId === activeSessionParams.sessionId);
+    if (isCurrentSession) detach(true);
     else {
       syncPrimaryNavigation("center");
       await refreshLists();
@@ -1957,9 +2132,12 @@ async function endSessionFromSwitcher(session) {
   if (!window.confirm(message)) return;
 
   try {
-    const response = await fetch(agentHostApiUrl(`/api/sessions/${encodeURIComponent(webSessionId)}/end`), {
-      method: "POST",
-    });
+    const response = await fetch(
+      agentHostApiUrl(`/api/sessions/${encodeURIComponent(webSessionId)}/end`, session.hostId || activeAgentHostId),
+      {
+        method: "POST",
+      },
+    );
     if (response.status === 401) {
       redirectToLogin();
       return;
@@ -1972,7 +2150,11 @@ async function endSessionFromSwitcher(session) {
       host: session.hostId || activeAgentHostId,
       sessionId: session.sessionId,
     });
-    if (webSessionId === activeSessionId || session.sessionId === activeSessionParams.sessionId) detach(true);
+    const isCurrentSession =
+      (cleanAgentHostId(session.hostId) || "personal") ===
+        (cleanAgentHostId(activeSessionParams.host) || activeAgentHostId) &&
+      (webSessionId === activeSessionId || session.sessionId === activeSessionParams.sessionId);
+    if (isCurrentSession) detach(true);
     else {
       syncPrimaryNavigation("center");
       await refreshLists();
@@ -2206,6 +2388,7 @@ function openSessionPreview(params = {}) {
     preview: "1",
     new: params.sessionId ? "" : "1",
   };
+  syncAgentHostCapabilities();
   rememberSessionNavigation(activeSessionParams);
   activeSessionId = "";
   currentSessionExited = false;
@@ -2262,6 +2445,8 @@ function openSocket(params, options = {}) {
   const isReconnect = Boolean(options.reconnect);
   activeAgentHostId = cleanAgentHostId(params.host) || activeAgentHostId;
   params = { ...params, host: activeAgentHostId };
+  if (newSessionHostSelect.options.length) newSessionHostSelect.value = activeAgentHostId;
+  syncAgentHostCapabilities();
   renderAgentHostTabs();
   const snapshotKey = sessionSnapshotKey(params);
   saveActiveSessionSnapshot();
@@ -4233,6 +4418,8 @@ function sendResize() {
 function renderStatus(status) {
   activeSessionPreviewOnly = false;
   activeAgentHostId = cleanAgentHostId(status.hostId) || activeAgentHostId;
+  if (newSessionHostSelect.options.length) newSessionHostSelect.value = activeAgentHostId;
+  syncAgentHostCapabilities();
   renderAgentHostTabs();
   activeSessionId = status.id || activeSessionId;
   activeSessionParams = {
@@ -4281,10 +4468,15 @@ function renderStatus(status) {
   updateSessionViewLabels();
   currentSessionExited = Boolean(status.exited);
   const liveIndex = liveSessionsCache.findIndex(
-    (session) => session.id === status.id || (status.sessionId && session.sessionId === status.sessionId),
+    (session) =>
+      (cleanAgentHostId(session.hostId) || "personal") === activeAgentHostId &&
+      (session.id === status.id || (status.sessionId && session.sessionId === status.sessionId)),
   );
-  if (liveIndex >= 0) liveSessionsCache[liveIndex] = { ...liveSessionsCache[liveIndex], ...status };
-  else if (!status.exited && status.id) liveSessionsCache.unshift(status);
+  if (liveIndex >= 0) {
+    liveSessionsCache[liveIndex] = { ...liveSessionsCache[liveIndex], ...status, hostId: activeAgentHostId };
+  } else if (!status.exited && status.id) {
+    liveSessionsCache.unshift({ ...status, hostId: activeAgentHostId });
+  }
   syncPrimaryNavigation(sessionScreen.classList.contains("hidden") ? "center" : "session");
   updateControlCenterSummary();
   const sessionLabel = status.title || displayProject(status.project);
@@ -4375,7 +4567,8 @@ function setConnectedState(state) {
   const transport = activeTransport === "terminal" ? "Terminal · " : "";
   const access = activeTransport === "terminal" && activeAccessMode ? ` · ${appAccessLabel(activeAccessMode)}` : "";
   const stateLabel = connectionStates[state] || state;
-  statusEls.connection.textContent = `${transport}${stateLabel}${access}`;
+  const host = agentHostLabel(activeSessionParams.host || activeAgentHostId);
+  statusEls.connection.textContent = `${host} · ${transport}${stateLabel}${access}`;
   const terminalCanAcceptInput =
     activeTransport === "terminal" &&
     ["connected", "loading"].includes(state) &&
@@ -6042,7 +6235,11 @@ async function markCurrentSessionViewedOnExit({ beacon = false } = {}) {
   activeSessionUnreadTurnId = "";
   const endpoint = agentHostApiUrl(`/api/codex-sessions/${encodeURIComponent(sessionId)}/viewed`);
   const body = JSON.stringify({ turnId });
-  const live = liveSessionsCache.find((session) => session.sessionId === sessionId);
+  const live = liveSessionsCache.find(
+    (session) =>
+      session.sessionId === sessionId &&
+      (cleanAgentHostId(session.hostId) || "personal") === activeAgentHostId,
+  );
   if (live && live.lastCompletedTurnId === turnId) {
     live.lastViewedTurnId = turnId;
     live.hasUnreadResult = false;
@@ -6263,7 +6460,11 @@ function installTerminalTouchScroll() {
 }
 
 async function apiJson(url) {
-  const response = await fetch(agentHostApiUrl(url));
+  return apiJsonForHost(url, activeAgentHostId);
+}
+
+async function apiJsonForHost(url, hostId) {
+  const response = await fetch(agentHostApiUrl(url, hostId));
   if (response.status === 401) {
     redirectToLogin();
     return null;
@@ -6271,9 +6472,9 @@ async function apiJson(url) {
   return response.json();
 }
 
-function agentHostApiUrl(value) {
+function agentHostApiUrl(value, hostId = activeAgentHostId) {
   const url = new URL(value, window.location.origin);
-  url.searchParams.set("host", activeAgentHostId);
+  url.searchParams.set("host", cleanAgentHostId(hostId) || activeAgentHostId);
   return `${url.pathname}${url.search}${url.hash}`;
 }
 

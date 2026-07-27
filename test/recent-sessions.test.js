@@ -141,17 +141,19 @@ test("recent sessions expose resumable links to local Home callers", async (t) =
   assert.equal(generated.title, "过期的 Live Session");
   assert.equal(generated.current, true);
   assert.equal(generated.live, false);
-  assert.equal(generated.released, true);
+  assert.equal(generated.suspended, true);
+  assert.equal(generated.released, false);
   assert.equal(generated.webSessionId, "web-session-expired");
   assert.equal(live.title, "Agent 当前展示标题");
   assert.equal(live.current, true);
   assert.equal(live.live, false);
-  assert.equal(live.released, true);
+  assert.equal(live.suspended, true);
+  assert.equal(live.released, false);
   assert.equal(live.webSessionId, "web-session-live-title");
   assert.match(output, /Detached session TTL: 30 minutes/);
 
   const persistedSessions = JSON.parse(await fs.readFile(path.join(codexHome, "agent-web-sessions.json"), "utf8"));
-  assert.equal(persistedSessions["web-session-expired"].released, true);
+  assert.equal(persistedSessions["web-session-expired"].released, undefined);
 
   const proxiedResponse = await fetch(`http://127.0.0.1:${port}/internal/recent-sessions`, {
     headers: { "x-forwarded-for": "127.0.0.1" },

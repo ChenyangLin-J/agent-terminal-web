@@ -164,6 +164,7 @@ const HOME_PUSH_URL = process.env.HOME_PUSH_URL || "http://127.0.0.1:3050/intern
 const HOME_PUSH_SUBSCRIBE_URL = process.env.HOME_PUSH_SUBSCRIBE_URL || `${HOME_PUSH_URL}/subscriptions`;
 const HOME_VAPID_PUBLIC_KEY = process.env.HOME_VAPID_PUBLIC_KEY || "";
 const APP_SERVER_TRANSPORT = "app-server";
+const APP_SERVER_RELEASE_REASON_DETACHED_TTL = "detached-ttl";
 const FULL_ACCESS_MODE = "full";
 const THINK_SESSION_PURPOSE = "think";
 const THINKING_SKILL_INVOCATION = "$thinking-partner";
@@ -1816,6 +1817,8 @@ function createAppServerSession(cwd, launch, restored = {}) {
     purpose: normalizeSessionPurpose(launch.purpose || restored.purpose),
     thinkSkillActivated: Boolean(restored.thinkSkillActivated),
     ready: false,
+    released: false,
+    releaseReason: "",
     mode: launch.mode,
     sessionId: launch.sessionId,
     title: launch.title || "",
@@ -1958,6 +1961,7 @@ async function initializeAppServerSession(session, launch) {
     rememberAgentSessionMemoryRouting(session);
     session.ready = true;
     session.released = false;
+    session.releaseReason = "";
     appendSessionOutput(session, "\r\n\x1b[36mApp Server ready. Follow-ups are bound to an exact turn.\x1b[0m\r\n");
     persistRestorableWebSession(session);
     broadcast(session, "app-transcript", publicAppTranscript(session));
@@ -1996,7 +2000,11 @@ function restoreTmuxSession(id) {
 
   const record = readPersistedWebSessions()[id];
   if (!record) return null;
-  if (!record.released && persistedSessionExpired(record)) {
+  if (
+    record.transport !== APP_SERVER_TRANSPORT &&
+    !record.released &&
+    persistedSessionExpired(record)
+  ) {
     removePersistedWebSession(id);
     return null;
   }
@@ -2137,11 +2145,18 @@ function listDetachedSessions() {
   for (const [id, record] of Object.entries(records)) {
     if (sessions.has(id) || !isValidWebSessionId(id)) continue;
     const transport = record.transport === APP_SERVER_TRANSPORT ? APP_SERVER_TRANSPORT : "terminal";
-    if (transport === APP_SERVER_TRANSPORT && record.sessionId && !record.released) {
-      record.released = true;
+    const explicitlyReleased =
+      transport === APP_SERVER_TRANSPORT
+        ? record.released === true && record.releaseReason === APP_SERVER_RELEASE_REASON_DETACHED_TTL
+        : Boolean(record.released);
+    // Older builds rewrote every App Server record as released during boot.
+    // Only a reason-tagged release was an intentional runtime pause.
+    if (transport === APP_SERVER_TRANSPORT && record.released && !explicitlyReleased) {
+      record.released = false;
+      delete record.releaseReason;
       recordsChanged = true;
     }
-    if (!record.released && persistedSessionExpired(record)) {
+    if (transport !== APP_SERVER_TRANSPORT && !record.released && persistedSessionExpired(record)) {
       delete records[id];
       recordsChanged = true;
       continue;
@@ -2159,6 +2174,10 @@ function listDetachedSessions() {
       null,
       agentHost.id,
     );
+    const turnState =
+      transport === APP_SERVER_TRANSPORT && !explicitlyReleased
+        ? interruptedTurnStateAfterProcessLoss(record.turnState, record.lastActivityAt)
+        : restoreTurnState(record.turnState);
 
     items.push({
       id,
@@ -2173,7 +2192,8 @@ function listDetachedSessions() {
       transport,
       access: normalizeAccessMode(record.access),
       purpose: normalizeSessionPurpose(record.purpose),
-      ready: false,
+      ready: transport === APP_SERVER_TRANSPORT && !explicitlyReleased,
+      suspended: transport === APP_SERVER_TRANSPORT,
       mode: record.mode || "new",
       sessionId: record.sessionId || "",
       memoryProjectMode: record.memoryProjectMode === "manual" ? "manual" : "auto",
@@ -2186,11 +2206,11 @@ function listDetachedSessions() {
       rows: 30,
       connectedClients: 0,
       detachedExpiresAt: detachedExpiresAt(record),
-      released: Boolean(record.released),
+      released: explicitlyReleased,
       exited: false,
       exitCode: null,
       signal: null,
-      turnState: publicTurnState(restoreTurnState(record.turnState)),
+      turnState: publicTurnState(turnState),
       ...resultState,
     });
   }
@@ -5793,6 +5813,7 @@ function publicSession(session) {
     access: normalizeAccessMode(session.access),
     purpose: normalizeSessionPurpose(session.purpose),
     ready: session.ready !== false,
+    suspended: Boolean(session.suspended),
     mode: session.mode,
     sessionId: session.sessionId,
     forkedFromId: session.forkedFromId || "",
@@ -5908,6 +5929,7 @@ function releaseAppServerSessionRuntime(session) {
   session.realtime = restoreRealtimeState();
   session.ready = false;
   session.released = true;
+  session.releaseReason = APP_SERVER_RELEASE_REASON_DETACHED_TTL;
   session.exited = true;
   session.exitCode = 0;
   session.signal = null;
@@ -5979,6 +6001,10 @@ function persistWebSession(session) {
     lastActivityAt: session.lastActivityAt,
     detachedAt: validSessionTimestamp(session.detachedAt),
     released: Boolean(session.released),
+    releaseReason:
+      session.released && session.releaseReason === APP_SERVER_RELEASE_REASON_DETACHED_TTL
+        ? APP_SERVER_RELEASE_REASON_DETACHED_TTL
+        : "",
     turnState: publicTurnState(session.turnState),
   };
   writePersistedWebSessions(records);
@@ -6874,7 +6900,8 @@ async function listRecentAgentSessions(limit = 40) {
         project,
         updatedAt,
         current: Boolean(liveSession),
-        live: Boolean(liveSession && !liveSession.released),
+        live: Boolean(liveSession && !liveSession.released && !liveSession.suspended),
+        suspended: Boolean(liveSession?.suspended),
         released: Boolean(liveSession?.released),
         webSessionId: liveSession?.id || "",
         transport: liveSession?.transport || "terminal",

@@ -3752,17 +3752,29 @@ async function editAndForkAppServerSession(session, { beforeTurnId, editedText, 
     session.lastActivityAt = new Date().toISOString();
     persistRestorableWebSession(session);
     broadcast(session, "status", publicSession(session));
+    let sourceArchived = false;
+    try {
+      await setSessionArchived(sourceThreadId, true);
+      sourceArchived = true;
+    } catch (error) {
+      logAgentEvent("thread-edit-source-archive-failed", {
+        sourceThreadId,
+        forkedThreadId: session.sessionId,
+        message: cleanClientLogValue(error.message, 300),
+      });
+    }
     logAgentEvent("thread-fork-created", {
       webSessionId: session.id,
       sourceThreadId,
       forkedThreadId: session.sessionId,
       beforeTurnId,
-      mode: "edit-current-web-session",
+      mode: "edit-current-web-session-source-archived",
     });
     return {
       sourceThreadId,
       sessionId: session.sessionId,
       title,
+      sourceArchived,
       deliveryMode: submission.deliveryMode,
       skills: submission.skills,
     };

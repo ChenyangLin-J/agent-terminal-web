@@ -40,6 +40,9 @@ test("Agent Web exposes native search, persistent names, branching, subagent nav
   assert.match(app, /function searchCurrentThread\(\)/);
   assert.match(app, /edit\.textContent = "编辑"/);
   assert.match(app, /fork\.textContent = "分支"/);
+  assert.match(app, /原 Session 已归档/);
+  assert.match(server, /await setSessionArchived\(sourceThreadId, true\);[\s\S]*sourceArchived = true/);
+  assert.match(server, /sourceArchived,[\s\S]*deliveryMode/);
   assert.match(app, /function beginCurrentSessionRename\(\)/);
   assert.match(app, /function saveCurrentSessionRename\(\)/);
   assert.match(app, /saveCodexSessionTitle\(sessionId, title\)/);

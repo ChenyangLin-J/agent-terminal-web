@@ -1936,7 +1936,12 @@ function handleControlAck(payload = {}) {
     appTranscriptInitialRestorePending = false;
     if (payload.turnState) renderTurnState(payload.turnState);
     scrollAppTranscriptToBottom();
-    setUploadStatus("已在当前窗口切换到编辑分支，原 Session 保持不变。", { clear: true });
+    setUploadStatus(
+      payload.sourceArchived
+        ? "已在当前窗口切换到编辑后的 Session，原 Session 已归档。"
+        : "已在当前窗口切换到编辑后的 Session，但原 Session 归档失败，仍可继续使用。",
+      { clear: true },
+    );
     return;
   }
   if (payload.kind !== "submit") return;

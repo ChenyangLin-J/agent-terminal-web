@@ -82,6 +82,9 @@ organization is explicit:
 
 - `结束` stops the runtime and moves the Session to `最近历史`.
 - `归档` stops the runtime and moves the Session to `已归档 Session`.
+- `编辑` creates a replacement branch, switches the current page to it, and
+  archives the source Session only after the edited prompt is submitted
+  successfully. `分支` keeps both Sessions visible.
 - Restoring a paused or historical Session keeps the Codex thread context.
 
 The control center also keeps execution and reading state separate. `新结果`

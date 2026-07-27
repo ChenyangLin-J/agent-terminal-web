@@ -289,8 +289,7 @@ let appTranscriptInitialRestorePending = false;
 let appReadingPositionSaveTimer = null;
 let appTranscriptHasUnseenContent = false;
 let appTranscriptSubmitFollowActive = false;
-let lastMarkedViewedTurnId = "";
-let markViewedRequestPending = false;
+let activeSessionUnreadTurnId = "";
 let pendingAppReadingRestore = null;
 let pendingEditFork = null;
 let sessionTitleRenameSaving = false;
@@ -993,6 +992,7 @@ function liveSessionOpenParams(session) {
     access: session.access || "safe",
     purpose: session.purpose || "",
     preview: previewOnly ? "1" : "",
+    unreadTurnId: session.hasUnreadResult ? session.lastCompletedTurnId || "" : "",
   };
 }
 
@@ -1377,7 +1377,10 @@ function renderSessionSwitcher() {
 }
 
 function openSessionInCurrentPage(params) {
+  void markCurrentSessionViewedOnExit();
   const scopedParams = { host: params.host || activeAgentHostId, ...params };
+  activeSessionUnreadTurnId = String(scopedParams.unreadTurnId || "").trim();
+  delete scopedParams.unreadTurnId;
   activeAgentHostId = cleanAgentHostId(scopedParams.host) || activeAgentHostId;
   rememberSessionNavigation(scopedParams);
   renderAgentHostTabs();
@@ -2134,7 +2137,7 @@ function sessionUrl(params) {
   const hostId = cleanAgentHostId(params.host) || activeAgentHostId;
   if (hostId !== "personal") url.searchParams.set("host", hostId);
   for (const [key, value] of Object.entries(params)) {
-    if (key !== "host" && value) url.searchParams.set(key, value);
+    if (!["host", "unreadTurnId"].includes(key) && value) url.searchParams.set(key, value);
   }
   appendNotificationTarget(url);
   return url.toString();
@@ -2184,8 +2187,6 @@ function openSessionPreview(params = {}) {
   appTranscriptInitialRestorePending = true;
   appTranscriptHasUnseenContent = false;
   appTranscriptSubmitFollowActive = false;
-  lastMarkedViewedTurnId = "";
-  markViewedRequestPending = false;
   pendingAppReadingRestore = null;
   pendingEditFork = null;
   appTranscriptSource = "";
@@ -2260,8 +2261,6 @@ function openSocket(params, options = {}) {
     appTranscriptInitialRestorePending = activeTransport === "app-server";
     appTranscriptHasUnseenContent = false;
     appTranscriptSubmitFollowActive = false;
-    lastMarkedViewedTurnId = "";
-    markViewedRequestPending = false;
     pendingAppReadingRestore = null;
     pendingEditFork = null;
     renderEditForkBanner();
@@ -2361,7 +2360,6 @@ function openSocket(params, options = {}) {
     }
     if (message.type === "app-transcript") {
       replaceAppTranscript(message.payload);
-      scheduleLatestResultViewedCheck();
       return;
     }
     if (message.type === "app-transcript-upsert") {
@@ -3735,12 +3733,14 @@ function sendTerminalKey(value) {
 }
 
 function detach(goHome = true) {
+  void markCurrentSessionViewedOnExit();
   saveActiveSessionSnapshot();
   closeSocket();
   if (goHome) {
     forgetSessionNavigation(activeSessionParams);
     activeSessionPreviewOnly = false;
     pendingPreviewSubmission = null;
+    activeSessionUnreadTurnId = "";
     activeSessionId = "";
     activeSessionParams = {};
     showStartScreen();
@@ -3860,15 +3860,14 @@ function installClientEventLogging() {
     }
     refreshTerminalDisplay();
     ensureVisibleConnection("visibility-visible", { probe: true });
-    scheduleLatestResultViewedCheck();
   });
   window.addEventListener("pageshow", (event) => {
     logClientEvent("pageshow", { persisted: event.persisted });
     refreshTerminalDisplay();
     ensureVisibleConnection("pageshow", { probe: true });
-    scheduleLatestResultViewedCheck();
   });
   window.addEventListener("pagehide", (event) => {
+    void markCurrentSessionViewedOnExit({ beacon: true });
     saveActiveSessionSnapshot();
     saveAppReadingPosition();
     logClientEvent("pagehide", { persisted: event.persisted }, { beacon: true });
@@ -3881,6 +3880,7 @@ function installClientEventLogging() {
     logClientEvent("offline", { online: false });
   });
   window.addEventListener("beforeunload", () => {
+    void markCurrentSessionViewedOnExit({ beacon: true });
     saveActiveSessionSnapshot();
     saveAppReadingPosition();
     logClientEvent("beforeunload", {}, { beacon: true });
@@ -4240,9 +4240,15 @@ function renderStatus(status) {
   setConnectedState(status.exited ? "exited" : !activeSessionReady ? "starting" : historySyncPending ? "loading" : "connected");
   setDocumentTitle(status.title || displayProject(status.project));
   renderTurnState(status.turnState);
+  if (
+    !sessionScreen.classList.contains("hidden") &&
+    status.hasUnreadResult &&
+    status.lastCompletedTurnId
+  ) {
+    activeSessionUnreadTurnId = String(status.lastCompletedTurnId);
+  }
   void voiceInputController.offerStoredRecovery();
   syncPrimarySessionView();
-  scheduleLatestResultViewedCheck();
   if (activeTransport === "app-server" && appTranscriptItems.length) {
     renderAppTranscript({ follow: isAppTranscriptAtBottom() });
   }
@@ -4375,6 +4381,7 @@ function setConnectedState(state) {
 }
 
 function showStartScreen() {
+  void markCurrentSessionViewedOnExit();
   saveActiveSessionSnapshot();
   stopAppTranscriptSubmitFollow();
   rememberSessionNavigation(activeSessionParams);
@@ -4408,7 +4415,6 @@ function showSessionScreen() {
   void loadLiveSessions();
   sessionsTimer = window.setInterval(loadLiveSessions, 10_000);
   fitTerminal();
-  scheduleLatestResultViewedCheck();
 }
 
 function syncPrimaryNavigation(screen) {
@@ -4799,7 +4805,6 @@ function finishHistorySync(mode, rawChars) {
   historySyncStartedAt = 0;
   if (activeTransport === "terminal" && rawChars > 1_000) hideTerminalSessionPreview();
   saveActiveSessionSnapshot();
-  scheduleLatestResultViewedCheck();
 }
 
 function currentSocketConnectionState() {
@@ -5956,7 +5961,6 @@ function followAppTranscriptIfNeeded(shouldFollow) {
     appTranscriptHasUnseenContent = false;
     syncAppTranscriptLatestButton();
     scheduleAppReadingPositionSave();
-    void markLatestResultViewed();
   });
 }
 
@@ -5966,66 +5970,56 @@ function scrollAppTranscriptToBottom({ smooth = false } = {}) {
   appTranscriptHasUnseenContent = false;
   syncAppTranscriptLatestButton();
   scheduleAppReadingPositionSave();
-  scheduleLatestResultViewedCheck();
 }
 
 function handleAppTranscriptScroll() {
   if (isAppTranscriptAtBottom()) {
     appTranscriptHasUnseenContent = false;
     syncAppTranscriptLatestButton();
-    scheduleLatestResultViewedCheck();
   }
   scheduleAppReadingPositionSave();
 }
 
-function scheduleLatestResultViewedCheck() {
-  requestAnimationFrame(() => void markLatestResultViewed());
-}
-
-async function markLatestResultViewed() {
+async function markCurrentSessionViewedOnExit({ beacon = false } = {}) {
+  if (sessionScreen.classList.contains("hidden")) return;
   const sessionId = String(activeSessionParams.sessionId || "").trim();
-  const turnId = String(latestTurnState.lastCompletedTurnId || "").trim();
-  const latestResultVisible =
-    activeTransport === "app-server"
-      ? isAppTranscriptAtBottom()
-      : activeTransport === "terminal" && !historySyncPending && isTerminalAtBottom();
-  if (
-    !sessionId ||
-    !turnId ||
-    lastMarkedViewedTurnId === turnId ||
-    markViewedRequestPending ||
-    sessionScreen.classList.contains("hidden") ||
-    document.visibilityState !== "visible" ||
-    !latestResultVisible
-  ) {
+  const turnId = String(activeSessionUnreadTurnId || "").trim();
+  if (!sessionId || !turnId) return;
+
+  activeSessionUnreadTurnId = "";
+  const endpoint = agentHostApiUrl(`/api/codex-sessions/${encodeURIComponent(sessionId)}/viewed`);
+  const body = JSON.stringify({ turnId });
+  const live = liveSessionsCache.find((session) => session.sessionId === sessionId);
+  if (live && live.lastCompletedTurnId === turnId) {
+    live.lastViewedTurnId = turnId;
+    live.hasUnreadResult = false;
+    updateControlCenterSummary();
+    renderSessionSwitcher();
+  }
+
+  if (beacon && navigator.sendBeacon) {
+    navigator.sendBeacon(endpoint, new Blob([body], { type: "application/json" }));
     return;
   }
 
-  markViewedRequestPending = true;
-  lastMarkedViewedTurnId = turnId;
   try {
-    const response = await fetch(agentHostApiUrl(`/api/codex-sessions/${encodeURIComponent(sessionId)}/viewed`), {
+    const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ turnId }),
+      body,
+      keepalive: true,
     });
     if (response.status === 401) {
       redirectToLogin();
       return;
     }
     if (!response.ok) throw new Error("view state was not saved");
-    const live = liveSessionsCache.find((session) => session.sessionId === sessionId);
+  } catch {
     if (live && live.lastCompletedTurnId === turnId) {
-      live.lastViewedTurnId = turnId;
-      live.hasUnreadResult = false;
+      live.hasUnreadResult = true;
       updateControlCenterSummary();
       renderSessionSwitcher();
     }
-  } catch {
-    if (lastMarkedViewedTurnId === turnId) lastMarkedViewedTurnId = "";
-  } finally {
-    markViewedRequestPending = false;
-    if (latestTurnState.lastCompletedTurnId !== turnId) scheduleLatestResultViewedCheck();
   }
 }
 
@@ -6177,7 +6171,6 @@ function ensureTerminal() {
   terminal.onData((data) => {
     send({ type: "input", data });
   });
-  terminal.onScroll(() => scheduleLatestResultViewedCheck());
   installTerminalTouchScroll();
 }
 

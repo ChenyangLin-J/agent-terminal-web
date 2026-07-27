@@ -213,10 +213,19 @@ test("the control center separates execution, reading, and resource state", asyn
   assert.match(page, /data-summary-filter="ready"[\s\S]*空闲/);
   assert.match(app, /session\?\.hasUnreadResult[\s\S]*kind: "unread"[\s\S]*label: "新结果"/);
   assert.match(app, /kind: "ready", state: "waiting", label: "空闲"/);
-  assert.match(app, /sessionScreen\.classList\.contains\("hidden"\)/);
-  assert.match(app, /document\.visibilityState !== "visible"/);
-  assert.match(app, /activeTransport === "app-server"\s+\? isAppTranscriptAtBottom\(\)/);
-  assert.match(app, /activeTransport === "terminal" && !historySyncPending && isTerminalAtBottom\(\)/);
+  assert.match(app, /unreadTurnId: session\.hasUnreadResult \? session\.lastCompletedTurnId \|\| "" : ""/);
+  assert.match(
+    app,
+    /function openSessionInCurrentPage\(params\) \{\s*void markCurrentSessionViewedOnExit\(\);/,
+  );
+  assert.match(app, /function showStartScreen\(\) \{\s*void markCurrentSessionViewedOnExit\(\);/);
+  assert.match(app, /pagehide[\s\S]*markCurrentSessionViewedOnExit\(\{ beacon: true \}\)/);
+  assert.doesNotMatch(app, /scheduleLatestResultViewedCheck|markLatestResultViewed/);
+  const showSessionScreen = app.slice(
+    app.indexOf("function showSessionScreen()"),
+    app.indexOf("function syncPrimaryNavigation"),
+  );
+  assert.doesNotMatch(showSessionScreen, /markCurrentSessionViewedOnExit/);
   assert.match(app, /\/api\/codex-sessions\/\$\{encodeURIComponent\(sessionId\)\}\/viewed/);
 });
 

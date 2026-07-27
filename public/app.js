@@ -164,6 +164,7 @@ const DEFAULT_DOCUMENT_TITLE = "Agent Terminal Web";
 const AGENT_RESTART_ENDPOINT = "https://home.chenyanglin.com/api/system/agent/restart";
 const AGENT_TIME_ZONE = "Asia/Shanghai";
 const ARCHIVED_SESSIONS_PREVIEW_COUNT = 5;
+const HISTORY_SESSIONS_PREVIEW_COUNT = 9;
 const CLIENT_HEARTBEAT_MS = 15_000;
 const CLIENT_STALE_MS = 45_000;
 const CLIENT_RESUME_PROBE_MS = 1_500;
@@ -246,6 +247,7 @@ let agentHosts = [];
 let activeAgentHostId = cleanAgentHostId(new URLSearchParams(window.location.search).get("host")) || "personal";
 let activeControlCenterFilter = "all";
 let archivedSessionsExpanded = false;
+let savedSessionsExpanded = false;
 let latestTurnState = {
   active: false,
   stopping: false,
@@ -316,6 +318,14 @@ const agentDateTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
   second: "2-digit",
   hourCycle: "h23",
 });
+const compactSessionTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: AGENT_TIME_ZONE,
+  month: "numeric",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
 let pushRegistrationPromise = null;
 
 syncStartSelectionsFromUrl(new URLSearchParams(window.location.search));
@@ -373,7 +383,8 @@ sessionSearchInput.addEventListener("keydown", (event) => {
 });
 sessionSearchInput.addEventListener("input", () => {
   if (!sessionSearchInput.value.trim()) sessionSearchResults.classList.add("hidden");
-  applyControlCenterFilter();
+  if (savedSessionsCache.length) renderSavedCodexSessions(savedSessionsCache);
+  else applyControlCenterFilter();
   syncControlCenterFilterReset();
 });
 backButton.addEventListener("click", showStartScreen);
@@ -1004,24 +1015,45 @@ function renderSavedCodexSessions(sessions) {
     return;
   }
 
-  for (const session of nonLiveSessions) {
+  const queryActive = Boolean(sessionSearchInput.value.trim());
+  const visibleSessions =
+    savedSessionsExpanded || queryActive
+      ? nonLiveSessions
+      : nonLiveSessions.slice(0, HISTORY_SESSIONS_PREVIEW_COUNT);
+
+  for (const session of visibleSessions) {
     codexSessionsList.append(
       sessionCard({
         title: session.title || "Untitled session",
         subtitle: displayProject(session.project),
-        meta: [session.updatedAt ? `更新于 ${formatTime(session.updatedAt)}` : ""],
+        meta: [formatCompactSessionTime(session.updatedAt)],
         kind: "history",
+        compact: true,
+        actionIcon: "↗",
         sessionId: session.id,
         favorited: Boolean(session.favorited),
         onFavoriteClick: () => setCodexSessionFavorite(session.id, !session.favorited),
         action: "打开",
         onClick: () => openSavedSessionPreview(session),
-        secondaryAction: "重命名",
-        onSecondaryClick: () => renameCodexSession(session),
+        onTitleSave: (title) => saveSessionCardTitle(session, title),
         tertiaryAction: "归档",
         onTertiaryClick: () => archiveCodexSession(session, true),
       }),
     );
+  }
+
+  if (!queryActive && nonLiveSessions.length > HISTORY_SESSIONS_PREVIEW_COUNT) {
+    const toggleButton = document.createElement("button");
+    toggleButton.type = "button";
+    toggleButton.className = "history-toggle";
+    toggleButton.textContent = savedSessionsExpanded
+      ? "收起历史"
+      : `显示其余 ${nonLiveSessions.length - HISTORY_SESSIONS_PREVIEW_COUNT} 个`;
+    toggleButton.addEventListener("click", () => {
+      savedSessionsExpanded = !savedSessionsExpanded;
+      renderSavedCodexSessions(sessions);
+    });
+    codexSessionsList.append(toggleButton);
   }
   applyControlCenterFilter();
 }
@@ -1045,15 +1077,16 @@ function renderArchivedCodexSessions(sessions) {
       sessionCard({
         title: session.title || "Untitled session",
         subtitle: displayProject(session.project),
-        meta: [`归档于 ${formatTime(session.archivedAt || session.updatedAt)}`],
+        meta: [formatCompactSessionTime(session.archivedAt || session.updatedAt)],
         kind: "history",
+        compact: true,
+        actionIcon: "↩",
         sessionId: session.id,
         favorited: Boolean(session.favorited),
         onFavoriteClick: () => setCodexSessionFavorite(session.id, !session.favorited),
         action: "恢复",
         onClick: () => archiveCodexSession(session, false),
-        secondaryAction: "重命名",
-        onSecondaryClick: () => renameCodexSession(session),
+        onTitleSave: (title) => saveSessionCardTitle(session, title),
       }),
     );
   }
@@ -1063,8 +1096,8 @@ function renderArchivedCodexSessions(sessions) {
     toggleButton.type = "button";
     toggleButton.className = "archive-toggle";
     toggleButton.textContent = archivedSessionsExpanded
-      ? "Show less"
-      : `Show ${sessions.length - ARCHIVED_SESSIONS_PREVIEW_COUNT} more`;
+      ? "收起归档"
+      : `显示其余 ${sessions.length - ARCHIVED_SESSIONS_PREVIEW_COUNT} 个`;
     toggleButton.addEventListener("click", () => {
       archivedSessionsExpanded = !archivedSessionsExpanded;
       renderArchivedCodexSessions(sessions);
@@ -1115,6 +1148,7 @@ function renderFavoriteSessions() {
         favorited: true,
         onFavoriteClick: () => setCodexSessionFavorite(session.id, false),
         action: "打开",
+        onTitleSave: (title) => saveSessionCardTitle(session, title),
         onClick: () => openSavedSessionPreview(session),
       }),
     );
@@ -1322,9 +1356,12 @@ function sessionCard({
   description = "",
   meta: metaItems = [],
   kind = "history",
+  compact = false,
+  actionIcon = "",
   sessionId = "",
   favorited = false,
   onFavoriteClick,
+  onTitleSave,
   action,
   onClick,
   secondaryAction,
@@ -1335,6 +1372,7 @@ function sessionCard({
   const card = document.createElement("div");
   card.className = "session-card";
   card.dataset.sessionKind = kind;
+  if (compact) card.dataset.cardLayout = "compact";
   card.tabIndex = 0;
   card.setAttribute("role", "button");
   const meta = document.createElement("div");
@@ -1343,7 +1381,98 @@ function sessionCard({
   titleRow.className = "session-card-title";
   const titleLabel = document.createElement("strong");
   titleLabel.textContent = title;
-  titleRow.append(titleLabel);
+  if (onTitleSave) {
+    titleRow.classList.add("session-card-title-editable");
+    const titleButton = document.createElement("button");
+    titleButton.type = "button";
+    titleButton.className = "session-card-title-button";
+    titleButton.title = "点击重命名 Session";
+    titleButton.setAttribute("aria-label", `重命名 ${title}`);
+    const renameHint = document.createElement("span");
+    renameHint.className = "session-card-rename-hint";
+    renameHint.setAttribute("aria-hidden", "true");
+    renameHint.textContent = "✎";
+    titleButton.append(titleLabel, renameHint);
+
+    const titleEditor = document.createElement("form");
+    titleEditor.className = "session-card-title-editor hidden";
+    const titleInput = document.createElement("input");
+    titleInput.type = "text";
+    titleInput.maxLength = 120;
+    titleInput.autocomplete = "off";
+    titleInput.setAttribute("aria-label", "Session 名称；按 Enter 保存，Esc 取消");
+    titleEditor.append(titleInput);
+    titleRow.append(titleButton, titleEditor);
+
+    let titleSaving = false;
+    const finishTitleEdit = () => {
+      titleRow.classList.remove("editing", "saving");
+      titleEditor.classList.add("hidden");
+      titleButton.classList.remove("hidden");
+      titleInput.disabled = false;
+      titleInput.value = "";
+    };
+    const saveTitleEdit = async () => {
+      if (!titleRow.classList.contains("editing") || titleSaving) return;
+      const nextTitle = titleInput.value.replace(/\s+/g, " ").trim();
+      if (!nextTitle) {
+        titleInput.setCustomValidity("Session 名称不能为空");
+        titleInput.reportValidity();
+        return;
+      }
+      titleInput.setCustomValidity("");
+      if (nextTitle === titleLabel.textContent) {
+        finishTitleEdit();
+        return;
+      }
+      titleSaving = true;
+      titleRow.classList.add("saving");
+      titleInput.disabled = true;
+      try {
+        const savedTitle = String((await onTitleSave(nextTitle)) || nextTitle);
+        titleLabel.textContent = savedTitle;
+        titleButton.setAttribute("aria-label", `重命名 ${savedTitle}`);
+        finishTitleEdit();
+      } catch (error) {
+        titleRow.classList.remove("saving");
+        titleInput.disabled = false;
+        titleInput.focus();
+        titleInput.select();
+        window.alert(error.message || "Session 重命名失败。");
+      } finally {
+        titleSaving = false;
+      }
+    };
+    titleButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      titleInput.value = titleLabel.textContent;
+      titleRow.classList.add("editing");
+      titleButton.classList.add("hidden");
+      titleEditor.classList.remove("hidden");
+      titleInput.focus();
+      titleInput.select();
+    });
+    titleEditor.addEventListener("click", (event) => event.stopPropagation());
+    titleEditor.addEventListener("submit", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void saveTitleEdit();
+    });
+    titleInput.addEventListener("keydown", (event) => {
+      event.stopPropagation();
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      finishTitleEdit();
+      titleButton.focus();
+    });
+    titleInput.addEventListener("blur", () => {
+      window.setTimeout(() => {
+        if (titleRow.classList.contains("editing")) void saveTitleEdit();
+      }, 0);
+    });
+  } else {
+    titleRow.append(titleLabel);
+  }
   const subtitleLabel = document.createElement("span");
   subtitleLabel.className = "session-card-project";
   subtitleLabel.textContent = subtitle;
@@ -1396,7 +1525,28 @@ function sessionCard({
     });
     actions.append(secondaryButton);
   }
-  if (tertiaryAction) {
+  if (tertiaryAction && compact) {
+    const more = document.createElement("details");
+    more.className = "session-card-more";
+    const summary = document.createElement("summary");
+    summary.title = "更多 Session 操作";
+    summary.setAttribute("aria-label", "更多 Session 操作");
+    summary.textContent = "···";
+    const menu = document.createElement("div");
+    const tertiaryButton = document.createElement("button");
+    tertiaryButton.type = "button";
+    tertiaryButton.textContent = tertiaryAction;
+    tertiaryButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      more.removeAttribute("open");
+      onTertiaryClick?.();
+    });
+    more.addEventListener("click", (event) => event.stopPropagation());
+    more.addEventListener("keydown", (event) => event.stopPropagation());
+    menu.append(tertiaryButton);
+    more.append(summary, menu);
+    actions.append(more);
+  } else if (tertiaryAction) {
     const tertiaryButton = document.createElement("button");
     tertiaryButton.type = "button";
     tertiaryButton.className = "secondary";
@@ -1409,7 +1559,10 @@ function sessionCard({
   }
   const button = document.createElement("button");
   button.type = "button";
-  button.textContent = action;
+  button.className = "session-card-primary";
+  button.textContent = actionIcon || action;
+  button.title = action;
+  button.setAttribute("aria-label", `${action} ${title}`);
   button.addEventListener("click", (event) => {
     event.stopPropagation();
     onClick?.();
@@ -1418,6 +1571,7 @@ function sessionCard({
   card.append(meta, actions);
   card.addEventListener("click", () => onClick?.());
   card.addEventListener("keydown", (event) => {
+    if (event.target !== card) return;
     if (!["Enter", " "].includes(event.key)) return;
     event.preventDefault();
     onClick?.();
@@ -1450,19 +1604,20 @@ async function setCodexSessionFavorite(sessionId, favorited) {
   }
 }
 
-async function renameCodexSession(session) {
-  const currentTitle = session.customTitle || session.title || "";
-  const title = window.prompt("Session title", currentTitle);
-  if (title === null) return;
-
-  try {
-    await saveCodexSessionTitle(session.id, title);
-  } catch (error) {
-    window.alert(error.message || "Failed to save title.");
-    return;
+async function saveSessionCardTitle(session, title) {
+  const payload = await saveCodexSessionTitle(session.id, title);
+  const savedTitle = String(payload.customTitle || title);
+  for (const sessions of [savedSessionsCache, archivedSessionsCache]) {
+    for (const candidate of sessions) {
+      if (candidate.id !== session.id) continue;
+      candidate.title = savedTitle;
+      candidate.customTitle = savedTitle;
+    }
   }
-  await loadSavedCodexSessions();
-  await loadArchivedCodexSessions();
+  session.title = savedTitle;
+  session.customTitle = savedTitle;
+  renderFavoriteSessions();
+  return savedTitle;
 }
 
 async function saveCodexSessionTitle(sessionId, title) {
@@ -5902,6 +6057,13 @@ function redirectToLogin(loginUrl = "") {
 function formatTime(value) {
   if (!value) return "-";
   return agentDateTimeFormatter.format(new Date(value));
+}
+
+function formatCompactSessionTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return compactSessionTimeFormatter.format(date);
 }
 
 function projectForSession(session) {

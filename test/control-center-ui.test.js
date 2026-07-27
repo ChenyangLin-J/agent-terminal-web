@@ -56,6 +56,30 @@ test("frequent Sessions can be starred and pinned above the control center", () 
   );
 });
 
+test("saved Session history is compact, responsive, and renames inline", () => {
+  assert.match(app, /const HISTORY_SESSIONS_PREVIEW_COUNT = 9/);
+  assert.match(app, /nonLiveSessions\.slice\(0, HISTORY_SESSIONS_PREVIEW_COUNT\)/);
+  assert.match(app, /compact: true,[\s\S]*actionIcon: "↗"/);
+  assert.match(app, /className = "history-toggle"/);
+  assert.match(app, /className = "session-card-title-editor hidden"/);
+  assert.match(app, /Session 名称；按 Enter 保存，Esc 取消/);
+  assert.match(app, /function saveSessionCardTitle\(session, title\)/);
+  assert.doesNotMatch(app, /window\.prompt/);
+  assert.match(styles, /\.session-card-more[\s\S]*position: relative/);
+  assert.match(
+    styles,
+    /@media \(min-width: 1200px\)[\s\S]*\.control-center-history \.sessions-list \{[\s\S]*repeat\(3, minmax\(0, 1fr\)\)/,
+  );
+  assert.match(
+    styles,
+    /@media \(min-width: 721px\) and \(max-width: 1100px\)[\s\S]*\.control-center-history \.sessions-list \{[\s\S]*repeat\(2, minmax\(0, 1fr\)\)/,
+  );
+  assert.match(
+    styles,
+    /@media \(max-width: 720px\)[\s\S]*\.control-center-history \.sessions-list \{[\s\S]*grid-template-columns: 1fr/,
+  );
+});
+
 test("desktop and Pad retain the compact switcher while phones use bottom navigation", () => {
   assert.match(page, /id="session-switcher"/);
   assert.match(styles, /@media \(min-width: 721px\)[\s\S]*grid-template-areas:[\s\S]*"switcher header"/);

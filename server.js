@@ -67,6 +67,12 @@ import {
 } from "./lib/session-preview.js";
 import { extractSessionProcessFromJsonl } from "./lib/session-process.js";
 import {
+  normalizeShareMessages,
+  renderSessionSharePage,
+  renderUnavailableSessionSharePage,
+  SessionShareStore,
+} from "./lib/session-shares.js";
+import {
   deleteIntegrationCredential,
   IntegrationError,
   listIntegrations,
@@ -115,6 +121,10 @@ const AGENT_SESSION_FAVORITES_FILE = path.resolve(
   process.env.AGENT_SESSION_FAVORITES_FILE ||
     path.join(path.dirname(CODEX_HOME), ".local", "share", "home-portal", "agent-session-favorites.json"),
 );
+const AGENT_SESSION_SHARES_FILE = path.resolve(
+  process.env.AGENT_SESSION_SHARES_FILE ||
+    path.join(path.dirname(CODEX_HOME), ".local", "share", "agent-terminal-web", "session-shares.json"),
+);
 const AGENT_HOST_STATE_DIR = path.resolve(
   process.env.AGENT_HOST_STATE_DIR ||
     path.join(path.dirname(AGENT_HOSTS_FILE), "host-state"),
@@ -140,6 +150,9 @@ const APP_HISTORY_PAGE_LIMIT = 10;
 const APP_SEARCH_RESULT_LIMIT = 30;
 const APP_SEARCH_HYDRATE_PAGE_LIMIT = 25;
 const APP_SEARCH_HYDRATE_MAX_TURNS = 250;
+const SESSION_SHARE_PAGE_LIMIT = 50;
+const SESSION_SHARE_MAX_TURNS = 500;
+const SESSION_SHARE_PRUNE_MS = 60_000;
 const APP_THREAD_TREE_PAGE_LIMIT = 100;
 const APP_THREAD_TREE_MAX_THREADS = 800;
 const REALTIME_AUDIO_MAX_BASE64_CHARS = 196_608;
@@ -192,6 +205,10 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/terminal" });
 const sessions = new Map();
 const integrationMutationAttempts = new Map();
+const sessionShareStore = new SessionShareStore(AGENT_SESSION_SHARES_FILE);
+void pruneExpiredSessionShares();
+const sessionSharePruneTimer = setInterval(pruneExpiredSessionShares, SESSION_SHARE_PRUNE_MS);
+sessionSharePruneTimer.unref?.();
 let catalogAppServerClient = null;
 let catalogAppServerStart = null;
 let catalogAppServerIdleTimer = null;
@@ -223,6 +240,15 @@ app.get("/healthz", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Agent-Instance", agentInstanceId);
   res.type("text/plain").send("ok");
+});
+app.get("/share/:token", async (req, res) => {
+  applyPublicShareHeaders(res);
+  const share = await sessionShareStore.resolve(String(req.params.token || ""));
+  if (!share) {
+    res.status(410).type("html").send(renderUnavailableSessionSharePage());
+    return;
+  }
+  res.type("html").send(renderSessionSharePage(share));
 });
 app.use("/shared", express.static(path.join(WORKSPACE_ROOT, "shared-web")));
 app.use("/", express.static(path.join(__dirname, "public")));
@@ -449,6 +475,101 @@ app.get("/open/local", async (req, res) => {
 });
 
 app.use("/api", requireAuth);
+
+app.get("/api/session-shares", async (req, res) => {
+  const agentHost = requestAgentHost(req, res);
+  if (!agentHost) return;
+  const sessionId = String(req.query.sessionId || "").trim();
+  if (!isValidSessionId(sessionId)) {
+    res.status(400).json({ error: "Invalid session id." });
+    return;
+  }
+  try {
+    const shares = await sessionShareStore.list({ hostId: agentHost.id, sessionId });
+    res.set("Cache-Control", "private, no-store");
+    res.json({ shares });
+  } catch (error) {
+    logAgentEvent("session-share-list-failed", {
+      hostId: agentHost.id,
+      codexSessionId: sessionId,
+      message: cleanClientLogValue(error.message, 300),
+    });
+    res.status(500).json({ error: "暂时无法读取分享状态。" });
+  }
+});
+
+app.post("/api/session-shares", async (req, res) => {
+  const webSessionId = String(req.body?.webSessionId || "").trim();
+  if (!isValidWebSessionId(webSessionId)) {
+    res.status(400).json({ error: "Invalid web session id." });
+    return;
+  }
+  const session = sessions.get(webSessionId);
+  if (!session || session.exited) {
+    res.status(404).json({ error: "这个 Session 已不在运行，无法创建静态快照。" });
+    return;
+  }
+  if (
+    session.transport !== APP_SERVER_TRANSPORT ||
+    !session.ready ||
+    !isValidSessionId(session.sessionId)
+  ) {
+    res.status(409).json({ error: "Session 历史尚未准备好，请稍后再试。" });
+    return;
+  }
+
+  try {
+    const snapshot = await sessionShareSnapshot(session);
+    if (!snapshot.messages.length) {
+      res.status(409).json({ error: "这个 Session 还没有可分享的用户消息和最终回答。" });
+      return;
+    }
+    const created = await sessionShareStore.create({
+      hostId: session.hostId || PERSONAL_AGENT_HOST.id,
+      sessionId: session.sessionId,
+      title: session.title,
+      messages: snapshot.messages,
+      truncated: snapshot.truncated,
+    });
+    const url = new URL(`/share/${created.token}`, getOrigin(req)).toString();
+    logAgentEvent("session-share-created", {
+      shareId: created.share.id,
+      hostId: session.hostId || PERSONAL_AGENT_HOST.id,
+      codexSessionId: session.sessionId,
+      messageCount: created.share.messageCount,
+      expiresAt: created.share.expiresAt,
+    });
+    res.set("Cache-Control", "private, no-store");
+    res.status(201).json({ share: created.share, url });
+  } catch (error) {
+    logAgentEvent("session-share-create-failed", {
+      webSessionId,
+      codexSessionId: session.sessionId,
+      message: cleanClientLogValue(error.message, 300),
+    });
+    res.status(500).json({ error: "静态快照暂时无法创建。" });
+  }
+});
+
+app.delete("/api/session-shares/:id", async (req, res) => {
+  const shareId = String(req.params.id || "").trim();
+  try {
+    const revoked = await sessionShareStore.revoke(shareId);
+    if (!revoked) {
+      res.status(404).json({ error: "这个分享链接已经失效。" });
+      return;
+    }
+    logAgentEvent("session-share-revoked", { shareId });
+    res.set("Cache-Control", "private, no-store");
+    res.json({ id: shareId, revoked: true });
+  } catch (error) {
+    logAgentEvent("session-share-revoke-failed", {
+      shareId: cleanClientLogValue(shareId, 40),
+      message: cleanClientLogValue(error.message, 300),
+    });
+    res.status(500).json({ error: "暂时无法撤销这个分享链接。" });
+  }
+});
 
 app.get("/api/integrations", async (_req, res) => {
   res.set("Cache-Control", "private, no-store");
@@ -1429,6 +1550,30 @@ async function requireAuth(req, res, next) {
     return;
   }
   res.status(401).json({ error: "Not authenticated." });
+}
+
+function applyPublicShareHeaders(res) {
+  res.set({
+    "Cache-Control": "private, no-store, max-age=0",
+    "Content-Security-Policy":
+      "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    Pragma: "no-cache",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "X-Robots-Tag": "noindex, nofollow, noarchive",
+  });
+}
+
+async function pruneExpiredSessionShares() {
+  try {
+    await sessionShareStore.prune();
+  } catch (error) {
+    logAgentEvent("session-share-prune-failed", {
+      message: cleanClientLogValue(error.message, 300),
+    });
+  }
 }
 
 function requireSafeIntegrationMutation(req, res, next) {
@@ -5092,6 +5237,129 @@ function appServerUserMessageContent(session, content) {
     } else if (entry?.type === "skill") text.push(`Skill：${entry.name || entry.path || ""}`);
   }
   return { text: text.filter(Boolean).join("\n"), attachments };
+}
+
+async function sessionShareSnapshot(session) {
+  const candidates = new Map();
+  let sequence = 0;
+  let cursor = null;
+  let scannedTurns = 0;
+  let pageTruncated = false;
+
+  try {
+    const turnsById = new Map();
+    do {
+      const page = await session.appServer.listThreadTurns({
+        limit: SESSION_SHARE_PAGE_LIMIT,
+        cursor,
+        sortDirection: "desc",
+        itemsView: "full",
+      });
+      const turns = Array.isArray(page?.data) ? page.data : [];
+      for (const turn of turns) {
+        const turnId = String(turn?.id || "");
+        if (turnId) turnsById.set(turnId, turn);
+      }
+      scannedTurns += turns.length;
+      cursor = page?.nextCursor || null;
+      if (!turns.length) break;
+    } while (cursor && scannedTurns < SESSION_SHARE_MAX_TURNS);
+    pageTruncated = Boolean(cursor);
+
+    const turns = [...turnsById.values()].sort(
+      (left, right) => Number(left?.startedAt || 0) - Number(right?.startedAt || 0),
+    );
+    for (const turn of turns) {
+      const turnStartedAt = Number.isFinite(turn?.startedAt) ? turn.startedAt : null;
+      for (const item of Array.isArray(turn?.items) ? turn.items : []) {
+        const candidate = sessionShareCandidateFromThreadItem(item, turnStartedAt, sequence++);
+        if (candidate) candidates.set(candidate.sourceId, candidate);
+      }
+    }
+  } catch (error) {
+    logAgentEvent("session-share-history-fallback", {
+      webSessionId: session.id,
+      codexSessionId: session.sessionId,
+      message: cleanClientLogValue(error.message, 300),
+    });
+  }
+
+  for (const item of session.appTranscript) {
+    const candidate = sessionShareCandidateFromTranscriptItem(item, sequence++);
+    if (candidate) candidates.set(candidate.sourceId, candidate);
+  }
+
+  const ordered = [...candidates.values()]
+    .sort((left, right) => {
+      const leftTime = left.turnStartedAt ?? Number.MAX_SAFE_INTEGER;
+      const rightTime = right.turnStartedAt ?? Number.MAX_SAFE_INTEGER;
+      return leftTime === rightTime ? left.sequence - right.sequence : leftTime - rightTime;
+    })
+    .map(({ role, text }) => ({ role, text }));
+  const messages = normalizeShareMessages(ordered);
+  return {
+    messages,
+    truncated: pageTruncated || Boolean(messages.truncated),
+  };
+}
+
+function sessionShareCandidateFromThreadItem(item, turnStartedAt, sequence) {
+  if (!item || typeof item !== "object") return null;
+  if (item.type === "userMessage") {
+    const text = sessionShareUserText(item.content);
+    return text
+      ? {
+          sourceId: String(item.id || `share-user-${sequence}`),
+          role: "user",
+          text,
+          turnStartedAt,
+          sequence,
+        }
+      : null;
+  }
+  if (item.type !== "agentMessage" || !["", "final_answer"].includes(String(item.phase || ""))) {
+    return null;
+  }
+  const text = String(item.text || "").trim();
+  return text
+    ? {
+        sourceId: String(item.id || `share-assistant-${sequence}`),
+        role: "assistant",
+        text,
+        turnStartedAt,
+        sequence,
+      }
+    : null;
+}
+
+function sessionShareCandidateFromTranscriptItem(item, sequence) {
+  const role =
+    item?.type === "user"
+      ? "user"
+      : item?.type === "assistant" && ["", "final_answer"].includes(String(item.phase || ""))
+        ? "assistant"
+        : "";
+  const text = String(item?.text || "").trim();
+  if (!role || !text) return null;
+  return {
+    sourceId: String(item.id || `share-live-${sequence}`),
+    role,
+    text,
+    turnStartedAt: Number.isFinite(item.turnStartedAt) ? item.turnStartedAt : null,
+    sequence,
+  };
+}
+
+function sessionShareUserText(content) {
+  return (Array.isArray(content) ? content : [])
+    .flatMap((entry) => {
+      if (typeof entry === "string") return [entry];
+      if (entry?.type === "text" && entry.text) return [entry.text];
+      return [];
+    })
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join("\n");
 }
 
 function appServerMessageAttachment(session, entry) {

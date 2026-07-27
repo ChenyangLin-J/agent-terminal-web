@@ -59,6 +59,7 @@ const appSessionTaskState = document.querySelector("#app-session-task-state");
 const appSessionTaskStop = document.querySelector("#app-session-task-stop");
 const appSessionAgentsButton = document.querySelector("#app-session-agents");
 const appSessionTreeButton = document.querySelector("#app-session-tree");
+const appSessionShareButton = document.querySelector("#app-session-share");
 const appSessionSideChatButton = document.querySelector("#app-session-side-chat");
 const appSessionRealtimeButton = document.querySelector("#app-session-realtime");
 const appSessionMore = document.querySelector("#app-session-more");
@@ -122,6 +123,17 @@ const threadTreeRefresh = document.querySelector("#thread-tree-refresh");
 const threadTreeClose = document.querySelector("#thread-tree-close");
 const threadTreeNote = document.querySelector("#thread-tree-note");
 const threadTreeContent = document.querySelector("#thread-tree-content");
+const sessionShareDialog = document.querySelector("#session-share-dialog");
+const sessionShareClose = document.querySelector("#session-share-close");
+const sessionShareStatus = document.querySelector("#session-share-status");
+const sessionShareDetail = document.querySelector("#session-share-detail");
+const sessionShareLinkField = document.querySelector("#session-share-link-field");
+const sessionShareLink = document.querySelector("#session-share-link");
+const sessionShareError = document.querySelector("#session-share-error");
+const sessionShareCreate = document.querySelector("#session-share-create");
+const sessionShareCopy = document.querySelector("#session-share-copy");
+const sessionShareOpen = document.querySelector("#session-share-open");
+const sessionShareRevoke = document.querySelector("#session-share-revoke");
 const sideChatDialog = document.querySelector("#side-chat-dialog");
 const sideChatDismiss = document.querySelector("#side-chat-dismiss");
 const sideChatClose = document.querySelector("#side-chat-close");
@@ -178,6 +190,7 @@ const SESSION_SNAPSHOT_STORE_KEY = "agent_terminal_session_snapshots";
 const APP_READING_POSITION_STORE_KEY = "agent_terminal_app_reading_positions";
 const LAST_SESSION_NAVIGATION_STORE_KEY = "agent_terminal_last_session_navigation";
 const SESSION_SWITCHER_COLLAPSED_STORE_KEY = "agent_terminal_session_switcher_collapsed";
+const SESSION_SHARE_LINKS_STORE_KEY = "agent_terminal_session_share_links";
 const SESSION_SNAPSHOT_LIMIT = 8;
 const SESSION_SNAPSHOT_MAX_CHARS = 200_000;
 const TERMINAL_RECENT_HISTORY_MAX_CHARS = 24_000;
@@ -307,6 +320,9 @@ let sessionPreviewRequestSequence = 0;
 let terminalPreviewAllowed = false;
 let terminalOutputWhilePreviewChars = 0;
 let agentManagerRefreshTimer = null;
+let currentSessionShare = null;
+let currentSessionShareUrl = "";
+let sessionShareRequestSequence = 0;
 let appSkills = [];
 let appSkillsRequested = false;
 let suggestionItems = [];
@@ -433,6 +449,10 @@ appSessionTreeButton.addEventListener("click", () => {
   closeAppSessionMoreMenu();
   openThreadTree();
 });
+appSessionShareButton.addEventListener("click", () => {
+  closeAppSessionMoreMenu();
+  openSessionShare();
+});
 appSessionSideChatButton.addEventListener("click", () => {
   closeAppSessionMoreMenu();
   openSideChat();
@@ -495,6 +515,14 @@ threadTreeClose.addEventListener("click", () => threadTreeDialog.close());
 threadTreeDialog.addEventListener("click", (event) => {
   if (event.target === threadTreeDialog) threadTreeDialog.close();
 });
+sessionShareClose.addEventListener("click", () => sessionShareDialog.close());
+sessionShareDialog.addEventListener("click", (event) => {
+  if (event.target === sessionShareDialog) sessionShareDialog.close();
+});
+sessionShareCreate.addEventListener("click", createSessionShare);
+sessionShareCopy.addEventListener("click", copySessionShareLink);
+sessionShareOpen.addEventListener("click", openSessionShareLink);
+sessionShareRevoke.addEventListener("click", revokeSessionShare);
 sideChatDismiss.addEventListener("click", () => sideChatDialog.close());
 sideChatDialog.addEventListener("click", (event) => {
   if (event.target === sideChatDialog) sideChatDialog.close();
@@ -3277,6 +3305,252 @@ function appendThreadTreeNodes(host, children, parentId, visited) {
   }
 }
 
+async function openSessionShare() {
+  const sessionId = String(activeSessionParams.sessionId || "").trim();
+  const webSessionId = String(activeSessionId || "").trim();
+  if (!sessionId || !webSessionId || activeTransport !== "app-server") {
+    window.alert("当前 Session 的历史尚未准备好，暂时无法创建快照。");
+    return;
+  }
+
+  const requestSequence = ++sessionShareRequestSequence;
+  currentSessionShare = null;
+  currentSessionShareUrl = "";
+  renderSessionShareState({ loading: true });
+  if (!sessionShareDialog.open) sessionShareDialog.showModal();
+
+  try {
+    const response = await fetch(
+      agentHostApiUrl(
+        `/api/session-shares?sessionId=${encodeURIComponent(sessionId)}`,
+        activeSessionParams.host || activeAgentHostId,
+      ),
+    );
+    if (response.status === 401) {
+      redirectToLogin();
+      return;
+    }
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "分享状态读取失败");
+    if (requestSequence !== sessionShareRequestSequence) return;
+    currentSessionShare = Array.isArray(payload.shares) ? payload.shares[0] || null : null;
+    currentSessionShareUrl = currentSessionShare ? storedSessionShareLink(currentSessionShare.id) : "";
+    renderSessionShareState();
+  } catch (error) {
+    if (requestSequence !== sessionShareRequestSequence) return;
+    renderSessionShareState({ error: error.message });
+  }
+}
+
+async function createSessionShare() {
+  const webSessionId = String(activeSessionId || "").trim();
+  if (!webSessionId) return;
+  if (
+    currentSessionShare &&
+    !window.confirm("生成新链接后，当前分享链接会立即失效。继续生成吗？")
+  ) {
+    return;
+  }
+
+  setSessionShareBusy(true);
+  clearSessionShareError();
+  try {
+    const response = await fetch(
+      agentHostApiUrl("/api/session-shares", activeSessionParams.host || activeAgentHostId),
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ webSessionId }),
+      },
+    );
+    if (response.status === 401) {
+      redirectToLogin();
+      return;
+    }
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "创建分享链接失败");
+    if (currentSessionShare?.id) removeStoredSessionShareLink(currentSessionShare.id);
+    currentSessionShare = payload.share || null;
+    currentSessionShareUrl = String(payload.url || "");
+    if (currentSessionShare?.id && currentSessionShareUrl) {
+      storeSessionShareLink(currentSessionShare.id, currentSessionShareUrl, currentSessionShare.expiresAt);
+    }
+    renderSessionShareState();
+  } catch (error) {
+    showSessionShareError(error.message);
+  } finally {
+    setSessionShareBusy(false);
+  }
+}
+
+async function copySessionShareLink() {
+  if (!currentSessionShareUrl) return;
+  try {
+    await navigator.clipboard.writeText(currentSessionShareUrl);
+    sessionShareCopy.textContent = "已复制";
+    window.setTimeout(() => {
+      sessionShareCopy.textContent = "复制链接";
+    }, 1600);
+  } catch {
+    sessionShareLink.focus();
+    sessionShareLink.select();
+    showSessionShareError("自动复制失败，链接已选中，请手动复制。");
+  }
+}
+
+function openSessionShareLink() {
+  if (!currentSessionShareUrl) return;
+  window.open(currentSessionShareUrl, "_blank", "noopener,noreferrer");
+}
+
+async function revokeSessionShare() {
+  if (!currentSessionShare?.id) return;
+  if (!window.confirm("撤销这个分享链接？对方刷新后将无法继续查看。")) return;
+
+  setSessionShareBusy(true);
+  clearSessionShareError();
+  const shareId = currentSessionShare.id;
+  try {
+    const response = await fetch(
+      agentHostApiUrl(
+        `/api/session-shares/${encodeURIComponent(shareId)}`,
+        activeSessionParams.host || activeAgentHostId,
+      ),
+      { method: "DELETE" },
+    );
+    if (response.status === 401) {
+      redirectToLogin();
+      return;
+    }
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok && response.status !== 404) {
+      throw new Error(payload.error || "撤销分享链接失败");
+    }
+    removeStoredSessionShareLink(shareId);
+    currentSessionShare = null;
+    currentSessionShareUrl = "";
+    renderSessionShareState();
+  } catch (error) {
+    showSessionShareError(error.message);
+  } finally {
+    setSessionShareBusy(false);
+  }
+}
+
+function renderSessionShareState({ loading = false, error = "" } = {}) {
+  clearSessionShareError();
+  sessionShareLinkField.classList.add("hidden");
+  sessionShareCopy.classList.add("hidden");
+  sessionShareOpen.classList.add("hidden");
+  sessionShareRevoke.classList.add("hidden");
+  sessionShareCreate.classList.remove("hidden");
+
+  if (loading) {
+    sessionShareStatus.textContent = "正在读取…";
+    sessionShareDetail.textContent = "正在检查当前 Session 是否已有有效分享。";
+    sessionShareCreate.disabled = true;
+    return;
+  }
+  sessionShareCreate.disabled = false;
+  if (error) {
+    sessionShareStatus.textContent = "读取失败";
+    sessionShareDetail.textContent = "分享状态暂时不可用。";
+    showSessionShareError(error);
+    return;
+  }
+  if (!currentSessionShare) {
+    sessionShareStatus.textContent = "尚未分享";
+    sessionShareDetail.textContent =
+      "创建后会固化当前完整对话，链接在 24 小时后自动失效；请先确认正文中没有不希望公开的信息。";
+    sessionShareCreate.textContent = "创建 24 小时链接";
+    return;
+  }
+
+  sessionShareStatus.textContent = `有效至 ${formatTime(currentSessionShare.expiresAt)}`;
+  const messageCount = Number(currentSessionShare.messageCount || 0);
+  sessionShareDetail.textContent = currentSessionShareUrl
+    ? `快照包含 ${messageCount} 条消息。链接只在创建设备保存，可随时撤销。`
+    : `快照包含 ${messageCount} 条消息。服务端不保存原始链接；可撤销，或生成一个新链接替换它。`;
+  sessionShareRevoke.classList.remove("hidden");
+  sessionShareCreate.textContent = "生成新链接";
+  if (!currentSessionShareUrl) return;
+
+  sessionShareLink.value = currentSessionShareUrl;
+  sessionShareLinkField.classList.remove("hidden");
+  sessionShareCopy.classList.remove("hidden");
+  sessionShareOpen.classList.remove("hidden");
+}
+
+function setSessionShareBusy(busy) {
+  sessionShareCreate.disabled = busy;
+  sessionShareCopy.disabled = busy;
+  sessionShareOpen.disabled = busy;
+  sessionShareRevoke.disabled = busy;
+  if (busy) sessionShareStatus.textContent = "正在处理…";
+}
+
+function showSessionShareError(message) {
+  sessionShareError.textContent = message || "分享操作失败，请稍后重试。";
+  sessionShareError.classList.remove("hidden");
+}
+
+function clearSessionShareError() {
+  sessionShareError.textContent = "";
+  sessionShareError.classList.add("hidden");
+}
+
+function storedSessionShareLink(shareId) {
+  const links = readStoredSessionShareLinks();
+  const item = links[shareId];
+  if (!item) return "";
+  try {
+    const url = new URL(item.url);
+    if (
+      url.origin !== window.location.origin ||
+      !/^\/share\/[A-Za-z0-9_-]{43}$/.test(url.pathname)
+    ) {
+      return "";
+    }
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+function storeSessionShareLink(shareId, url, expiresAt) {
+  const links = readStoredSessionShareLinks();
+  links[shareId] = { url, expiresAt };
+  writeStoredSessionShareLinks(links);
+}
+
+function removeStoredSessionShareLink(shareId) {
+  const links = readStoredSessionShareLinks();
+  delete links[shareId];
+  writeStoredSessionShareLinks(links);
+}
+
+function readStoredSessionShareLinks() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SESSION_SHARE_LINKS_STORE_KEY) || "{}");
+    const now = Date.now();
+    return Object.fromEntries(
+      Object.entries(parsed && typeof parsed === "object" ? parsed : {})
+        .filter(([, item]) => item?.url && Date.parse(item?.expiresAt || 0) > now)
+        .slice(-20),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function writeStoredSessionShareLinks(links) {
+  try {
+    localStorage.setItem(SESSION_SHARE_LINKS_STORE_KEY, JSON.stringify(links));
+  } catch {
+    // A full or disabled localStorage should not block creating and revoking links.
+  }
+}
+
 function createFeatureEmpty(text) {
   const empty = document.createElement("p");
   empty.className = "feature-empty";
@@ -4596,6 +4870,11 @@ function setConnectedState(state) {
     activeTransport !== "app-server" || !connected || !activeSessionCapabilities.subagents;
   appSessionTreeButton.disabled =
     activeTransport !== "app-server" || !connected || !activeSessionCapabilities.threadTree;
+  appSessionShareButton.disabled =
+    activeTransport !== "app-server" ||
+    !connected ||
+    !activeSessionId ||
+    !activeSessionParams.sessionId;
   appSessionSideChatButton.disabled =
     activeTransport !== "app-server" || !connected || !activeSessionCapabilities.sideChat;
   realtimeController.setEnabled(

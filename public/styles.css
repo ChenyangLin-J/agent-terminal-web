@@ -573,6 +573,76 @@ input {
   line-height: 1.55;
 }
 
+.session-share-dialog {
+  width: min(620px, calc(100vw - 28px));
+}
+
+.session-share-state {
+  display: grid;
+  gap: 8px;
+  padding: 12px 13px;
+  border: 1px solid #303949;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #151b25, #0f141c);
+}
+
+.session-share-state > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.session-share-state span,
+.session-share-link-field > span {
+  color: #8994a8;
+  font-size: 12px;
+}
+
+.session-share-state strong {
+  color: #b9c9ff;
+  font-size: 13px;
+}
+
+.session-share-state p,
+.session-share-error {
+  margin: 0;
+  color: #aeb7c8;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.session-share-link-field {
+  display: grid;
+  gap: 7px;
+}
+
+.session-share-link-field input {
+  width: 100%;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.session-share-error {
+  padding: 9px 11px;
+  border: 1px solid #713842;
+  border-radius: 9px;
+  color: #ffb4bf;
+  background: #281419;
+}
+
+.session-share-actions {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+}
+
+.session-share-actions #session-share-create {
+  grid-column: 4;
+}
+
+.session-share-actions #session-share-revoke:not(.hidden) ~ #session-share-create {
+  grid-column: auto;
+}
+
 .agent-manager-list {
   display: grid;
   gap: 10px;
@@ -850,6 +920,15 @@ input {
 
   .realtime-actions {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .session-share-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .session-share-actions #session-share-revoke,
+  .session-share-actions #session-share-create {
+    grid-column: 1 / -1;
   }
 
   #realtime-fallback {

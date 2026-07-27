@@ -369,6 +369,10 @@
                 <span>关系</span>
                 <strong>分支树</strong>
               </button>
+              <button id="app-session-share" type="button" title="创建当前 Session 的 24 小时只读快照">
+                <span>分享</span>
+                <strong>24 小时</strong>
+              </button>
               <button id="app-session-side-chat" type="button" title="打开不影响主任务的只读临时对话">
                 <span>侧问</span>
                 <strong>临时</strong>
@@ -487,6 +491,39 @@
         </header>
         <p id="thread-tree-note" class="feature-dialog-note">正在读取分支与 Agent 关系…</p>
         <div id="thread-tree-content" class="thread-tree-content" aria-live="polite"></div>
+      </section>
+    </dialog>
+
+    <dialog id="session-share-dialog" class="feature-dialog session-share-dialog" aria-labelledby="session-share-title">
+      <section class="feature-dialog-shell">
+        <header>
+          <div>
+            <span>Static snapshot · 24 hours</span>
+            <h2 id="session-share-title">临时分享 Session</h2>
+          </div>
+          <button id="session-share-close" class="dialog-close" type="button" aria-label="关闭">×</button>
+        </header>
+        <p class="feature-dialog-note">
+          链接无需登录，知道链接的人都能查看。快照只包含用户消息和 Codex 最终回答，不包含工具过程、附件或记忆引用，也不会随原 Session 更新。
+        </p>
+        <section class="session-share-state" aria-live="polite">
+          <div>
+            <span>当前状态</span>
+            <strong id="session-share-status">正在读取…</strong>
+          </div>
+          <p id="session-share-detail">正在检查当前 Session 是否已有有效分享。</p>
+        </section>
+        <label id="session-share-link-field" class="session-share-link-field hidden">
+          <span>分享链接</span>
+          <input id="session-share-link" type="url" readonly />
+        </label>
+        <p id="session-share-error" class="session-share-error hidden"></p>
+        <div class="feature-dialog-actions session-share-actions">
+          <button id="session-share-revoke" class="danger hidden" type="button">撤销链接</button>
+          <button id="session-share-open" class="hidden" type="button">打开</button>
+          <button id="session-share-copy" class="hidden" type="button">复制链接</button>
+          <button id="session-share-create" class="primary" type="button">创建 24 小时链接</button>
+        </div>
       </section>
     </dialog>
 

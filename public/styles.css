@@ -3605,7 +3605,7 @@ input {
   box-sizing: border-box;
   cursor: pointer;
   list-style: none;
-  font-size: 13px;
+  font-size: 18px;
 }
 
 .session-card-more > summary::-webkit-details-marker {
@@ -3692,7 +3692,7 @@ input {
   padding: 12px 14px;
   color: #99a5b7;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 18px;
 }
 
 .control-center-archive > .sessions-list {

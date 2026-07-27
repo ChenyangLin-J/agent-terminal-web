@@ -1353,7 +1353,7 @@ function renderSessionSwitcher() {
         }
       });
       const summary = document.createElement("summary");
-      summary.textContent = "···";
+      summary.textContent = "⋮";
       summary.setAttribute("aria-label", `管理 ${title.textContent}`);
       summary.title = "归档或结束";
       const menu = document.createElement("div");
@@ -1592,7 +1592,7 @@ function sessionCard({
     const summary = document.createElement("summary");
     summary.title = "更多 Session 操作";
     summary.setAttribute("aria-label", "更多 Session 操作");
-    summary.textContent = "···";
+    summary.textContent = "⋮";
     const menu = document.createElement("div");
     const tertiaryButton = document.createElement("button");
     tertiaryButton.type = "button";

@@ -13,7 +13,7 @@ test("the desktop and Pad Session switcher exposes contextual archive and end ac
   assert.match(app, /actions\.className = "session-switcher-actions"/);
   assert.match(app, /actions\.open = sessionKey === openSessionSwitcherActionId/);
   assert.match(app, /openSessionSwitcherActionId = sessionKey/);
-  assert.match(app, /summary\.textContent = "···"/);
+  assert.match(app, /summary\.textContent = "⋮"/);
   assert.match(app, /archive\.textContent = "归档"/);
   assert.match(app, /end\.textContent = "结束"/);
   assert.match(app, /function archiveSessionFromSwitcher\(session\)/);

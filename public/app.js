@@ -828,15 +828,19 @@ function uniqueLiveSessions(sessions) {
     }
   }
 
-  return [...byKey.values()].sort(
-    (a, b) => new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime(),
-  );
+  return [...byKey.values()].sort(compareLiveSessionOrder);
 }
 
 function compareLiveSession(a, b) {
   const clients = (a.connectedClients || 0) - (b.connectedClients || 0);
   if (clients !== 0) return clients;
   return new Date(a.lastActivityAt).getTime() - new Date(b.lastActivityAt).getTime();
+}
+
+function compareLiveSessionOrder(a, b) {
+  const startedAt = new Date(b.startedAt || 0).getTime() - new Date(a.startedAt || 0).getTime();
+  if (startedAt !== 0) return startedAt;
+  return String(a.sessionId || a.id || "").localeCompare(String(b.sessionId || b.id || ""));
 }
 
 function liveSessionPresentation(session) {

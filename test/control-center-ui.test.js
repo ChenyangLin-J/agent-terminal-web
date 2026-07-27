@@ -32,6 +32,8 @@ test("control center cards derive attention and progress from real Session state
   assert.match(app, /kind: "ready", state: "waiting", label: "空闲"/);
   assert.match(app, /function liveSessionCurrentTask\(session/);
   assert.match(app, /turnState\?\.requirements/);
+  assert.match(app, /return \[\.\.\.byKey\.values\(\)\]\.sort\(compareLiveSessionOrder\)/);
+  assert.match(app, /function compareLiveSessionOrder\(a, b\)[\s\S]*startedAt/);
   assert.doesNotMatch(app, /Math\.random\(\).*progress/);
 });
 

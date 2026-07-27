@@ -4375,11 +4375,19 @@ function renderAppTranscript({ follow = false } = {}) {
   const canRestoreInitial =
     appTranscriptInitialRestorePending &&
     (appTranscriptItems.length > 0 || Boolean(cachedSessionPreview?.result));
+  const transientDiskPreview =
+    appTranscriptSource === "disk" &&
+    (typeof activeSessionPreviewOnly === "undefined" || !activeSessionPreviewOnly);
+  const preferLatestRunningEntry =
+    canRestoreInitial && Boolean(latestTurnState.active || latestTurnState.stopping);
   const storedPosition = canRestoreInitial ? readAppReadingPosition() : null;
   let shouldFollow = follow || appTranscriptSubmitFollowActive || wasAtBottom;
   if (canRestoreInitial) {
-    appTranscriptInitialRestorePending = false;
-    shouldFollow = appTranscriptSubmitFollowActive || (storedPosition ? Boolean(storedPosition.atBottom) : true);
+    if (!transientDiskPreview) appTranscriptInitialRestorePending = false;
+    shouldFollow =
+      preferLatestRunningEntry ||
+      appTranscriptSubmitFollowActive ||
+      (storedPosition ? Boolean(storedPosition.atBottom) : true);
   }
   const fragment = document.createDocumentFragment();
 
@@ -4547,7 +4555,7 @@ function renderAppTranscript({ follow = false } = {}) {
 
   appServerTranscript.replaceChildren(fragment);
   syncEditForkSourceHighlight();
-  if (canRestoreInitial && storedPosition && !storedPosition.atBottom) {
+  if (canRestoreInitial && storedPosition && !storedPosition.atBottom && !shouldFollow) {
     restoreAppTranscriptAnchor(storedPosition);
   } else if (liveAnchor && !shouldFollow) {
     restoreAppTranscriptAnchor(liveAnchor);

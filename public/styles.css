@@ -2620,16 +2620,24 @@ input {
   position: relative;
 }
 
-.app-transcript-latest {
+.app-transcript-latest-layer {
   position: sticky;
   z-index: 8;
   top: calc(100% - 48px);
-  float: right;
-  margin: 0 14px -40px 0;
+  display: flex;
+  height: 0;
+  justify-content: flex-end;
+  padding: 0 14px;
+  pointer-events: none;
+}
+
+.app-transcript-latest {
+  flex: 0 0 auto;
   border-color: rgba(96, 165, 250, 0.55);
   background: rgba(18, 30, 49, 0.96);
   color: #bfdbfe;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
 }
 
 .app-branch-banner,

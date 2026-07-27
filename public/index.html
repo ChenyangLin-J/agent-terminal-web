@@ -36,7 +36,7 @@
       }
     </style>
     <link rel="stylesheet" href="/vendor/xterm-css/xterm.css?v=20260625-5" />
-    <link rel="stylesheet" href="/styles.css?v=20260727-session-overflow-process-collapse-bottom-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260727-latest-overlay-1" />
     <link rel="stylesheet" href="/agent-hosts.css?v=20260727-1" />
     <link rel="stylesheet" href="/session-focus-mode.css?v=20260720-app-toolbar-1" />
     <link rel="stylesheet" href="/thinking-session.css?v=20260716-1" />
@@ -283,7 +283,9 @@
         </section>
 
         <section id="app-server-view" class="app-server-view hidden" aria-label="Session conversation">
-          <button id="app-transcript-latest" class="app-transcript-latest hidden" type="button">有新内容 ↓</button>
+          <div class="app-transcript-latest-layer">
+            <button id="app-transcript-latest" class="app-transcript-latest hidden" type="button">有新内容 ↓</button>
+          </div>
           <div id="app-server-transcript" class="app-server-transcript" aria-live="polite"></div>
         </section>
 

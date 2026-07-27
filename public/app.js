@@ -243,6 +243,7 @@ let liveSessionsByCodexId = new Map();
 let liveSessionsCache = [];
 let savedSessionsCache = [];
 let archivedSessionsCache = [];
+let openSessionSwitcherActionId = "";
 let agentHosts = [];
 let activeAgentHostId = cleanAgentHostId(new URLSearchParams(window.location.search).get("host")) || "personal";
 let activeControlCenterFilter = "all";
@@ -460,6 +461,12 @@ sessionTitleInput.addEventListener("blur", () => {
 document.addEventListener("click", (event) => {
   if (sessionMenu.open && !sessionMenu.contains(event.target)) closeSessionMenu();
   if (appSessionMore.open && !appSessionMore.contains(event.target)) closeAppSessionMoreMenu();
+  for (const menu of sessionSwitcherList.querySelectorAll(".session-switcher-actions[open]")) {
+    if (!menu.contains(event.target)) {
+      menu.removeAttribute("open");
+      if (menu.dataset.sessionKey === openSessionSwitcherActionId) openSessionSwitcherActionId = "";
+    }
+  }
   if (window.matchMedia("(hover: none)").matches) {
     for (const visible of appServerTranscript.querySelectorAll(".app-transcript-item.actions-visible")) {
       if (!visible.contains(event.target)) visible.classList.remove("actions-visible");
@@ -1283,6 +1290,7 @@ function renderSessionSwitcher() {
   });
 
   if (!visible.length) {
+    openSessionSwitcherActionId = "";
     sessionSwitcherList.append(empty(query ? "没有匹配的 Session。" : "当前没有 Session。"));
     return;
   }
@@ -1304,6 +1312,8 @@ function renderSessionSwitcher() {
 
     for (const session of groupSessions) {
       const presentation = liveSessionPresentation(session);
+      const row = document.createElement("div");
+      row.className = "session-switcher-row";
       const button = document.createElement("button");
       button.type = "button";
       button.className = "session-switcher-item";
@@ -1322,8 +1332,59 @@ function renderSessionSwitcher() {
       status.textContent = formatTime(session.lastActivityAt);
       copy.append(title, status);
       button.append(dot, copy);
-      button.addEventListener("click", () => openSessionInCurrentPage(liveSessionOpenParams(session)));
-      sessionSwitcherList.append(button);
+      button.addEventListener("click", () => {
+        openSessionSwitcherActionId = "";
+        openSessionInCurrentPage(liveSessionOpenParams(session));
+      });
+
+      const actions = document.createElement("details");
+      actions.className = "session-switcher-actions";
+      const sessionKey = String(session.id || session.sessionId || "");
+      actions.dataset.sessionKey = sessionKey;
+      actions.open = sessionKey === openSessionSwitcherActionId;
+      actions.addEventListener("toggle", () => {
+        if (!actions.open) {
+          if (openSessionSwitcherActionId === sessionKey) openSessionSwitcherActionId = "";
+          return;
+        }
+        openSessionSwitcherActionId = sessionKey;
+        for (const other of sessionSwitcherList.querySelectorAll(".session-switcher-actions[open]")) {
+          if (other !== actions) other.removeAttribute("open");
+        }
+      });
+      const summary = document.createElement("summary");
+      summary.textContent = "···";
+      summary.setAttribute("aria-label", `管理 ${title.textContent}`);
+      summary.title = "归档或结束";
+      const menu = document.createElement("div");
+      menu.className = "session-switcher-action-menu";
+      menu.setAttribute("role", "menu");
+      const archive = document.createElement("button");
+      archive.type = "button";
+      archive.textContent = "归档";
+      archive.disabled = !session.sessionId;
+      archive.title = session.sessionId ? "结束运行并移入归档" : "Session 建立后才能归档";
+      archive.addEventListener("click", (event) => {
+        event.stopPropagation();
+        openSessionSwitcherActionId = "";
+        actions.removeAttribute("open");
+        void archiveSessionFromSwitcher(session);
+      });
+      const end = document.createElement("button");
+      end.type = "button";
+      end.className = "danger";
+      end.textContent = "结束";
+      end.title = "结束运行并移到最近历史";
+      end.addEventListener("click", (event) => {
+        event.stopPropagation();
+        openSessionSwitcherActionId = "";
+        actions.removeAttribute("open");
+        void endSessionFromSwitcher(session);
+      });
+      menu.append(archive, end);
+      actions.append(summary, menu);
+      row.append(button, actions);
+      sessionSwitcherList.append(row);
     }
   }
 }
@@ -1774,6 +1835,67 @@ async function archiveCurrentSession() {
   } catch (error) {
     setArchiveSessionDisabled(false);
     window.alert(`归档失败：${error.message}`);
+  }
+}
+
+async function archiveSessionFromSwitcher(session) {
+  const sessionId = String(session?.sessionId || "").trim();
+  if (!sessionId) {
+    window.alert("Session 尚未建立完成，暂时无法归档。");
+    return;
+  }
+  const active = Boolean(session?.turnState?.active);
+  const message = active
+    ? "归档这个 Session？当前任务会停止，历史记录会移入归档，之后仍可恢复。"
+    : "归档这个 Session？历史记录会移入归档，之后仍可恢复。";
+  if (!window.confirm(message)) return;
+
+  try {
+    const response = await fetch(agentHostApiUrl(`/api/codex-sessions/${encodeURIComponent(sessionId)}/archive`), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived: true, endLiveSession: true }),
+    });
+    if (response.status === 401) {
+      redirectToLogin();
+      return;
+    }
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || "归档失败");
+    }
+    if (session.id === activeSessionId || sessionId === activeSessionParams.sessionId) detach(true);
+    else await refreshLists();
+  } catch (error) {
+    window.alert(`归档失败：${error.message}`);
+  }
+}
+
+async function endSessionFromSwitcher(session) {
+  const webSessionId = String(session?.id || "").trim();
+  if (!webSessionId) return;
+  const active = Boolean(session?.turnState?.active);
+  const message = active
+    ? "结束这个 Session？当前任务会停止，Session 会移到最近历史，之后仍可恢复。"
+    : "结束这个 Session？它会移到最近历史，之后仍可恢复。";
+  if (!window.confirm(message)) return;
+
+  try {
+    const response = await fetch(agentHostApiUrl(`/api/sessions/${encodeURIComponent(webSessionId)}/end`), {
+      method: "POST",
+    });
+    if (response.status === 401) {
+      redirectToLogin();
+      return;
+    }
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || "结束失败");
+    }
+    if (webSessionId === activeSessionId || session.sessionId === activeSessionParams.sessionId) detach(true);
+    else await refreshLists();
+  } catch (error) {
+    window.alert(`结束失败：${error.message}`);
   }
 }
 

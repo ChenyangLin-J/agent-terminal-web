@@ -3778,6 +3778,11 @@ input {
   text-transform: uppercase;
 }
 
+.session-switcher-row {
+  position: relative;
+  min-width: 0;
+}
+
 .session-switcher-item {
   display: grid;
   width: 100%;
@@ -3786,7 +3791,7 @@ input {
   grid-template-columns: 8px minmax(0, 1fr);
   align-items: start;
   gap: 8px;
-  padding: 9px 8px;
+  padding: 9px 34px 9px 8px;
   border-color: transparent;
   text-align: left;
   background: transparent;
@@ -3848,6 +3853,84 @@ input {
 .session-switcher-item small {
   color: #6d7a8e;
   font-size: 9px;
+}
+
+.session-switcher-actions {
+  position: absolute;
+  top: 5px;
+  right: 4px;
+  z-index: 6;
+}
+
+.session-switcher-actions > summary {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: #9ba8ba;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  list-style: none;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.session-switcher-actions > summary::-webkit-details-marker {
+  display: none;
+}
+
+.session-switcher-row:hover .session-switcher-actions > summary,
+.session-switcher-row:focus-within .session-switcher-actions > summary,
+.session-switcher-actions[open] > summary {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.session-switcher-actions > summary:hover,
+.session-switcher-actions[open] > summary {
+  border-color: #354153;
+  background: #202936;
+}
+
+.session-switcher-action-menu {
+  position: absolute;
+  top: 30px;
+  right: 0;
+  display: grid;
+  width: 112px;
+  padding: 4px;
+  border: 1px solid #354153;
+  border-radius: 9px;
+  box-shadow: 0 12px 30px rgb(0 0 0 / 42%);
+  background: #151b24;
+}
+
+.session-switcher-action-menu button {
+  min-height: 30px;
+  padding: 5px 9px;
+  border-color: transparent;
+  text-align: left;
+  background: transparent;
+  font-size: 11px;
+}
+
+.session-switcher-action-menu button:hover {
+  background: #222c3a;
+}
+
+.session-switcher-action-menu button.danger {
+  color: #f0a2a2;
+}
+
+@media (hover: none) {
+  .session-switcher-actions > summary {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .session-switcher-new {

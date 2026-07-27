@@ -820,6 +820,39 @@ app.post("/api/sessions/:id/restart", (req, res) => {
   res.json({ session: restart });
 });
 
+app.post("/api/sessions/:id/end", (req, res) => {
+  const agentHost = requestAgentHost(req, res);
+  if (!agentHost) return;
+  const id = String(req.params.id || "").trim();
+  if (!isValidWebSessionId(id)) {
+    res.status(400).json({ error: "Invalid web session id." });
+    return;
+  }
+
+  const session = sessions.get(id);
+  if (session && !session.exited && session.hostId === agentHost.id) {
+    logAgentEvent("session-end", {
+      webSessionId: session.id,
+      codexSessionId: session.sessionId,
+      activeTurn: Boolean(session.turnState?.active),
+    });
+    killSessionTerminal(session);
+    res.json({ id, ended: true });
+    return;
+  }
+
+  const detached = listDetachedSessions().find(
+    (candidate) => candidate.id === id && candidate.hostId === agentHost.id,
+  );
+  if (detached) {
+    removePersistedWebSession(id);
+    res.json({ id, ended: true });
+    return;
+  }
+
+  res.status(404).json({ error: "This Session is no longer current." });
+});
+
 app.get("/api/codex-sessions", async (req, res) => {
   const agentHost = requestAgentHost(req, res);
   if (!agentHost) return;

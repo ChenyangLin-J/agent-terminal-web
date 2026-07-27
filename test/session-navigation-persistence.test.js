@@ -72,10 +72,11 @@ test("the current Session navigation survives an Agent Web restart", async (t) =
   );
   await page.locator("#nav-current-session:not([disabled])").waitFor();
   const switcherToggle = page.locator("#session-switcher-toggle");
+  const switcherOpen = page.locator("#session-switcher-open");
   assert.equal(await switcherToggle.getAttribute("aria-expanded"), "false");
   const sessionScreenClass = await page.locator("#session-screen").getAttribute("class");
   assert.match(sessionScreenClass, /session-switcher-collapsed/);
-  await switcherToggle.click();
+  await switcherOpen.click();
   assert.equal(await switcherToggle.getAttribute("aria-expanded"), "true");
   assert.equal(await page.evaluate(() => localStorage.getItem("agent_terminal_session_switcher_collapsed")), "0");
   await page.locator("#nav-control-center").click();

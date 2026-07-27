@@ -3763,37 +3763,48 @@ input {
   font-size: 10px;
 }
 
-.session-switcher-toggle {
+.session-switcher-toggle,
+.session-switcher-open {
   display: grid;
   width: 28px;
   height: 28px;
+  min-height: 28px !important;
   flex: 0 0 auto;
   place-items: center;
-  padding: 0;
-  border-color: #2c3543;
-  color: #9aa7ba;
-  background: #111720;
-  font-size: 20px;
-  line-height: 1;
+  padding: 0 !important;
+  border-color: transparent;
+  color: #7f8da1;
+  background: transparent;
 }
 
 .session-switcher-toggle:hover,
-.session-switcher-toggle:focus-visible {
-  border-color: #46546a;
+.session-switcher-toggle:focus-visible,
+.session-switcher-open:hover,
+.session-switcher-open:focus-visible {
+  border-color: #334052;
   color: #d7dee8;
   background: #18202b;
 }
 
-.session-switcher.collapsed > header {
-  justify-content: center;
-  padding: 10px 6px;
+.session-switcher-open {
+  display: none;
 }
 
-.session-switcher.collapsed > header > div,
-.session-switcher.collapsed > label,
-.session-switcher.collapsed > .session-switcher-list,
-.session-switcher.collapsed > .session-switcher-new {
-  display: none;
+.session-switcher-panel-icon {
+  position: relative;
+  width: 16px;
+  height: 14px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+}
+
+.session-switcher-panel-icon::before {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 4px;
+  border-left: 1px solid currentColor;
+  content: "";
 }
 
 .session-switcher > label {
@@ -4010,7 +4021,26 @@ input {
   }
 
   .session-screen.session-switcher-collapsed {
-    grid-template-columns: 42px minmax(0, 1fr);
+    grid-template-areas:
+      "header"
+      "tabs"
+      "content"
+      "quick-actions"
+      "session-tools"
+      "composer";
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .session-screen.session-switcher-collapsed .session-switcher {
+    display: none;
+  }
+
+  .session-screen.session-switcher-collapsed .session-header {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .session-screen.session-switcher-collapsed .session-switcher-open {
+    display: grid;
   }
 
   .session-header,

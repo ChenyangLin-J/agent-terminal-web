@@ -10,12 +10,14 @@ test("the desktop and Pad Session switcher collapses and exposes contextual acti
     readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
   ]);
 
-  assert.match(page, /id="session-switcher-toggle"[\s\S]*aria-expanded="false"[\s\S]*展开快速切换/);
+  assert.match(page, /id="session-switcher-toggle"[\s\S]*aria-label="收起快速切换"/);
+  assert.match(page, /id="session-switcher-open"[\s\S]*aria-label="展开快速切换"/);
   assert.match(app, /const SESSION_SWITCHER_COLLAPSED_STORE_KEY/);
   assert.match(app, /return stored === null \? true : stored !== "0"/);
   assert.match(app, /function setSessionSwitcherCollapsed\(collapsed/);
-  assert.match(styles, /\.session-screen\.session-switcher-collapsed \{[\s\S]*grid-template-columns: 42px minmax\(0, 1fr\)/);
-  assert.match(styles, /\.session-switcher\.collapsed > \.session-switcher-list,[\s\S]*display: none/);
+  assert.match(styles, /\.session-screen\.session-switcher-collapsed \{[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
+  assert.match(styles, /\.session-screen\.session-switcher-collapsed \.session-switcher \{\s*display: none/);
+  assert.match(styles, /\.session-screen\.session-switcher-collapsed \.session-switcher-open \{\s*display: grid/);
   assert.match(app, /row\.className = "session-switcher-row"/);
   assert.match(app, /actions\.className = "session-switcher-actions"/);
   assert.match(app, /actions\.open = sessionKey === openSessionSwitcherActionId/);

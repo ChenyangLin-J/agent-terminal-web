@@ -145,6 +145,7 @@ const threadSearchResults = document.querySelector("#thread-search-results");
 const threadSearchClose = document.querySelector("#thread-search-close");
 const sessionSwitcher = document.querySelector("#session-switcher");
 const sessionSwitcherToggle = document.querySelector("#session-switcher-toggle");
+const sessionSwitcherOpenButton = document.querySelector("#session-switcher-open");
 const sessionSwitcherNewButton = document.querySelector("#session-switcher-new");
 const sessionSwitcherSearch = document.querySelector("#session-switcher-search");
 const sessionSwitcherList = document.querySelector("#session-switcher-list");
@@ -382,8 +383,9 @@ sessionSwitcherNewButton.addEventListener("click", () => {
   toggleNewSessionPanel(true);
 });
 sessionSwitcherToggle.addEventListener("click", () => {
-  setSessionSwitcherCollapsed(!sessionSwitcher.classList.contains("collapsed"));
+  setSessionSwitcherCollapsed(true);
 });
+sessionSwitcherOpenButton.addEventListener("click", () => setSessionSwitcherCollapsed(false));
 sessionSwitcherSearch.addEventListener("input", renderSessionSwitcher);
 searchCurrentSessionButton.addEventListener("click", openThreadSearch);
 disconnectButton.addEventListener("click", detach);
@@ -1396,9 +1398,7 @@ function setSessionSwitcherCollapsed(collapsed, { persist = true } = {}) {
   sessionSwitcher.classList.toggle("collapsed", next);
   sessionScreen.classList.toggle("session-switcher-collapsed", next);
   sessionSwitcherToggle.setAttribute("aria-expanded", String(!next));
-  sessionSwitcherToggle.setAttribute("aria-label", next ? "展开快速切换" : "收起快速切换");
-  sessionSwitcherToggle.title = next ? "展开快速切换" : "收起快速切换";
-  sessionSwitcherToggle.querySelector("span").textContent = next ? "›" : "‹";
+  sessionSwitcherOpenButton.setAttribute("aria-expanded", String(!next));
 
   if (next) {
     openSessionSwitcherActionId = "";

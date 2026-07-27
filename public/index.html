@@ -36,7 +36,7 @@
       }
     </style>
     <link rel="stylesheet" href="/vendor/xterm-css/xterm.css?v=20260625-5" />
-    <link rel="stylesheet" href="/styles.css?v=20260727-session-state-2" />
+    <link rel="stylesheet" href="/styles.css?v=20260727-session-favorites-1" />
     <link rel="stylesheet" href="/session-focus-mode.css?v=20260720-app-toolbar-1" />
     <link rel="stylesheet" href="/thinking-session.css?v=20260716-1" />
     <link rel="stylesheet" href="/agent-memories.css?v=20260723-pending-merge-1" />
@@ -183,6 +183,17 @@
             <button id="connect" class="primary" type="button">开始</button>
             <button id="start-think" type="button">Think</button>
           </div>
+        </section>
+
+        <section id="favorite-sessions-section" class="recent control-center-favorites hidden">
+          <header class="control-center-section-header">
+            <div>
+              <h2><span aria-hidden="true">★</span> 置顶 Session</h2>
+              <span>常用工作线程；新目标仍建议新建 Session</span>
+            </div>
+            <small id="favorite-sessions-count">0 个置顶</small>
+          </header>
+          <div id="favorite-sessions-list" class="sessions-list"></div>
         </section>
 
         <section class="recent control-center-live">
@@ -642,7 +653,7 @@
     <script src="/agent-upload.js?v=20260725-attachment-wait-1"></script>
     <script src="/agent-voice-input.js?v=20260717-recovery-2"></script>
     <script src="/agent-realtime.js?v=20260726-1"></script>
-    <script src="/app.js?v=20260727-edit-archive-1"></script>
+    <script src="/app.js?v=20260727-session-favorites-1"></script>
     <script src="/session-focus-mode.js?v=20260716-app-chrome-1"></script>
   </body>
 </html>

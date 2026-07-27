@@ -29,6 +29,9 @@ const restartAgentButton = document.querySelector("#restart-agent");
 const restartAgentLabel = document.querySelector("#restart-agent-label");
 const logoutButton = document.querySelector("#logout");
 const sessionsList = document.querySelector("#sessions-list");
+const favoriteSessionsSection = document.querySelector("#favorite-sessions-section");
+const favoriteSessionsList = document.querySelector("#favorite-sessions-list");
+const favoriteSessionsCount = document.querySelector("#favorite-sessions-count");
 const codexSessionsList = document.querySelector("#codex-sessions-list");
 const archivedCodexSessionsList = document.querySelector("#archived-codex-sessions-list");
 const controlCenterHistorySections = document.querySelectorAll("[data-control-section='history']");
@@ -751,6 +754,7 @@ function renderLiveSessions(sessions) {
   sessionsList.replaceChildren();
   renderSessionSwitcher();
   updateControlCenterSummary();
+  renderFavoriteSessions();
 
   if (!uniqueSessions.length) {
     const message = empty("当前没有 Session。新建或恢复后，它会出现在这里。");
@@ -792,6 +796,9 @@ function renderLiveSessions(sessions) {
           description: liveSessionCurrentTask(session),
           meta: liveSessionMeta(session, presentation),
           kind: group.kind,
+          sessionId: session.sessionId,
+          favorited: Boolean(session.favorited),
+          onFavoriteClick: () => setCodexSessionFavorite(session.sessionId, !session.favorited),
           action:
             group.kind === "attention"
               ? "处理"
@@ -904,6 +911,7 @@ function renderSavedCodexSessions(sessions) {
   codexSessionsList.replaceChildren();
   const nonLiveSessions = sessions.filter((session) => !liveSessionsByCodexId.has(session.id));
   updateControlCenterSummary();
+  renderFavoriteSessions();
 
   if (!nonLiveSessions.length) {
     codexSessionsList.append(empty(sessions.length ? "没有其他历史 Session。" : "还没有保存的 Codex Session。"));
@@ -918,6 +926,9 @@ function renderSavedCodexSessions(sessions) {
         subtitle: displayProject(session.project),
         meta: [session.updatedAt ? `更新于 ${formatTime(session.updatedAt)}` : ""],
         kind: "history",
+        sessionId: session.id,
+        favorited: Boolean(session.favorited),
+        onFavoriteClick: () => setCodexSessionFavorite(session.id, !session.favorited),
         action: "恢复",
         onClick: () => openResumeEngineDialog(session),
         secondaryAction: "重命名",
@@ -951,6 +962,9 @@ function renderArchivedCodexSessions(sessions) {
         subtitle: displayProject(session.project),
         meta: [`归档于 ${formatTime(session.archivedAt || session.updatedAt)}`],
         kind: "history",
+        sessionId: session.id,
+        favorited: Boolean(session.favorited),
+        onFavoriteClick: () => setCodexSessionFavorite(session.id, !session.favorited),
         action: "恢复",
         onClick: () => archiveCodexSession(session, false),
         secondaryAction: "重命名",
@@ -973,6 +987,67 @@ function renderArchivedCodexSessions(sessions) {
     archivedCodexSessionsList.append(toggleButton);
   }
   applyControlCenterFilter();
+}
+
+function renderFavoriteSessions() {
+  favoriteSessionsList.replaceChildren();
+  const liveFavorites = liveSessionsCache.filter((session) => session.favorited && session.sessionId);
+  const savedFavorites = savedSessionsCache.filter(
+    (session) => session.favorited && !liveSessionsByCodexId.has(session.id),
+  );
+
+  for (const session of liveFavorites) {
+    const presentation = liveSessionPresentation(session);
+    favoriteSessionsList.append(
+      sessionCard({
+        title: session.title || "New Codex session",
+        subtitle: displayProject(session.project),
+        description: liveSessionCurrentTask(session),
+        meta: liveSessionMeta(session, presentation),
+        kind: presentation.kind,
+        sessionId: session.sessionId,
+        favorited: true,
+        onFavoriteClick: () => setCodexSessionFavorite(session.sessionId, false),
+        action:
+          presentation.kind === "attention"
+            ? "处理"
+            : ["running", "unread"].includes(presentation.kind)
+              ? "查看"
+              : presentation.kind === "released"
+                ? "恢复"
+                : "打开",
+        onClick: () => openSessionFromList(liveSessionOpenParams(session)),
+      }),
+    );
+  }
+
+  for (const session of savedFavorites) {
+    favoriteSessionsList.append(
+      sessionCard({
+        title: session.title || "Untitled session",
+        subtitle: displayProject(session.project),
+        meta: [session.updatedAt ? `更新于 ${formatTime(session.updatedAt)}` : ""],
+        kind: "history",
+        sessionId: session.id,
+        favorited: true,
+        onFavoriteClick: () => setCodexSessionFavorite(session.id, false),
+        action: "恢复",
+        onClick: () => openFavoriteSavedSession(session),
+      }),
+    );
+  }
+
+  const count = liveFavorites.length + savedFavorites.length;
+  favoriteSessionsCount.textContent = `${count} 个置顶`;
+  favoriteSessionsSection.classList.toggle("hidden", count === 0);
+}
+
+function openFavoriteSavedSession(session) {
+  if (typeof openSavedSessionPreview === "function") {
+    openSavedSessionPreview(session);
+    return;
+  }
+  openResumeEngineDialog(session);
 }
 
 function toggleNewSessionPanel(open) {
@@ -1010,6 +1085,23 @@ function applyControlCenterFilter() {
   const query = sessionSearchInput.value.trim().toLocaleLowerCase();
   const liveSection = document.querySelector(".control-center-live");
   let visibleLiveCards = 0;
+  let visibleFavoriteCards = 0;
+
+  for (const card of favoriteSessionsList.querySelectorAll(".session-card")) {
+    const kind = card.dataset.sessionKind || "ready";
+    const filterMatches =
+      activeControlCenterFilter === "all" ||
+      activeControlCenterFilter === kind ||
+      (activeControlCenterFilter === "ready" && kind === "released");
+    const queryMatches = !query || card.textContent.toLocaleLowerCase().includes(query);
+    const visible = filterMatches && queryMatches;
+    card.classList.toggle("hidden", !visible);
+    if (visible) visibleFavoriteCards += 1;
+  }
+  favoriteSessionsSection.classList.toggle(
+    "hidden",
+    favoriteSessionsList.childElementCount === 0 || visibleFavoriteCards === 0,
+  );
 
   for (const card of sessionsList.querySelectorAll(".session-card")) {
     const kind = card.dataset.sessionKind || "ready";
@@ -1170,6 +1262,9 @@ function sessionCard({
   description = "",
   meta: metaItems = [],
   kind = "history",
+  sessionId = "",
+  favorited = false,
+  onFavoriteClick,
   action,
   onClick,
   secondaryAction,
@@ -1211,6 +1306,25 @@ function sessionCard({
   }
   const actions = document.createElement("div");
   actions.className = "session-card-actions";
+  if (sessionId && onFavoriteClick) {
+    const favoriteButton = document.createElement("button");
+    favoriteButton.type = "button";
+    favoriteButton.className = "session-card-favorite";
+    favoriteButton.textContent = favorited ? "★" : "☆";
+    favoriteButton.title = favorited ? "取消置顶" : "置顶 Session";
+    favoriteButton.setAttribute("aria-label", `${favorited ? "取消置顶" : "置顶"} ${title}`);
+    favoriteButton.setAttribute("aria-pressed", String(favorited));
+    favoriteButton.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      favoriteButton.disabled = true;
+      try {
+        await onFavoriteClick();
+      } finally {
+        favoriteButton.disabled = false;
+      }
+    });
+    actions.append(favoriteButton);
+  }
   if (secondaryAction) {
     const secondaryButton = document.createElement("button");
     secondaryButton.type = "button";
@@ -1249,6 +1363,31 @@ function sessionCard({
     onClick?.();
   });
   return card;
+}
+
+async function setCodexSessionFavorite(sessionId, favorited) {
+  if (!sessionId) return;
+  try {
+    const response = await fetch(`/api/codex-sessions/${encodeURIComponent(sessionId)}/favorite`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ favorited }),
+    });
+    if (response.status === 401) {
+      redirectToLogin();
+      return;
+    }
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || "Session 置顶状态保存失败。");
+    }
+    await refreshLists();
+    if (sessionSearchInput.value.trim() && !sessionSearchResults.classList.contains("hidden")) {
+      await searchSavedSessions();
+    }
+  } catch (error) {
+    window.alert(error.message || "Session 置顶状态保存失败。");
+  }
 }
 
 async function renameCodexSession(session) {

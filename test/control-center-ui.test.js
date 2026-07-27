@@ -35,6 +35,20 @@ test("control center cards derive attention and progress from real Session state
   assert.doesNotMatch(app, /Math\.random\(\).*progress/);
 });
 
+test("frequent Sessions can be starred and pinned above the control center", () => {
+  assert.match(page, /id="favorite-sessions-section"[\s\S]*置顶 Session/);
+  assert.match(page, /id="favorite-sessions-list"/);
+  assert.match(app, /function renderFavoriteSessions\(\)/);
+  assert.match(app, /className = "session-card-favorite"/);
+  assert.match(app, /favoriteButton\.textContent = favorited \? "★" : "☆"/);
+  assert.match(app, /\/api\/codex-sessions\/\$\{encodeURIComponent\(sessionId\)\}\/favorite/);
+  assert.match(styles, /\.control-center-favorites \.sessions-list/);
+  assert.match(
+    styles,
+    /@media \(max-width: 820px\)[\s\S]*\.control-center-favorites \.sessions-list,[\s\S]*grid-template-columns: 1fr/,
+  );
+});
+
 test("desktop, Pad, and phone keep the same navigation responsibilities", () => {
   assert.match(page, /id="session-switcher"/);
   assert.match(styles, /@media \(min-width: 821px\)[\s\S]*grid-template-areas:[\s\S]*"switcher header"/);

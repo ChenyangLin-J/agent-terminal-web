@@ -44,6 +44,10 @@ import {
   normalizeAccessMode,
   preferredAccessForCodexSession,
 } from "./lib/session-access.js";
+import {
+  readAgentSessionFavorites,
+  setAgentSessionFavorite,
+} from "./lib/agent-session-favorites.js";
 import { viewedImagePath } from "./lib/session-image.js";
 import { commandDisplayText } from "./lib/command-display.js";
 import {
@@ -92,6 +96,10 @@ const CODEX_SESSION_ARCHIVE_FILE = path.join(CODEX_HOME, "session-archive.json")
 const AGENT_WEB_SESSIONS_FILE = path.join(CODEX_HOME, "agent-web-sessions.json");
 const AGENT_SESSION_SETTINGS_FILE = path.join(CODEX_HOME, "agent-session-settings.json");
 const CODEX_SESSION_PREVIEWS_FILE = path.join(CODEX_HOME, "agent-session-previews.json");
+const AGENT_SESSION_FAVORITES_FILE = path.resolve(
+  process.env.AGENT_SESSION_FAVORITES_FILE ||
+    path.join(path.dirname(CODEX_HOME), ".local", "share", "home-portal", "agent-session-favorites.json"),
+);
 const AGENT_INTEGRATIONS_DIR = path.resolve(
   process.env.AGENT_INTEGRATIONS_DIR ||
     path.join(process.env.HOME, ".config", "agent-terminal-web", "integrations"),
@@ -692,10 +700,20 @@ app.post("/api/client-events", (req, res) => {
 });
 
 app.get("/api/sessions", (_req, res) => {
-  const liveSessions = [...sessions.values()].filter((session) => !session.exited).map(publicSession);
+  const favoriteSessionIds = new Set(readAgentSessionFavorites(AGENT_SESSION_FAVORITES_FILE));
+  const liveSessions = [...sessions.values()]
+    .filter((session) => !session.exited)
+    .map(publicSession)
+    .map((session) => ({
+      ...session,
+      favorited: favoriteSessionIds.has(session.sessionId),
+    }));
   const restoredSessions = listDetachedSessions().filter(
     (session) => !sessions.has(session.id) && !liveSessions.some((liveSession) => liveSession.id === session.id),
-  );
+  ).map((session) => ({
+    ...session,
+    favorited: favoriteSessionIds.has(session.sessionId),
+  }));
 
   res.json({
     ttlMs: SESSION_TTL_MS,
@@ -743,13 +761,21 @@ app.post("/api/sessions/:id/restart", (req, res) => {
 
 app.get("/api/codex-sessions", async (_req, res) => {
   const codexSessions = await listCodexSessions({ archived: false });
-  res.json({ sessions: codexSessions });
+  res.json({ sessions: favoritedCodexSessions(codexSessions) });
 });
 
 app.get("/api/codex-sessions/archived", async (_req, res) => {
   const codexSessions = await listCodexSessions({ archived: true });
-  res.json({ sessions: codexSessions });
+  res.json({ sessions: favoritedCodexSessions(codexSessions) });
 });
+
+function favoritedCodexSessions(codexSessions) {
+  const favoriteSessionIds = new Set(readAgentSessionFavorites(AGENT_SESSION_FAVORITES_FILE));
+  return codexSessions.map((session) => ({
+    ...session,
+    favorited: favoriteSessionIds.has(session.id),
+  }));
+}
 
 app.get("/api/codex-sessions/search", async (req, res) => {
   const searchTerm = cleanSearchTerm(req.query.q);
@@ -760,7 +786,17 @@ app.get("/api/codex-sessions/search", async (req, res) => {
 
   try {
     res.set("Cache-Control", "private, no-store");
-    res.json({ results: await searchCodexSessions(searchTerm) });
+    const results = await searchCodexSessions(searchTerm);
+    const favoriteSessionIds = new Set(readAgentSessionFavorites(AGENT_SESSION_FAVORITES_FILE));
+    res.json({
+      results: results.map((result) => ({
+        ...result,
+        session: {
+          ...result.session,
+          favorited: favoriteSessionIds.has(result.session?.id),
+        },
+      })),
+    });
   } catch (error) {
     logAgentEvent("thread-search-failed", { message: cleanClientLogValue(error.message, 300) });
     res.status(502).json({ error: "Session 搜索暂时不可用。" });
@@ -975,6 +1011,23 @@ app.put("/api/codex-sessions/:id/title", async (req, res) => {
     res.json({ id, customTitle: title, nativeNameSaved });
   } catch (error) {
     res.status(500).json({ error: `Failed to save title: ${error.message}` });
+  }
+});
+
+app.put("/api/codex-sessions/:id/favorite", (req, res) => {
+  const id = String(req.params.id || "").trim();
+  const favorited = Boolean(req.body?.favorited);
+
+  if (!isValidSessionId(id)) {
+    res.status(400).json({ error: "Invalid session id." });
+    return;
+  }
+
+  try {
+    setAgentSessionFavorite(AGENT_SESSION_FAVORITES_FILE, id, favorited);
+    res.json({ id, favorited });
+  } catch (error) {
+    res.status(500).json({ error: `Failed to update favorite: ${error.message}` });
   }
 });
 

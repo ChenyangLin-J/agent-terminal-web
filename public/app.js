@@ -844,6 +844,7 @@ function renderLiveSessions(sessions) {
 
   for (const group of groups) {
     const groupSessions = uniqueSessions.filter((session) => liveSessionPresentation(session).kind === group.kind);
+    if (group.kind === "ready") groupSessions.sort(compareIdleSessionOrder);
     if (!groupSessions.length) continue;
     const section = document.createElement("section");
     section.className = `control-session-group control-session-group-${group.kind}`;
@@ -909,6 +910,14 @@ function compareLiveSessionOrder(a, b) {
   const startedAt = new Date(b.startedAt || 0).getTime() - new Date(a.startedAt || 0).getTime();
   if (startedAt !== 0) return startedAt;
   return String(a.sessionId || a.id || "").localeCompare(String(b.sessionId || b.id || ""));
+}
+
+function compareIdleSessionOrder(a, b) {
+  const lastActivityAt =
+    new Date(b.lastActivityAt || b.startedAt || 0).getTime() -
+    new Date(a.lastActivityAt || a.startedAt || 0).getTime();
+  if (lastActivityAt !== 0) return lastActivityAt;
+  return compareLiveSessionOrder(a, b);
 }
 
 function liveSessionPresentation(session) {

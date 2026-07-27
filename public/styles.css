@@ -3763,6 +3763,39 @@ input {
   font-size: 10px;
 }
 
+.session-switcher-toggle {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0;
+  border-color: #2c3543;
+  color: #9aa7ba;
+  background: #111720;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.session-switcher-toggle:hover,
+.session-switcher-toggle:focus-visible {
+  border-color: #46546a;
+  color: #d7dee8;
+  background: #18202b;
+}
+
+.session-switcher.collapsed > header {
+  justify-content: center;
+  padding: 10px 6px;
+}
+
+.session-switcher.collapsed > header > div,
+.session-switcher.collapsed > label,
+.session-switcher.collapsed > .session-switcher-list,
+.session-switcher.collapsed > .session-switcher-new {
+  display: none;
+}
+
 .session-switcher > label {
   padding: 0 9px 9px;
 }
@@ -3974,6 +4007,10 @@ input {
       "switcher session-tools"
       "switcher composer";
     grid-template-columns: 220px minmax(0, 1fr);
+  }
+
+  .session-screen.session-switcher-collapsed {
+    grid-template-columns: 42px minmax(0, 1fr);
   }
 
   .session-header,

@@ -36,7 +36,7 @@
       }
     </style>
     <link rel="stylesheet" href="/vendor/xterm-css/xterm.css?v=20260625-5" />
-    <link rel="stylesheet" href="/styles.css?v=20260727-latest-overlay-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260727-session-switcher-collapse-1" />
     <link rel="stylesheet" href="/agent-hosts.css?v=20260727-1" />
     <link rel="stylesheet" href="/session-focus-mode.css?v=20260720-app-toolbar-1" />
     <link rel="stylesheet" href="/thinking-session.css?v=20260716-1" />
@@ -205,13 +205,23 @@
         </details>
       </section>
 
-      <section id="session-screen" class="session-screen hidden" aria-label="Codex session">
-        <aside id="session-switcher" class="session-switcher" aria-label="快速切换 Session">
+      <section id="session-screen" class="session-screen session-switcher-collapsed hidden" aria-label="Codex session">
+        <aside id="session-switcher" class="session-switcher collapsed" aria-label="快速切换 Session">
           <header>
             <div>
               <strong>快速切换</strong>
               <span id="session-switcher-count">0 个当前</span>
             </div>
+            <button
+              id="session-switcher-toggle"
+              class="session-switcher-toggle"
+              type="button"
+              aria-expanded="false"
+              aria-label="展开快速切换"
+              title="展开快速切换"
+            >
+              <span aria-hidden="true">›</span>
+            </button>
           </header>
           <label>
             <span class="hidden">搜索 Session</span>
@@ -604,7 +614,7 @@
     <script src="/agent-upload.js?v=20260725-attachment-wait-1"></script>
     <script src="/agent-voice-input.js?v=20260717-recovery-2"></script>
     <script src="/agent-realtime.js?v=20260726-1"></script>
-    <script src="/app.js?v=20260727-preview-status-1"></script>
+    <script src="/app.js?v=20260727-session-switcher-collapse-1"></script>
     <script src="/session-focus-mode.js?v=20260716-app-chrome-1"></script>
   </body>
 </html>

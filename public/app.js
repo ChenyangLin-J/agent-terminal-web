@@ -144,6 +144,7 @@ const threadSearchSubmit = document.querySelector("#thread-search-submit");
 const threadSearchResults = document.querySelector("#thread-search-results");
 const threadSearchClose = document.querySelector("#thread-search-close");
 const sessionSwitcher = document.querySelector("#session-switcher");
+const sessionSwitcherToggle = document.querySelector("#session-switcher-toggle");
 const sessionSwitcherNewButton = document.querySelector("#session-switcher-new");
 const sessionSwitcherSearch = document.querySelector("#session-switcher-search");
 const sessionSwitcherList = document.querySelector("#session-switcher-list");
@@ -173,6 +174,7 @@ const PUSH_DEVICE_ID_KEY = "agent_terminal_push_device_id";
 const SESSION_SNAPSHOT_STORE_KEY = "agent_terminal_session_snapshots";
 const APP_READING_POSITION_STORE_KEY = "agent_terminal_app_reading_positions";
 const LAST_SESSION_NAVIGATION_STORE_KEY = "agent_terminal_last_session_navigation";
+const SESSION_SWITCHER_COLLAPSED_STORE_KEY = "agent_terminal_session_switcher_collapsed";
 const SESSION_SNAPSHOT_LIMIT = 8;
 const SESSION_SNAPSHOT_MAX_CHARS = 200_000;
 const TERMINAL_RECENT_HISTORY_MAX_CHARS = 24_000;
@@ -330,6 +332,7 @@ const compactSessionTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
 let pushRegistrationPromise = null;
 
 syncStartSelectionsFromUrl(new URLSearchParams(window.location.search));
+setSessionSwitcherCollapsed(readSessionSwitcherCollapsed(), { persist: false });
 window.addEventListener("resize", () => {
   fitTerminal({ delay: 120 });
   followAppTranscriptAfterViewportChange();
@@ -377,6 +380,9 @@ backButton.addEventListener("click", showStartScreen);
 sessionSwitcherNewButton.addEventListener("click", () => {
   showStartScreen();
   toggleNewSessionPanel(true);
+});
+sessionSwitcherToggle.addEventListener("click", () => {
+  setSessionSwitcherCollapsed(!sessionSwitcher.classList.contains("collapsed"));
 });
 sessionSwitcherSearch.addEventListener("input", renderSessionSwitcher);
 searchCurrentSessionButton.addEventListener("click", openThreadSearch);
@@ -1374,6 +1380,40 @@ function renderSessionSwitcher() {
       sessionSwitcherList.append(row);
     }
   }
+}
+
+function readSessionSwitcherCollapsed() {
+  try {
+    const stored = localStorage.getItem(SESSION_SWITCHER_COLLAPSED_STORE_KEY);
+    return stored === null ? true : stored !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function setSessionSwitcherCollapsed(collapsed, { persist = true } = {}) {
+  const next = Boolean(collapsed);
+  sessionSwitcher.classList.toggle("collapsed", next);
+  sessionScreen.classList.toggle("session-switcher-collapsed", next);
+  sessionSwitcherToggle.setAttribute("aria-expanded", String(!next));
+  sessionSwitcherToggle.setAttribute("aria-label", next ? "展开快速切换" : "收起快速切换");
+  sessionSwitcherToggle.title = next ? "展开快速切换" : "收起快速切换";
+  sessionSwitcherToggle.querySelector("span").textContent = next ? "›" : "‹";
+
+  if (next) {
+    openSessionSwitcherActionId = "";
+    for (const menu of sessionSwitcherList.querySelectorAll(".session-switcher-actions[open]")) {
+      menu.removeAttribute("open");
+    }
+  }
+  if (persist) {
+    try {
+      localStorage.setItem(SESSION_SWITCHER_COLLAPSED_STORE_KEY, next ? "1" : "0");
+    } catch {
+      // The switcher still works for this page when storage is unavailable.
+    }
+  }
+  fitTerminal({ delay: 120 });
 }
 
 function openSessionInCurrentPage(params) {

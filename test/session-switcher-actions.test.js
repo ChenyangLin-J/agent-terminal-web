@@ -2,13 +2,20 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("the desktop and Pad Session switcher exposes contextual archive and end actions", async () => {
-  const [server, app, styles] = await Promise.all([
+test("the desktop and Pad Session switcher collapses and exposes contextual actions", async () => {
+  const [server, page, app, styles] = await Promise.all([
     readFile(new URL("../server.js", import.meta.url), "utf8"),
+    readFile(new URL("../public/index.html", import.meta.url), "utf8"),
     readFile(new URL("../public/app.js", import.meta.url), "utf8"),
     readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
   ]);
 
+  assert.match(page, /id="session-switcher-toggle"[\s\S]*aria-expanded="false"[\s\S]*展开快速切换/);
+  assert.match(app, /const SESSION_SWITCHER_COLLAPSED_STORE_KEY/);
+  assert.match(app, /return stored === null \? true : stored !== "0"/);
+  assert.match(app, /function setSessionSwitcherCollapsed\(collapsed/);
+  assert.match(styles, /\.session-screen\.session-switcher-collapsed \{[\s\S]*grid-template-columns: 42px minmax\(0, 1fr\)/);
+  assert.match(styles, /\.session-switcher\.collapsed > \.session-switcher-list,[\s\S]*display: none/);
   assert.match(app, /row\.className = "session-switcher-row"/);
   assert.match(app, /actions\.className = "session-switcher-actions"/);
   assert.match(app, /actions\.open = sessionKey === openSessionSwitcherActionId/);

@@ -71,6 +71,13 @@ test("the current Session navigation survives an Agent Web restart", async (t) =
     `http://127.0.0.1:${agentPort}/?preview=1&cwd=.&sessionId=${threadId}&title=${encodeURIComponent("Remember this Session")}&access=safe`,
   );
   await page.locator("#nav-current-session:not([disabled])").waitFor();
+  const switcherToggle = page.locator("#session-switcher-toggle");
+  assert.equal(await switcherToggle.getAttribute("aria-expanded"), "false");
+  const sessionScreenClass = await page.locator("#session-screen").getAttribute("class");
+  assert.match(sessionScreenClass, /session-switcher-collapsed/);
+  await switcherToggle.click();
+  assert.equal(await switcherToggle.getAttribute("aria-expanded"), "true");
+  assert.equal(await page.evaluate(() => localStorage.getItem("agent_terminal_session_switcher_collapsed")), "0");
   await page.locator("#nav-control-center").click();
   await page.locator("#start-screen:not(.hidden)").waitFor();
   assert.equal(new URL(page.url()).searchParams.has("sessionId"), false);
@@ -90,6 +97,7 @@ test("the current Session navigation survives an Agent Web restart", async (t) =
   assert.equal(new URL(page.url()).searchParams.get("preview"), "1");
   await page.locator("#connection").waitFor();
   assert.match(await page.locator("#connection").innerText(), /仅查看/);
+  assert.equal(await page.locator("#session-switcher-toggle").getAttribute("aria-expanded"), "true");
 });
 
 async function startAgent(environment) {

@@ -21,7 +21,10 @@ test("saved and released Sessions open from disk before a runtime is attached", 
 });
 
 test("the first message activates a previewed Session and keeps permissions local until then", async () => {
-  const app = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const [app, server] = await Promise.all([
+    readFile(new URL("../public/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../server.js", import.meta.url), "utf8"),
+  ]);
 
   assert.match(
     app,
@@ -41,6 +44,18 @@ test("the first message activates a previewed Session and keeps permissions loca
   assert.match(app, /sendStatusButton\.disabled = !canCompose/);
   assert.match(app, /queuePromptButton\.disabled = !connected \|\| activeSessionPreviewOnly/);
   assert.match(app, /sessionMenu\.classList\.toggle\("hidden", activeSessionPreviewOnly\)/);
+  assert.match(
+    server,
+    /async function resumeAppServerThread\(session, launch, params\)[\s\S]*setThreadArchived\(false, threadId\)[\s\S]*resumeThreadWithResult\(threadId, params\)/,
+  );
+  assert.match(
+    server,
+    /function listDetachedSessions\(\)[\s\S]*archivedPersonalSessionIds\.has\(String\(record\.sessionId \|\| ""\)\)[\s\S]*\) \{\s*continue;/,
+  );
+  assert.match(
+    app,
+    /async function archiveCodexSession\(session, archived\)[\s\S]*if \(!archived\) openSavedSessionPreview\(\{ \.\.\.session, archived: false \}\)/,
+  );
   assert.match(
     app,
     /if \(activeSessionPreviewOnly\) \{[\s\S]*commandName === "\/status"[\s\S]*"已暂停 · 仅查看"/,

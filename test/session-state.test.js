@@ -12,6 +12,7 @@ const threadId = "019f9db4-cdfd-7c10-b477-4859c23313be";
 const runningThreadId = "019f9db4-cdfd-7c10-b477-4859c23313bf";
 const pausedThreadId = "019f9db4-cdfd-7c10-b477-4859c23313c0";
 const legacyThreadId = "019f9db4-cdfd-7c10-b477-4859c23313c1";
+const archivedThreadId = "019f9db4-cdfd-7c10-b477-4859c23313c2";
 const turnId = "019f9db5-cdfd-7c10-b477-4859c23313be";
 
 test("Agent Web restart preserves Session workflow state separately from runtime state", async (t) => {
@@ -98,6 +99,28 @@ test("Agent Web restart preserves Session workflow state separately from runtime
         released: true,
         turnState: { active: false, requirements: [], queuedTurns: [] },
       },
+      "archived-session": {
+        id: "archived-session",
+        cwd: workspaceRoot,
+        command: "codex",
+        args: ["app-server"],
+        transport: "app-server",
+        access: "safe",
+        mode: "resume-id",
+        sessionId: archivedThreadId,
+        title: "Archived threads are not current",
+        startedAt: "2026-07-20T10:00:00.000Z",
+        lastActivityAt: "2026-07-20T10:12:00.000Z",
+        detachedAt: "2026-07-20T10:12:00.000Z",
+        released: false,
+        turnState: { active: false, requirements: [], queuedTurns: [] },
+      },
+    }, null, 2)}\n`,
+  );
+  await writeFile(
+    path.join(codexHome, "session-archive.json"),
+    `${JSON.stringify({
+      [archivedThreadId]: { archivedAt: "2026-07-20T10:13:00.000Z" },
     }, null, 2)}\n`,
   );
   await writeFile(
@@ -190,6 +213,7 @@ test("Agent Web restart preserves Session workflow state separately from runtime
   assert.equal(persisted["paused-session"].releaseReason, "detached-ttl");
   assert.equal(persisted["legacy-session"].released, false);
   assert.equal(persisted["legacy-session"].releaseReason, undefined);
+  assert.equal(persisted["archived-session"].sessionId, archivedThreadId);
 });
 
 test("threadless shared App Server notifications cannot refresh every Session timestamp", async () => {

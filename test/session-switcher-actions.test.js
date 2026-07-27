@@ -36,6 +36,10 @@ test("the desktop and Pad Session switcher collapses and exposes contextual acti
   assert.match(app, /function endSessionFromSwitcher\(session\)/);
   assert.match(
     app,
+    /function archiveSessionFromSwitcher\(session\)[\s\S]*if \(isCurrentSession\) \{[\s\S]*openNewSessionDraft\(/,
+  );
+  assert.match(
+    app,
     /function archiveSessionFromSwitcher\(session\)[\s\S]*agentHostApiUrl\([\s\S]*session\.hostId \|\| activeAgentHostId/,
   );
   assert.match(

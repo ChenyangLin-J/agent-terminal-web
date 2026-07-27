@@ -1294,6 +1294,7 @@ app.put("/api/codex-sessions/:id/archive", async (req, res) => {
       }
     }
     await setSessionArchived(id, archived, agentHost);
+    removePersistedWebSessionsForCodexSession(id, agentHost.id);
     res.json({ id, archived });
   } catch (error) {
     res.status(500).json({ error: `Failed to update archive: ${error.message}` });
@@ -2058,7 +2059,7 @@ async function initializeAppServerSession(session, launch) {
     };
     let thread;
     if (launch.sessionId) {
-      const resumed = await session.appServer.resumeThreadWithResult(launch.sessionId, {
+      const resumed = await resumeAppServerThread(session, launch, {
         ...params,
         excludeTurns: true,
         initialTurnsPage: {
@@ -2122,6 +2123,35 @@ async function initializeAppServerSession(session, launch) {
     }
     markAppServerExited(session, error);
     releaseAgentAppServerClient(session.appServer);
+  }
+}
+
+async function resumeAppServerThread(session, launch, params) {
+  const threadId = launch.sessionId;
+  let unarchived = false;
+
+  const unarchive = async () => {
+    if (unarchived) return;
+    await session.appServer.setThreadArchived(false, threadId);
+    unarchived = true;
+    if (launch.agentHost?.type !== "local") return;
+    const archive = await readSessionArchive();
+    if (!archive[threadId]) return;
+    delete archive[threadId];
+    await writeSessionArchive(archive);
+  };
+
+  if (launch.agentHost?.type === "local") {
+    const archive = await readSessionArchive();
+    if (archive[threadId]) await unarchive();
+  }
+
+  try {
+    return await session.appServer.resumeThreadWithResult(threadId, params);
+  } catch (error) {
+    if (!/\bis archived\b/i.test(String(error?.message || ""))) throw error;
+    await unarchive();
+    return session.appServer.resumeThreadWithResult(threadId, params);
   }
 }
 
@@ -2284,6 +2314,7 @@ function restoreTmuxSession(id) {
 
 function listDetachedSessions() {
   const records = readPersistedWebSessions();
+  const archivedPersonalSessionIds = new Set(Object.keys(readSessionArchiveSync()));
   const items = [];
   let recordsChanged = false;
 
@@ -2313,6 +2344,12 @@ function listDetachedSessions() {
     const agentHost = resolveAgentHost(AGENT_HOSTS, record.hostId);
     const cwd = agentHost ? resolveAgentHostPath(agentHost, record.cwd) : null;
     if (!cwd) continue;
+    if (
+      agentHost.id === PERSONAL_AGENT_HOST.id &&
+      archivedPersonalSessionIds.has(String(record.sessionId || ""))
+    ) {
+      continue;
+    }
     const resultState = agentSessionResultState(
       record.sessionId,
       record.turnState?.lastCompletedTurnId,
@@ -6285,6 +6322,22 @@ function removePersistedWebSession(id) {
   writePersistedWebSessions(records);
 }
 
+function removePersistedWebSessionsForCodexSession(sessionId, hostId = PERSONAL_AGENT_HOST.id) {
+  const records = readPersistedWebSessions();
+  let changed = false;
+  for (const [id, record] of Object.entries(records)) {
+    if (
+      String(record?.sessionId || "") !== String(sessionId || "") ||
+      String(record?.hostId || PERSONAL_AGENT_HOST.id) !== String(hostId || PERSONAL_AGENT_HOST.id)
+    ) {
+      continue;
+    }
+    delete records[id];
+    changed = true;
+  }
+  if (changed) writePersistedWebSessions(records);
+}
+
 function readPersistedWebSessions() {
   try {
     const parsed = JSON.parse(fsSync.readFileSync(AGENT_WEB_SESSIONS_FILE, "utf8"));
@@ -7281,23 +7334,35 @@ async function writeSessionTitles(titles) {
 async function readSessionArchive() {
   try {
     const raw = await fs.readFile(CODEX_SESSION_ARCHIVE_FILE, "utf8");
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-
-    return Object.fromEntries(
-      Object.entries(parsed)
-        .map(([id, record]) => {
-          const archivedAt =
-            record && typeof record === "object" ? String(record.archivedAt || "") : String(record || "");
-          return [String(id), { archivedAt }];
-        })
-        .filter(([id]) => isValidSessionId(id)),
-    );
+    return normalizeSessionArchive(JSON.parse(raw));
   } catch (error) {
     if (error.code === "ENOENT") return {};
     console.error(`Failed to read session archive: ${error.message}`);
     return {};
   }
+}
+
+function readSessionArchiveSync() {
+  try {
+    return normalizeSessionArchive(JSON.parse(fsSync.readFileSync(CODEX_SESSION_ARCHIVE_FILE, "utf8")));
+  } catch (error) {
+    if (error.code === "ENOENT") return {};
+    console.error(`Failed to read session archive: ${error.message}`);
+    return {};
+  }
+}
+
+function normalizeSessionArchive(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([id, record]) => {
+        const archivedAt =
+          record && typeof record === "object" ? String(record.archivedAt || "") : String(record || "");
+        return [String(id), { archivedAt }];
+      })
+      .filter(([id]) => isValidSessionId(id)),
+  );
 }
 
 async function writeSessionArchive(archive) {

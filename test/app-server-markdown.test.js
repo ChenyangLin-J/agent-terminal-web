@@ -10,7 +10,7 @@ test("App Server final answers render safe Markdown links", async (t) => {
     readFile(new URL("../public/app.js", import.meta.url), "utf8"),
     readFile(new URL("../server.js", import.meta.url), "utf8"),
   ]);
-  assert.match(pageSource, /markdown-it\.min\.js\?v=14\.3\.0[\s\S]*app-markdown\.js\?v=20260721-local-files-1[\s\S]*app\.js\?v=20260727-account-control-center-1/);
+  assert.match(pageSource, /markdown-it\.min\.js\?v=14\.3\.0[\s\S]*app-markdown\.js\?v=20260721-local-files-1[\s\S]*app\.js\?v=20260727-session-lifecycle-fix-1/);
   assert.match(serverSource, /app\.use\("\/vendor\/markdown-it"/);
   assert.match(appSource, /\["assistant", "user"\]\.includes\(item\.type\)/);
 

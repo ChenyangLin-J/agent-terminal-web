@@ -403,10 +403,7 @@ sessionSearchInput.addEventListener("input", () => {
   syncControlCenterFilterReset();
 });
 backButton.addEventListener("click", showStartScreen);
-sessionSwitcherNewButton.addEventListener("click", () => {
-  showStartScreen();
-  toggleNewSessionPanel(true);
-});
+sessionSwitcherNewButton.addEventListener("click", () => openNewSessionDraft());
 sessionSwitcherToggle.addEventListener("click", () => {
   setSessionSwitcherCollapsed(true);
 });
@@ -2063,6 +2060,7 @@ async function archiveCodexSession(session, archived) {
     syncPrimaryNavigation("center");
   }
   await Promise.all([loadSavedCodexSessions(), loadArchivedCodexSessions()]);
+  if (!archived) openSavedSessionPreview({ ...session, archived: false });
 }
 
 async function archiveCurrentSession() {
@@ -2093,7 +2091,15 @@ async function archiveCurrentSession() {
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.error || "归档失败");
     }
-    detach(true);
+    forgetSessionNavigation({
+      host: activeSessionParams.host || activeAgentHostId,
+      sessionId,
+    });
+    openNewSessionDraft({
+      cwd: activeSessionParams.cwd || ".",
+      access: activeAccessMode,
+    });
+    void loadArchivedCodexSessions();
   } catch (error) {
     setArchiveSessionDisabled(false);
     window.alert(`归档失败：${error.message}`);
@@ -2140,10 +2146,18 @@ async function archiveSessionFromSwitcher(session) {
       (cleanAgentHostId(session.hostId) || "personal") ===
         (cleanAgentHostId(activeSessionParams.host) || activeAgentHostId) &&
       (session.id === activeSessionId || sessionId === activeSessionParams.sessionId);
-    if (isCurrentSession) detach(true);
-    else {
-      syncPrimaryNavigation("center");
-      await refreshLists();
+    if (isCurrentSession) {
+      forgetSessionNavigation({
+        host: session.hostId || activeAgentHostId,
+        sessionId,
+      });
+      openNewSessionDraft({
+        cwd: activeSessionParams.cwd || ".",
+        access: activeAccessMode,
+      });
+      void loadArchivedCodexSessions();
+    } else {
+      await Promise.all([loadLiveSessions(), loadArchivedCodexSessions()]);
     }
   } catch (error) {
     window.alert(`归档失败：${error.message}`);
@@ -2291,11 +2305,14 @@ function openNewSessionDraft(overrides = {}) {
     sessionId: "",
     title: overrides.title || "New Session",
     transport: DEFAULT_TRANSPORT,
-    access: overrides.access === "safe" ? "safe" : accessModeSelect.value || DEFAULT_ACCESS_MODE,
+    access: ["safe", "full"].includes(overrides.access)
+      ? overrides.access
+      : accessModeSelect.value || DEFAULT_ACCESS_MODE,
     purpose: overrides.purpose === "think" ? "think" : "",
     preview: "1",
     new: "1",
   });
+  requestAnimationFrame(() => promptInput.focus());
 }
 
 function startThinkSession() {

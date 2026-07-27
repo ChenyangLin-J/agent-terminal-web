@@ -10,10 +10,16 @@ test("URL shortcut opens a new workspace draft without starting a runtime", () =
   assert.match(appSource, /if \(startNew\) \{\s+openSessionPreview\(\{ \.\.\.launch, mode: "new", preview: "1", new: "1" \}\)/);
   assert.match(appSource, /function openNewSessionDraft\(overrides = \{\}\)/);
   assert.match(appSource, /preview: "1",\s+new: "1"/);
+  assert.match(appSource, /sessionSwitcherNewButton\.addEventListener\("click", \(\) => openNewSessionDraft\(\)\)/);
+  assert.match(appSource, /function openNewSessionDraft[\s\S]*requestAnimationFrame\(\(\) => promptInput\.focus\(\)\)/);
+  assert.doesNotMatch(
+    appSource,
+    /sessionSwitcherNewButton\.addEventListener\("click",[\s\S]{0,120}showStartScreen\(\)/,
+  );
   assert.match(appSource, /const DEFAULT_TRANSPORT = "app-server"/);
   assert.match(appSource, /const DEFAULT_ACCESS_MODE = "full"/);
   assert.doesNotMatch(pageSource, /id="transport"|id="launch-mode"|id="session-id"/);
   assert.match(pageSource, /<option value="full" selected>全部允许（默认，高风险）<\/option>/);
   assert.match(pageSource, /id="session-host"/);
-  assert.match(pageSource, /app\.js\?v=20260727-account-control-center-1/);
+  assert.match(pageSource, /app\.js\?v=20260727-session-lifecycle-fix-1/);
 });

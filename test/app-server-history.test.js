@@ -10,7 +10,7 @@ test("App Server resume restores structured history and keeps raw text available
     readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
   ]);
 
-  assert.match(server, /resumeThreadWithResult\(launch\.sessionId, \{/);
+  assert.match(server, /resumeAppServerThread\(session, launch, \{/);
   assert.match(server, /initialTurnsPage: \{[\s\S]*limit: APP_INITIAL_TURN_LIMIT/);
   assert.match(server, /const recentPage = resumed\.initialTurnsPage/);
   assert.match(server, /restoreAppServerTranscript\(session, \{ \.\.\.thread, turns: recentPage\?\.data \|\| \[\] \}, \{ resumed: true \}\)/);

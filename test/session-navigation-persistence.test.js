@@ -104,6 +104,15 @@ test("the current Session navigation survives an Agent Web restart", async (t) =
   await page.locator("#connection").waitFor();
   assert.match(await page.locator("#connection").innerText(), /仅查看/);
   assert.equal(await page.locator("#session-switcher-toggle").getAttribute("aria-expanded"), "true");
+
+  await page.locator("#session-switcher-new").click();
+  await page.waitForURL((url) => url.searchParams.get("new") === "1");
+  const draftUrl = new URL(page.url());
+  assert.equal(draftUrl.searchParams.get("preview"), "1");
+  assert.equal(draftUrl.searchParams.has("sessionId"), false);
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "prompt");
+  assert.equal(await page.locator(".session-switcher-item.active").count(), 0);
+  assert.match(await page.locator("#connection").innerText(), /发送第一条消息时创建/);
 });
 
 async function startAgent(environment) {

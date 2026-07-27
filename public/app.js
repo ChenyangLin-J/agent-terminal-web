@@ -5357,9 +5357,8 @@ function createAppProcessGroup(items, groupNumber = 1) {
     loadState,
     itemCount: contentItems.length,
   });
-  count.textContent = group.open ? "收起" : collapsedActionText;
+  count.textContent = collapsedActionText;
   group.addEventListener("toggle", () => {
-    count.textContent = group.open ? "收起" : collapsedActionText;
     if (autoExpanded && group.open) return;
     if (group.open) {
       openAppProcessGroups.add(groupId);
@@ -5384,6 +5383,16 @@ function createAppProcessGroup(items, groupNumber = 1) {
     } else if (historical) {
       content.append(createHistoricalProcessEmptyState());
     }
+  }
+  if (content.childNodes.length) {
+    const collapse = document.createElement("button");
+    collapse.type = "button";
+    collapse.className = "app-process-collapse";
+    collapse.textContent = "收起执行记录";
+    collapse.addEventListener("click", () => {
+      group.open = false;
+    });
+    content.append(collapse);
   }
   group.append(summary);
   if (content.childNodes.length) group.append(content);

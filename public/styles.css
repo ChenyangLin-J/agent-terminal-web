@@ -1253,13 +1253,7 @@ input {
 }
 
 .app-process-group[open] > summary {
-  position: sticky;
-  top: 0;
-  z-index: 3;
   align-items: start;
-  border-bottom: 1px solid #252c38;
-  background: #0d1118;
-  box-shadow: 0 5px 12px rgb(0 0 0 / 28%);
 }
 
 .app-process-group > summary::-webkit-details-marker {
@@ -1374,8 +1368,25 @@ input {
   border-top: 1px solid #191e26;
 }
 
-.app-process-content .app-transcript-item:last-child {
+.app-process-content .app-transcript-item:last-of-type {
   border-bottom: 0;
+}
+
+.app-process-collapse {
+  display: block;
+  width: calc(100% - 16px);
+  min-height: 34px;
+  margin: 8px;
+  border-color: #252c38;
+  color: #8f9bad;
+  background: #0d1118;
+  font-size: 12px;
+}
+
+.app-process-collapse:hover {
+  border-color: #354153;
+  color: #c2cad8;
+  background: #131923;
 }
 
 .app-process-load-state {

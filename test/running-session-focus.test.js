@@ -21,4 +21,11 @@ test("opening a running App Server Session follows its latest output", async () 
     app,
     /storedPosition && !storedPosition\.atBottom && !shouldFollow/,
   );
+  assert.match(
+    app,
+    /appTranscriptInitialRestorePending &&[\s\S]*!appTranscriptRunningRestoreFollowInitialized[\s\S]*appTranscriptRunningRestoreFollowInitialized = true;[\s\S]*status\.turnState\?\.active \|\| status\.turnState\?\.stopping[\s\S]*appTranscriptSubmitFollowActive = true;/,
+  );
+  assert.match(app, /appTranscriptRunningRestoreFollowInitialized = false;/);
+  assert.match(app, /appServerView\.addEventListener\("pointerdown", stopAppTranscriptSubmitFollow/);
+  assert.match(app, /appServerView\.addEventListener\("wheel", stopAppTranscriptSubmitFollow/);
 });

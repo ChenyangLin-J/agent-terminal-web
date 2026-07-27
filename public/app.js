@@ -292,6 +292,7 @@ let appTranscriptInitialRestorePending = false;
 let appReadingPositionSaveTimer = null;
 let appTranscriptHasUnseenContent = false;
 let appTranscriptSubmitFollowActive = false;
+let appTranscriptRunningRestoreFollowInitialized = false;
 let activeSessionUnreadTurnId = "";
 let pendingAppReadingRestore = null;
 let pendingEditFork = null;
@@ -2227,6 +2228,7 @@ function openSessionPreview(params = {}) {
   appTranscriptInitialRestorePending = true;
   appTranscriptHasUnseenContent = false;
   appTranscriptSubmitFollowActive = false;
+  appTranscriptRunningRestoreFollowInitialized = false;
   pendingAppReadingRestore = null;
   pendingEditFork = null;
   appTranscriptSource = "";
@@ -2301,6 +2303,7 @@ function openSocket(params, options = {}) {
     appTranscriptInitialRestorePending = activeTransport === "app-server";
     appTranscriptHasUnseenContent = false;
     appTranscriptSubmitFollowActive = false;
+    appTranscriptRunningRestoreFollowInitialized = false;
     pendingAppReadingRestore = null;
     pendingEditFork = null;
     renderEditForkBanner();
@@ -4254,6 +4257,16 @@ function renderStatus(status) {
   activeStartupQueueSupported = Boolean(status.capabilities?.startupQueue);
   activeTurnInterruptSupported = Boolean(status.capabilities?.interruptTurn);
   activeSessionCapabilities = status.capabilities || {};
+  if (
+    activeTransport === "app-server" &&
+    appTranscriptInitialRestorePending &&
+    !appTranscriptRunningRestoreFollowInitialized
+  ) {
+    appTranscriptRunningRestoreFollowInitialized = true;
+    if (status.turnState?.active || status.turnState?.stopping) {
+      appTranscriptSubmitFollowActive = true;
+    }
+  }
   activeForkedFromId = String(status.forkedFromId || "");
   activeForkedFromTitle = String(status.forkedFromTitle || "");
   activeParentThreadId = String(status.parentThreadId || "");

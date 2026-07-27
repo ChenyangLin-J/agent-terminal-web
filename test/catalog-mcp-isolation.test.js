@@ -13,6 +13,10 @@ test("catalog metadata uses the shared App Server by default", () => {
     serverSource,
     /SHARED_APP_SERVER_ENABLED\s*\?\s*createAgentAppServerClient\(WORKSPACE_ROOT,/,
   );
+  assert.match(serverSource, /const THREAD_CATALOG_CACHE_MS = Math\.max/);
+  assert.match(serverSource, /cachedThreadCatalogPage\(\{ archived, agentHost \}\)/);
+  assert.match(serverSource, /if \(cached\?\.promise\) return cached\.promise/);
+  assert.match(serverSource, /thread-catalog-stale-fallback/);
 });
 
 test("the rollback-only hidden Catalog disables MCP and stops when idle", () => {

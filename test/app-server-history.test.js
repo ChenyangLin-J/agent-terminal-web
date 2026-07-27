@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("App Server resume restores structured history and keeps raw text available", async () => {
+test("App Server resume restores structured history without terminal replay", async () => {
   const [server, app, page, styles] = await Promise.all([
     readFile(new URL("../server.js", import.meta.url), "utf8"),
     readFile(new URL("../public/app.js", import.meta.url), "utf8"),
@@ -46,7 +46,12 @@ test("App Server resume restores structured history and keeps raw text available
     server,
     /if \(!USE_TMUX_SESSIONS\) \{[\s\S]*transport: APP_SERVER_TRANSPORT,[\s\S]*args: \["app-server"\]/,
   );
-  assert.match(app, /appTranscriptItems = allItems\.map\(normalizeClientTranscriptItem\)/);
+  assert.match(app, /const normalizedItems = allItems\.map\(normalizeClientTranscriptItem\)/);
+  assert.match(app, /appTranscriptItems = normalizedItems/);
+  assert.match(app, /const shouldReplay = activeTransport === "terminal" && options\.replay !== false/);
+  assert.match(app, /function loadTerminalAssets\(\)/);
+  assert.doesNotMatch(page, /<script src="\/vendor\/xterm/);
+  assert.doesNotMatch(page, /<link rel="stylesheet" href="\/vendor\/xterm-css/);
   assert.match(app, /APP_READING_POSITION_STORE_KEY/);
   assert.match(app, /function captureAppTranscriptAnchor\(\)/);
   assert.match(app, /function restoreAppTranscriptAnchor\(position\)/);
@@ -60,6 +65,8 @@ test("App Server resume restores structured history and keeps raw text available
   assert.match(styles, /\.app-server-view[\s\S]*background: #080a0f/);
   assert.match(styles, /\.app-server-transcript[\s\S]*font-family: ui-monospace/);
   assert.match(app, /function createAppProcessGroup\(items, groupNumber = 1\)/);
+  assert.match(app, /function replaceAppProcessGroup\(itemId\)/);
+  assert.match(app, /function appendAppTranscriptItem\(item\)/);
   assert.match(app, /item\.type === "assistant" && item\.phase !== "final_answer"/);
   assert.match(app, /function appTurnHasFinalAnswer\(turnId\)/);
   assert.match(

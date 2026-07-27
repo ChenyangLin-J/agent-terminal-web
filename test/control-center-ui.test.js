@@ -23,6 +23,10 @@ test("the default Agent home is a two-destination Session control center", () =>
   assert.match(app, /function setControlCenterFilter\(filter\)/);
   assert.match(app, /function controlStatusFilterMatches\(kind\)/);
   assert.match(app, /function syncControlCenterFilterReset\(\)/);
+  assert.match(app, /sessionCatalogTimer = window\.setInterval\(refreshSessionCatalogs, 60_000\)/);
+  assert.match(app, /sessionsTimer = window\.setInterval\(loadLiveSessions, 10_000\)/);
+  assert.match(app, /previousSessions: savedSessionsCache,[\s\S]*onPartial: renderSavedCodexSessions/);
+  assert.match(app, /Keep the last successful data for this host while it is temporarily unavailable/);
 });
 
 test("control center cards derive attention and progress from real Session state", () => {

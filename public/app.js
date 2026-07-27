@@ -224,6 +224,7 @@ const appMarkdownRenderer = globalThis.AgentMarkdown?.createRenderer() || null;
 
 let terminal = null;
 let fitAddon = null;
+let terminalAssetsPromise = null;
 let terminalTouchY = null;
 let fitFrame = null;
 let fitTimer = null;
@@ -234,6 +235,7 @@ let pageDownLongPressFired = false;
 
 let socket = null;
 let sessionsTimer = null;
+let sessionCatalogTimer = null;
 let reconnectTimer = null;
 let clientHeartbeatTimer = null;
 let visibleProbeTimer = null;
@@ -316,6 +318,7 @@ let pendingEditFork = null;
 let sessionTitleRenameSaving = false;
 let appTranscriptSource = "";
 let cachedSessionPreview = null;
+let appTranscriptAnchorAliases = new Map();
 let sessionPreviewRequestSequence = 0;
 let terminalPreviewAllowed = false;
 let terminalOutputWhilePreviewChars = 0;
@@ -837,44 +840,66 @@ function syncControlCenterHostUrl() {
 
 async function refreshLists() {
   const savedScrollY = startScreen.classList.contains("hidden") ? null : window.scrollY;
-  await loadLiveSessions();
-  await Promise.all([loadSavedCodexSessions(), loadArchivedCodexSessions()]);
+  await Promise.all([loadLiveSessions(), refreshSessionCatalogs()]);
   if (savedScrollY !== null) window.scrollTo({ top: savedScrollY, behavior: "auto" });
 }
 
+async function refreshSessionCatalogs() {
+  await Promise.all([loadSavedCodexSessions(), loadArchivedCodexSessions()]);
+}
+
 async function loadLiveSessions() {
-  const sessions = await loadSessionsAcrossHosts("/api/sessions");
+  const sessions = await loadSessionsAcrossHosts("/api/sessions", {
+    previousSessions: liveSessionsCache,
+    onPartial: renderLiveSessions,
+  });
   renderLiveSessions(sessions);
 }
 
 async function loadSavedCodexSessions() {
-  const sessions = await loadSessionsAcrossHosts("/api/codex-sessions");
+  const sessions = await loadSessionsAcrossHosts("/api/codex-sessions", {
+    previousSessions: savedSessionsCache,
+    onPartial: renderSavedCodexSessions,
+  });
   renderSavedCodexSessions(sessions);
 }
 
 async function loadArchivedCodexSessions() {
-  const sessions = await loadSessionsAcrossHosts("/api/codex-sessions/archived");
+  const sessions = await loadSessionsAcrossHosts("/api/codex-sessions/archived", {
+    previousSessions: archivedSessionsCache,
+    onPartial: renderArchivedCodexSessions,
+  });
   renderArchivedCodexSessions(sessions);
 }
 
-async function loadSessionsAcrossHosts(path) {
+async function loadSessionsAcrossHosts(path, { previousSessions = [], onPartial = null } = {}) {
   const hosts = agentHosts.length ? agentHosts : [{ id: activeAgentHostId, label: activeAgentHostId }];
-  const payloads = await Promise.all(
+  const sessionsByHost = new Map(
+    hosts.map((host) => [
+      host.id,
+      previousSessions.filter(
+        (session) => (cleanAgentHostId(session?.hostId) || "personal") === host.id,
+      ),
+    ]),
+  );
+  const combinedSessions = () => hosts.flatMap((host) => sessionsByHost.get(host.id) || []);
+  await Promise.all(
     hosts.map(async (host) => {
       try {
         const data = await apiJsonForHost(path, host.id);
-        if (!data || data.error) return [];
-        return (Array.isArray(data.sessions) ? data.sessions : []).map((session) => ({
+        if (!data || data.error) return;
+        sessionsByHost.set(host.id, (Array.isArray(data.sessions) ? data.sessions : []).map((session) => ({
           ...session,
           hostId: session.hostId || data.host?.id || host.id,
           hostLabel: session.hostLabel || data.host?.label || host.label || host.id,
-        }));
+        })));
+        onPartial?.(combinedSessions());
       } catch {
-        return [];
+        // Keep the last successful data for this host while it is temporarily unavailable.
       }
     }),
   );
-  return payloads.flat();
+  return combinedSessions();
 }
 
 async function searchSavedSessions() {
@@ -2486,10 +2511,26 @@ function openSessionPreview(params = {}) {
   }
 }
 
-function openSocket(params, options = {}) {
+async function openSocket(params, options = {}) {
   const isReconnect = Boolean(options.reconnect);
+  const resumesRenderedPreview =
+    !isReconnect &&
+    activeSessionPreviewOnly &&
+    Boolean(params.sessionId) &&
+    String(activeSessionParams.sessionId || "") === String(params.sessionId) &&
+    appTranscriptSource === "disk" &&
+    (appTranscriptItems.length > 0 || Boolean(cachedSessionPreview?.result));
   activeAgentHostId = cleanAgentHostId(params.host) || activeAgentHostId;
   params = { ...params, host: activeAgentHostId };
+  activeTransport = params.transport === "app-server" ? "app-server" : "terminal";
+  if (activeTransport === "terminal") {
+    try {
+      await ensureTerminal();
+    } catch (error) {
+      setUploadStatus(`Terminal 组件加载失败：${error.message}`, { clear: true });
+      return;
+    }
+  }
   if (newSessionHostSelect.options.length) newSessionHostSelect.value = activeAgentHostId;
   syncAgentHostCapabilities();
   renderAgentHostTabs();
@@ -2498,12 +2539,14 @@ function openSocket(params, options = {}) {
   saveAppReadingPosition();
   closeSocket();
   activeSessionPreviewOnly = false;
-  ensureTerminal();
-  activeTransport = params.transport === "app-server" ? "app-server" : "terminal";
+  if (resumesRenderedPreview) {
+    const previewNote = appServerTranscript.querySelector(".app-history-banner span");
+    if (previewNote) previewNote.textContent = "正在连接 Session";
+  }
   activeSessionParams = { ...activeSessionParams, ...params, preview: "", new: "" };
   rememberSessionNavigation(activeSessionParams);
   const hasSnapshot = !isReconnect && hasSessionSnapshot(snapshotKey);
-  const shouldReplay = options.replay !== false;
+  const shouldReplay = activeTransport === "terminal" && options.replay !== false;
   const resumesTerminalHistory =
     Boolean(params.sessionId) || ["resume-last", "resume-picker"].includes(params.mode);
   beginTerminalHistoryBuffer({
@@ -2512,7 +2555,7 @@ function openSocket(params, options = {}) {
     waitForOutput: !isReconnect && resumesTerminalHistory && !params.attach,
   });
   if (!isReconnect) {
-    terminal?.reset();
+    if (activeTransport === "terminal") terminal?.reset();
     latestTurnState = {
       active: false,
       stopping: false,
@@ -2526,9 +2569,17 @@ function openSocket(params, options = {}) {
     };
     resumeInterruptedPending = false;
     interruptRequestPending = false;
-    appTranscriptItems = [];
-    restoredAppTurnCount = 0;
-    restoredAppHistoryHasMore = false;
+    if (!resumesRenderedPreview) {
+      appTranscriptItems = [];
+      restoredAppTurnCount = 0;
+      restoredAppHistoryHasMore = false;
+      appTranscriptSource = "";
+      cachedSessionPreview = null;
+      appTranscriptAnchorAliases.clear();
+      openAppProcessGroups.clear();
+      collapsedAppProcessGroups.clear();
+      historicalProcessLoads.clear();
+    }
     restoredAppHistoryLoading = false;
     appTranscriptInitialRestorePending = activeTransport === "app-server";
     appTranscriptHasUnseenContent = false;
@@ -2538,8 +2589,6 @@ function openSocket(params, options = {}) {
     pendingEditFork = null;
     renderEditForkBanner();
     syncAppTranscriptLatestButton();
-    appTranscriptSource = "";
-    cachedSessionPreview = null;
     appSkills = [];
     appSkillsRequested = false;
     activeMemoryProjectMode = "auto";
@@ -2553,14 +2602,11 @@ function openSocket(params, options = {}) {
     hideTerminalSessionPreview();
     terminalPreviewAllowed = activeTransport === "terminal" && !hasSnapshot && resumesTerminalHistory;
     sessionPreviewRequestSequence += 1;
-    openAppProcessGroups.clear();
-    collapsedAppProcessGroups.clear();
-    historicalProcessLoads.clear();
-    renderAppTranscript();
+    if (!resumesRenderedPreview) renderAppTranscript();
     lastOutputRevision = 0;
     queuedOutputRevision = 0;
     if (hasSnapshot) restoreSessionSnapshot(snapshotKey);
-    if (params.sessionId && activeAgentHostId === "personal") {
+    if (!resumesRenderedPreview && params.sessionId && activeAgentHostId === "personal") {
       void loadSessionPreview(params.sessionId, sessionPreviewRequestSequence);
     }
   }
@@ -4775,6 +4821,7 @@ function renderStatus(status) {
   statusEls.project.title = sessionLabel;
   setConnectedState(status.exited ? "exited" : !activeSessionReady ? "starting" : historySyncPending ? "loading" : "connected");
   setDocumentTitle(status.title || displayProject(status.project));
+  const previousTranscriptState = transcriptTurnStateKey();
   renderTurnState(status.turnState);
   if (
     !sessionScreen.classList.contains("hidden") &&
@@ -4785,7 +4832,11 @@ function renderStatus(status) {
   }
   void voiceInputController.offerStoredRecovery();
   syncPrimarySessionView();
-  if (activeTransport === "app-server" && appTranscriptItems.length) {
+  if (
+    activeTransport === "app-server" &&
+    appTranscriptItems.length &&
+    previousTranscriptState !== transcriptTurnStateKey()
+  ) {
     renderAppTranscript({ follow: isAppTranscriptAtBottom() });
   }
   if (activeTransport === "app-server" && activeSessionReady && promptInput.value.includes("$")) {
@@ -4793,6 +4844,17 @@ function renderStatus(status) {
   }
   syncSessionUrl(status);
   if (!status.exited) flushPendingPreviewSubmission();
+}
+
+function transcriptTurnStateKey() {
+  return [
+    latestTurnState.active,
+    latestTurnState.stopping,
+    latestTurnState.interrupted,
+    latestTurnState.turnId,
+    latestTurnState.lastCompletedTurnId,
+    latestTurnState.lastStoppedTurnId,
+  ].join(":");
 }
 
 function renderTurnState(value = {}) {
@@ -4931,8 +4993,10 @@ function showStartScreen() {
   document.body.classList.remove("app-server-session");
   syncPrimaryNavigation("center");
   window.clearInterval(sessionsTimer);
+  window.clearInterval(sessionCatalogTimer);
   refreshLists().then(scrollStartScreenToTop);
-  sessionsTimer = window.setInterval(refreshLists, 10_000);
+  sessionsTimer = window.setInterval(loadLiveSessions, 10_000);
+  sessionCatalogTimer = window.setInterval(refreshSessionCatalogs, 60_000);
 }
 
 function scrollStartScreenToTop() {
@@ -4950,6 +5014,7 @@ function showSessionScreen() {
   syncPrimaryNavigation("session");
   closeTextView();
   window.clearInterval(sessionsTimer);
+  window.clearInterval(sessionCatalogTimer);
   void loadLiveSessions();
   sessionsTimer = window.setInterval(loadLiveSessions, 10_000);
   fitTerminal();
@@ -5424,7 +5489,11 @@ function replaceAppTranscript(payload = {}) {
   // A resumed App Server sends an empty transcript before its recent turns are
   // available. Do not let that placeholder win the race against disk history.
   if (!allItems.length && !activeSessionReady) return;
-  appTranscriptItems = allItems.map(normalizeClientTranscriptItem);
+  const normalizedItems = allItems.map(normalizeClientTranscriptItem);
+  appTranscriptAnchorAliases = replacingDiskPreview
+    ? transcriptAnchorAliases(appTranscriptItems, normalizedItems)
+    : new Map();
+  appTranscriptItems = normalizedItems;
   appTranscriptSource = "app-server";
   if (appTranscriptItems.length) cachedSessionPreview = null;
   const availableTurnCount = Number.isFinite(payload.restoredTurnCount) ? payload.restoredTurnCount : 0;
@@ -5434,11 +5503,38 @@ function replaceAppTranscript(payload = {}) {
   renderAppTranscript({
     follow: !prepended && (appTranscriptSubmitFollowActive || !replacingDiskPreview || wasAtBottom),
   });
-  if (pendingAppReadingRestore && findScrollAnchor(pendingAppReadingRestore.anchorId)) {
+  if (
+    pendingAppReadingRestore &&
+    findScrollAnchor(pendingAppReadingRestore.anchorId, pendingAppReadingRestore.turnId)
+  ) {
     const position = pendingAppReadingRestore;
     pendingAppReadingRestore = null;
     restoreAppTranscriptAnchor(position);
   }
+}
+
+function transcriptAnchorAliases(previousItems, nextItems) {
+  const candidates = new Map();
+  for (const item of nextItems) {
+    const key = transcriptReconciliationKey(item);
+    if (!key) continue;
+    const values = candidates.get(key) || [];
+    values.push(item.id);
+    candidates.set(key, values);
+  }
+  const aliases = new Map();
+  for (const item of previousItems) {
+    const values = candidates.get(transcriptReconciliationKey(item));
+    const replacementId = values?.shift();
+    if (item.id && replacementId) aliases.set(item.id, replacementId);
+  }
+  return aliases;
+}
+
+function transcriptReconciliationKey(item = {}) {
+  const text = String(item.text || "").replace(/\s+/g, " ").trim();
+  if (!item.turnId || !text) return "";
+  return [item.turnId, item.type, item.phase || "", text].join("\u0000");
 }
 
 function upsertAppTranscript(payload = {}) {
@@ -5451,7 +5547,7 @@ function upsertAppTranscript(payload = {}) {
     const previousItem = appTranscriptItems[index];
     appTranscriptItems[index] = { ...previousItem, ...item };
     if (isProcessTranscriptItem(previousItem) || isProcessTranscriptItem(appTranscriptItems[index])) {
-      renderAppTranscript({ follow: shouldFollow });
+      if (!replaceAppProcessGroup(item.id)) renderAppTranscript({ follow: shouldFollow });
     } else {
       replaceAppTranscriptCard(appTranscriptItems[index]);
     }
@@ -5460,7 +5556,8 @@ function upsertAppTranscript(payload = {}) {
   }
   appTranscriptItems.push(item);
   if (!shouldFollow) markAppTranscriptUnseen();
-  renderAppTranscript({ follow: shouldFollow });
+  if (!appendAppTranscriptItem(item)) renderAppTranscript({ follow: shouldFollow });
+  followAppTranscriptIfNeeded(shouldFollow);
 }
 
 function appendAppTranscriptDelta(payload = {}) {
@@ -5470,8 +5567,11 @@ function appendAppTranscriptDelta(payload = {}) {
   const wasAtBottom = isAppTranscriptAtBottom();
   const shouldFollow = appTranscriptSubmitFollowActive || wasAtBottom;
   item[payload.field] = trimClientTranscriptValue(`${item[payload.field] || ""}${payload.delta}`);
-  if (isProcessTranscriptItem(item) && payload.field === "text") renderAppTranscript({ follow: shouldFollow });
-  else replaceAppTranscriptCard(item);
+  if (isProcessTranscriptItem(item)) {
+    if (!replaceAppProcessGroup(item.id)) renderAppTranscript({ follow: shouldFollow });
+  } else {
+    replaceAppTranscriptCard(item);
+  }
   if (!shouldFollow) markAppTranscriptUnseen();
   followAppTranscriptIfNeeded(shouldFollow);
 }
@@ -5535,6 +5635,73 @@ function trimClientTranscriptValue(value) {
   const text = typeof value === "string" ? value : "";
   if (text.length <= 200_000) return text;
   return `${text.slice(0, 130_000)}\n\n… 中间内容已折叠 …\n\n${text.slice(-70_000)}`;
+}
+
+function appendAppTranscriptItem(item) {
+  if (
+    appTranscriptSource !== "app-server" ||
+    appTranscriptItems.length < 2 ||
+    appServerTranscript.querySelector(".app-transcript-empty") ||
+    (item.type === "assistant" && item.phase === "final_answer") ||
+    item.type === "user"
+  ) {
+    return false;
+  }
+
+  const previousItem = appTranscriptItems.at(-2);
+  if (isProcessTranscriptItem(item) && isProcessTranscriptItem(previousItem) && item.turnId === previousItem.turnId) {
+    return replaceAppProcessGroup(item.id);
+  }
+
+  const marker = appServerTranscript.querySelector(".app-interrupted-turn");
+  if (item.turnId && previousItem?.turnId && item.turnId !== previousItem.turnId) {
+    appServerTranscript.insertBefore(createAppTurnDivider(item), marker);
+  }
+  const node = isProcessTranscriptItem(item)
+    ? processGroupDescriptor(item.id)
+    : { items: [item], groupNumber: 0 };
+  if (!node) return false;
+  appServerTranscript.insertBefore(
+    isProcessTranscriptItem(item)
+      ? createAppProcessGroup(node.items, node.groupNumber)
+      : createAppTranscriptCard(item),
+    marker,
+  );
+  syncEditForkSourceHighlight();
+  return true;
+}
+
+function replaceAppProcessGroup(itemId) {
+  const descriptor = processGroupDescriptor(itemId);
+  if (!descriptor) return false;
+  const groupId = `${descriptor.items[0]?.turnId || descriptor.items[0]?.id || "turn"}:process:${descriptor.groupNumber}`;
+  const existing = [...appServerTranscript.querySelectorAll(".app-process-group")].find(
+    (element) => element.dataset.scrollAnchor === groupId,
+  );
+  if (!existing) return false;
+  existing.replaceWith(createAppProcessGroup(descriptor.items, descriptor.groupNumber));
+  return true;
+}
+
+function processGroupDescriptor(itemId) {
+  const groupCounts = new Map();
+  for (let index = 0; index < appTranscriptItems.length; index += 1) {
+    const first = appTranscriptItems[index];
+    if (!isProcessTranscriptItem(first)) continue;
+    const items = [first];
+    while (
+      index + 1 < appTranscriptItems.length &&
+      isProcessTranscriptItem(appTranscriptItems[index + 1]) &&
+      appTranscriptItems[index + 1].turnId === first.turnId
+    ) {
+      items.push(appTranscriptItems[index + 1]);
+      index += 1;
+    }
+    const groupNumber = (groupCounts.get(first.turnId) || 0) + 1;
+    groupCounts.set(first.turnId, groupNumber);
+    if (items.some((item) => item.id === itemId)) return { items, groupNumber };
+  }
+  return null;
 }
 
 function renderAppTranscript({ follow = false } = {}) {
@@ -5765,6 +5932,9 @@ async function loadSessionPreview(sessionId, requestSequence) {
         result: String(preview.result || ""),
         completedAt: String(preview.completedAt || ""),
       };
+      if (activeTransport === "app-server" && appTranscriptSource !== "app-server") {
+        appTranscriptSource = "disk";
+      }
     }
     if (activeTransport === "terminal") {
       renderTerminalSessionPreview();
@@ -6627,7 +6797,7 @@ function readAppReadingPosition() {
 function restoreAppTranscriptAnchor(position) {
   if (!appServerView || !position) return;
   requestAnimationFrame(() => {
-    const anchor = findScrollAnchor(position.anchorId);
+    const anchor = findScrollAnchor(position.anchorId, position.turnId);
     if (anchor) {
       const viewRect = appServerView.getBoundingClientRect();
       appServerView.scrollTop += anchor.getBoundingClientRect().top - viewRect.top - Number(position.offset || 0);
@@ -6641,9 +6811,12 @@ function restoreAppTranscriptAnchor(position) {
   });
 }
 
-function findScrollAnchor(anchorId) {
-  return [...appServerTranscript.querySelectorAll("[data-scroll-anchor]")].find(
-    (element) => element.dataset.scrollAnchor === anchorId,
+function findScrollAnchor(anchorId, turnId = "") {
+  const resolvedId = appTranscriptAnchorAliases.get(anchorId) || anchorId;
+  const anchors = [...appServerTranscript.querySelectorAll("[data-scroll-anchor]")];
+  return (
+    anchors.find((element) => element.dataset.scrollAnchor === resolvedId) ||
+    anchors.find((element) => turnId && element.dataset.turnId === turnId)
   );
 }
 
@@ -6661,7 +6834,7 @@ async function hydrateAppReadingPosition(position) {
     if (!response.ok) throw new Error("reading position hydration failed");
     if (activeSessionId !== webSessionId || pendingAppReadingRestore !== position) return;
     requestAnimationFrame(() => {
-      const anchor = findScrollAnchor(position.anchorId);
+      const anchor = findScrollAnchor(position.anchorId, position.turnId);
       pendingAppReadingRestore = null;
       if (anchor) restoreAppTranscriptAnchor(position);
     });
@@ -6692,8 +6865,9 @@ function trimAppReadingPositions(positions) {
   for (const [key] of entries.slice(APP_READING_POSITION_LIMIT)) delete positions[key];
 }
 
-function ensureTerminal() {
+async function ensureTerminal() {
   if (terminal) return;
+  await loadTerminalAssets();
 
   terminal = new Terminal({
     cursorBlink: true,
@@ -6714,6 +6888,68 @@ function ensureTerminal() {
     send({ type: "input", data });
   });
   installTerminalTouchScroll();
+}
+
+function loadTerminalAssets() {
+  if (globalThis.Terminal && globalThis.FitAddon?.FitAddon) return Promise.resolve();
+  if (terminalAssetsPromise) return terminalAssetsPromise;
+
+  terminalAssetsPromise = Promise.all([
+    loadStylesheetOnce("/vendor/xterm-css/xterm.css?v=20260625-5", "xterm-styles"),
+    loadClassicScriptOnce("/vendor/xterm/xterm.js?v=20260625-5", "xterm-script")
+      .then(() => loadClassicScriptOnce("/vendor/xterm-fit/addon-fit.js?v=20260625-5", "xterm-fit-script")),
+  ]).then(() => {
+    if (!globalThis.Terminal || !globalThis.FitAddon?.FitAddon) {
+      throw new Error("xterm did not initialize");
+    }
+  }).catch((error) => {
+    terminalAssetsPromise = null;
+    throw error;
+  });
+  return terminalAssetsPromise;
+}
+
+function loadStylesheetOnce(href, id) {
+  const existing = document.getElementById(id);
+  if (existing) return existing.dataset.loaded === "true"
+    ? Promise.resolve()
+    : new Promise((resolve, reject) => {
+        existing.addEventListener("load", resolve, { once: true });
+        existing.addEventListener("error", reject, { once: true });
+      });
+  return new Promise((resolve, reject) => {
+    const link = document.createElement("link");
+    link.id = id;
+    link.rel = "stylesheet";
+    link.href = href;
+    link.addEventListener("load", () => {
+      link.dataset.loaded = "true";
+      resolve();
+    }, { once: true });
+    link.addEventListener("error", () => reject(new Error(`Failed to load ${href}`)), { once: true });
+    document.head.append(link);
+  });
+}
+
+function loadClassicScriptOnce(src, id) {
+  const existing = document.getElementById(id);
+  if (existing) return existing.dataset.loaded === "true"
+    ? Promise.resolve()
+    : new Promise((resolve, reject) => {
+        existing.addEventListener("load", resolve, { once: true });
+        existing.addEventListener("error", reject, { once: true });
+      });
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.id = id;
+    script.src = src;
+    script.addEventListener("load", () => {
+      script.dataset.loaded = "true";
+      resolve();
+    }, { once: true });
+    script.addEventListener("error", () => reject(new Error(`Failed to load ${src}`)), { once: true });
+    document.body.append(script);
+  });
 }
 
 function installTerminalTouchScroll() {

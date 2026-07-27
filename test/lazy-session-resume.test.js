@@ -16,6 +16,13 @@ test("saved and released Sessions open from disk before a runtime is attached", 
     /function openSessionInCurrentPage\(params\)[\s\S]*if \(scopedParams\.preview === "1"\) openSessionPreview\(scopedParams\);[\s\S]*else openSocket\(scopedParams\)/,
   );
   assert.match(app, /fetch\(`\/api\/session-preview\/\$\{encodeURIComponent\(sessionId\)\}`\)/);
+  assert.match(app, /const resumesRenderedPreview =[\s\S]*appTranscriptSource === "disk"/);
+  assert.match(app, /if \(!resumesRenderedPreview\) renderAppTranscript\(\)/);
+  assert.match(
+    app,
+    /if \(!resumesRenderedPreview && params\.sessionId && activeAgentHostId === "personal"\)/,
+  );
+  assert.match(app, /function transcriptAnchorAliases\(previousItems, nextItems\)/);
   assert.match(app, /preview: activeSessionParams\.sessionId \? "仅查看 · 发送时恢复" : "发送第一条消息时创建"/);
   assert.doesNotMatch(page, /选择恢复方式|resume-engine-dialog/);
 });

@@ -173,6 +173,10 @@ const CATALOG_APP_SERVER_IDLE_MS = Math.max(
   1_000,
   Number(process.env.AGENT_CATALOG_IDLE_MS) || 60_000,
 );
+const THREAD_CATALOG_CACHE_MS = Math.max(
+  1_000,
+  Number(process.env.AGENT_THREAD_CATALOG_CACHE_MS) || 30_000,
+);
 const HOME_PUSH_URL = process.env.HOME_PUSH_URL || "http://127.0.0.1:3050/internal/push";
 const HOME_PUSH_SUBSCRIBE_URL = process.env.HOME_PUSH_SUBSCRIBE_URL || `${HOME_PUSH_URL}/subscriptions`;
 const HOME_VAPID_PUBLIC_KEY = process.env.HOME_VAPID_PUBLIC_KEY || "";
@@ -214,6 +218,7 @@ let catalogAppServerStart = null;
 let catalogAppServerIdleTimer = null;
 let catalogAppServerActiveUses = 0;
 let agentHostAppServerPool = null;
+const threadCatalogPageCache = new Map();
 const agentInstanceId = cryptoRandomId();
 const personalMemoryScheduler = createPersonalMemoryScheduler({
   delayMs: PERSONAL_MEMORY_SETTLE_MS,
@@ -6864,14 +6869,7 @@ async function listCodexSessions({ archived, agentHost = PERSONAL_AGENT_HOST }) 
 
 async function listCodexSessionsFromAppServer({ archived, agentHost = PERSONAL_AGENT_HOST }) {
   const [page, customTitles, persistedRecords] = await Promise.all([
-    withStandaloneAppServer(agentHost, (client) =>
-      client.listThreads({
-        archived: Boolean(archived),
-        limit: 40,
-        sortKey: "updated_at",
-        sortDirection: "desc",
-      }),
-    ),
+    cachedThreadCatalogPage({ archived, agentHost }),
     agentHost.type === "local" ? readSessionTitles() : Promise.resolve({}),
     Promise.resolve(
       Object.fromEntries(
@@ -6892,6 +6890,61 @@ async function listCodexSessionsFromAppServer({ archived, agentHost = PERSONAL_A
       agentHost,
     }))
     .filter(Boolean);
+}
+
+async function cachedThreadCatalogPage({ archived, agentHost = PERSONAL_AGENT_HOST }) {
+  const key = `${agentHost.id}:${Boolean(archived) ? "archived" : "active"}`;
+  const cached = threadCatalogPageCache.get(key);
+  if (cached?.page && Date.now() - cached.updatedAt < THREAD_CATALOG_CACHE_MS) {
+    return cached.page;
+  }
+  if (cached?.promise) return cached.promise;
+
+  const promise = withStandaloneAppServer(agentHost, (client) =>
+    client.listThreads({
+      archived: Boolean(archived),
+      limit: 40,
+      sortKey: "updated_at",
+      sortDirection: "desc",
+    }),
+  );
+  threadCatalogPageCache.set(key, {
+    page: cached?.page || null,
+    updatedAt: cached?.updatedAt || 0,
+    promise,
+  });
+  try {
+    const page = await promise;
+    if (threadCatalogPageCache.get(key)?.promise === promise) {
+      threadCatalogPageCache.set(key, { page, updatedAt: Date.now(), promise: null });
+    }
+    return page;
+  } catch (error) {
+    if (cached?.page && threadCatalogPageCache.get(key)?.promise === promise) {
+      threadCatalogPageCache.set(key, {
+        page: cached.page,
+        updatedAt: cached.updatedAt,
+        promise: null,
+      });
+    }
+    if (cached?.page) {
+      logAgentEvent("thread-catalog-stale-fallback", {
+        hostId: agentHost.id,
+        archived: Boolean(archived),
+        message: cleanClientLogValue(error?.message, 300),
+      });
+      return cached.page;
+    }
+    if (threadCatalogPageCache.get(key)?.promise === promise) threadCatalogPageCache.delete(key);
+    throw error;
+  }
+}
+
+function invalidateThreadCatalog(agentHost = PERSONAL_AGENT_HOST) {
+  const prefix = `${agentHost.id}:`;
+  for (const key of threadCatalogPageCache.keys()) {
+    if (key.startsWith(prefix)) threadCatalogPageCache.delete(key);
+  }
 }
 
 async function listCodexSessionsFromFiles({ archived }) {
@@ -7140,10 +7193,12 @@ async function setPersistedThreadName(threadId, title, agentHost = PERSONAL_AGEN
   );
   if (live) {
     await live.appServer.setThreadName(title, threadId);
+    invalidateThreadCatalog(agentHost);
     return true;
   }
   if (!nativeThreadCatalogEnabled(agentHost)) return false;
   await withStandaloneAppServer(agentHost, (client) => client.setThreadName(title, threadId));
+  invalidateThreadCatalog(agentHost);
   return true;
 }
 
@@ -7439,6 +7494,8 @@ async function setSessionArchived(id, archived, agentHost = PERSONAL_AGENT_HOST)
     await withStandaloneAppServer(agentHost, (client) => client.setThreadArchived(archived, id));
   } catch (error) {
     console.warn(`Codex ${archived ? "archive" : "unarchive"} failed for ${id}: ${error.message}`);
+  } finally {
+    invalidateThreadCatalog(agentHost);
   }
 }
 

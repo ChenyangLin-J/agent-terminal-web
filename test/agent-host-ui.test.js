@@ -13,7 +13,7 @@ test("control center aggregates Personal and Company Sessions behind account fil
   assert.match(page, /id="session-host"/);
   assert.match(page, /agent-hosts\.css\?v=/);
   assert.match(app, /await loadAgentHosts\(\);[\s\S]*await loadProjects\(\);/);
-  assert.match(app, /function loadSessionsAcrossHosts\(path\)/);
+  assert.match(app, /function loadSessionsAcrossHosts\(path, \{ previousSessions = \[\], onPartial = null \} = \{\}\)/);
   assert.match(app, /hosts\.map\(async \(host\)/);
   assert.match(app, /let activeAccountFilter = "all"/);
   assert.match(app, /function setAccountFilter\(filter\)/);

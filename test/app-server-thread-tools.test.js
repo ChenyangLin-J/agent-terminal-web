@@ -15,7 +15,7 @@ test("Agent Web exposes native search, persistent names, branching, subagent nav
   assert.match(client, /"thread\/searchOccurrences"/);
   assert.match(client, /"thread\/fork"/);
   assert.match(client, /"thread\/list"/);
-  assert.match(server, /setPersistedThreadName\(id, title\)/);
+  assert.match(server, /setPersistedThreadName\(id, title, agentHost\)/);
   assert.match(server, /nativeThreadSessionMeta/);
   assert.match(server, /message\.type === "edit-and-fork"/);
   assert.match(server, /beforeTurnId/);
@@ -41,7 +41,7 @@ test("Agent Web exposes native search, persistent names, branching, subagent nav
   assert.match(app, /edit\.textContent = "编辑"/);
   assert.match(app, /fork\.textContent = "分支"/);
   assert.match(app, /原 Session 已归档/);
-  assert.match(server, /await setSessionArchived\(sourceThreadId, true\);[\s\S]*sourceArchived = true/);
+  assert.match(server, /await setSessionArchived\(sourceThreadId, true, agentHost\);[\s\S]*sourceArchived = true/);
   assert.match(server, /sourceArchived,[\s\S]*deliveryMode/);
   assert.match(app, /function beginCurrentSessionRename\(\)/);
   assert.match(app, /function saveCurrentSessionRename\(\)/);

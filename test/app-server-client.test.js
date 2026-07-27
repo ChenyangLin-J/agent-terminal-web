@@ -164,12 +164,20 @@ test("app-server client submits structured skills and reads command data", async
   assert.equal(hooks.data[0].hooks.length, 0);
 
   await client.setThreadName("Renamed");
+  await client.setThreadArchived(true);
+  await client.setThreadArchived(false);
   await client.compactThread();
   await client.setThreadGoal("Ship it");
   const goal = await client.readThreadGoal();
   assert.equal(goal.goal.objective, "Ship it");
   await client.clearThreadGoal();
   assert.ok(fake.received.some((message) => message.method === "thread/name/set"));
+  assert.deepEqual(
+    fake.received
+      .filter((message) => ["thread/archive", "thread/unarchive"].includes(message.method))
+      .map((message) => message.params),
+    [{ threadId: "thread-1" }, { threadId: "thread-1" }],
+  );
   assert.ok(fake.received.some((message) => message.method === "thread/compact/start"));
 });
 
@@ -534,6 +542,8 @@ function createFakeAppServer({ completeTurnImmediately = false, initializeError 
     }
     if (
       message.method === "thread/name/set" ||
+      message.method === "thread/archive" ||
+      message.method === "thread/unarchive" ||
       message.method === "thread/compact/start" ||
       message.method === "thread/goal/clear" ||
       message.method === "thread/unsubscribe"

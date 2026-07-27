@@ -1,0 +1,43 @@
+.agent-host-tabs {
+  display: flex;
+  gap: 4px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 0 16px;
+  padding: 4px;
+  border: 1px solid #2b303b;
+  border-radius: 10px;
+  background: #11151c;
+}
+
+.agent-host-tabs button {
+  min-width: 94px;
+  min-height: 36px;
+  border-color: transparent;
+  background: transparent;
+  color: #9ea6b5;
+}
+
+.agent-host-tabs button.active {
+  border-color: #46526d;
+  background: #242b3a;
+  color: #f5f7fb;
+}
+
+.agent-host-tabs button[data-host-type="ssh"]::after {
+  content: "远程";
+  margin-left: 6px;
+  color: #7f8aa0;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+@media (max-width: 520px) {
+  .agent-host-tabs {
+    width: 100%;
+  }
+
+  .agent-host-tabs button {
+    flex: 1;
+  }
+}

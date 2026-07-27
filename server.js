@@ -11,8 +11,16 @@ import express from "express";
 import { WebSocketServer } from "ws";
 import {
   CodexAppServerClient,
-  CodexAppServerConnection,
 } from "./lib/codex-app-server-client.js";
+import { AgentHostAppServerPool } from "./lib/agent-host-app-server.js";
+import {
+  agentHostProject,
+  defaultAgentHostsFile,
+  loadAgentHosts,
+  publicAgentHost,
+  resolveAgentHost,
+  resolveAgentHostPath,
+} from "./lib/agent-hosts.js";
 import { readCodexMemoryStatus, readCodexMemoryView } from "./lib/codex-memories.js";
 import {
   deletePersonalMemoryEntry,
@@ -82,6 +90,13 @@ const pty = require("node-pty");
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT || path.join(__dirname, ".."));
+const AGENT_HOSTS_FILE = path.resolve(process.env.AGENT_HOSTS_FILE || defaultAgentHostsFile());
+const AGENT_HOSTS = loadAgentHosts({
+  filePath: AGENT_HOSTS_FILE,
+  localWorkspaceRoot: WORKSPACE_ROOT,
+  localCodexCommand: process.env.CODEX_APP_SERVER_COMMAND || "codex",
+});
+const PERSONAL_AGENT_HOST = AGENT_HOSTS.find((host) => host.id === "personal");
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 3030);
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 30 * 60 * 1000);
@@ -99,6 +114,10 @@ const CODEX_SESSION_PREVIEWS_FILE = path.join(CODEX_HOME, "agent-session-preview
 const AGENT_SESSION_FAVORITES_FILE = path.resolve(
   process.env.AGENT_SESSION_FAVORITES_FILE ||
     path.join(path.dirname(CODEX_HOME), ".local", "share", "home-portal", "agent-session-favorites.json"),
+);
+const AGENT_HOST_STATE_DIR = path.resolve(
+  process.env.AGENT_HOST_STATE_DIR ||
+    path.join(path.dirname(AGENT_HOSTS_FILE), "host-state"),
 );
 const AGENT_INTEGRATIONS_DIR = path.resolve(
   process.env.AGENT_INTEGRATIONS_DIR ||
@@ -176,7 +195,7 @@ let catalogAppServerClient = null;
 let catalogAppServerStart = null;
 let catalogAppServerIdleTimer = null;
 let catalogAppServerActiveUses = 0;
-let agentAppServerConnection = null;
+let agentHostAppServerPool = null;
 const agentInstanceId = cryptoRandomId();
 const personalMemoryScheduler = createPersonalMemoryScheduler({
   delayMs: PERSONAL_MEMORY_SETTLE_MS,
@@ -236,17 +255,24 @@ app.post("/internal/codex-notify", async (req, res) => {
   const threadId = String(event["thread-id"] || "");
   if (isValidSessionId(threadId)) {
     session.sessionId = threadId;
-    rememberAgentSessionAccess(threadId, session.access);
+    rememberAgentSessionAccess(threadId, session.access, session.hostId);
   }
   persistCompletedSessionPreview(session, event["last-assistant-message"]);
   const completedTurnId = cleanTurnId(event["turn-id"]);
   completeTrackedTurn(session, completedTurnId);
   session.lastActivityAt = new Date().toISOString();
-  rememberAgentSessionCompletion(threadId || session.sessionId, completedTurnId, session.lastActivityAt);
+  rememberAgentSessionCompletion(
+    threadId || session.sessionId,
+    completedTurnId,
+    session.lastActivityAt,
+    session.hostId,
+  );
   resetDetachedCleanupAfterWork(session);
   persistRestorableWebSession(session);
   broadcast(session, "status", publicSession(session));
-  personalMemoryScheduler.schedule(threadId || session.id);
+  if (session.hostId === PERSONAL_AGENT_HOST.id) {
+    personalMemoryScheduler.schedule(threadId || session.id);
+  }
 
   try {
     const result = await sendHomeTurnNotification(session, event);
@@ -473,7 +499,12 @@ app.get("/api/session-image/:sessionId/:itemId", async (req, res) => {
   const itemId = String(req.params.itemId || "");
   const turnId = String(req.query.turnId || "");
   let filePath = viewedImagePath(session, itemId);
-  if (!filePath && session?.sessionId && isCodexTurnId(turnId)) {
+  if (
+    !filePath &&
+    session?.hostId === PERSONAL_AGENT_HOST.id &&
+    session.sessionId &&
+    isCodexTurnId(turnId)
+  ) {
     try {
       session.historyProcessCache ||= new Map();
       if (!session.historyProcessCache.has(turnId)) {
@@ -521,7 +552,11 @@ app.get("/api/session-process/:sessionId/:turnId", async (req, res) => {
   const isRestoredTurn = session?.appTranscript?.some(
     (item) => item.turnId === turnId && item.historical,
   );
-  if (!session?.sessionId || (!isRestoredTurn && !isCodexTurnId(turnId))) {
+  if (
+    session?.hostId !== PERSONAL_AGENT_HOST.id ||
+    !session.sessionId ||
+    (!isRestoredTurn && !isCodexTurnId(turnId))
+  ) {
     res.status(404).json({ error: "This historical turn is not available in the current Agent session." });
     return;
   }
@@ -558,15 +593,35 @@ app.get("/api/session-process/:sessionId/:turnId", async (req, res) => {
   }
 });
 
-app.get("/api/projects", async (_req, res) => {
-  const entries = await fs.readdir(WORKSPACE_ROOT, { withFileTypes: true });
+app.get("/api/hosts", (_req, res) => {
+  res.set("Cache-Control", "private, no-store");
+  res.json({
+    defaultHostId: PERSONAL_AGENT_HOST.id,
+    hosts: AGENT_HOSTS.map(publicAgentHost),
+  });
+});
+
+app.get("/api/projects", async (req, res) => {
+  const agentHost = requestAgentHost(req, res);
+  if (!agentHost) return;
+  if (agentHost.type === "ssh") {
+    res.json({
+      host: publicAgentHost(agentHost),
+      workspaceRoot: agentHost.workspaceRoot,
+      projects: agentHost.projects,
+    });
+    return;
+  }
+
+  const entries = await fs.readdir(agentHost.workspaceRoot, { withFileTypes: true });
   const projects = entries
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "uploads")
     .map((entry) => entry.name)
     .sort((a, b) => a.localeCompare(b));
 
   res.json({
-    workspaceRoot: WORKSPACE_ROOT,
+    host: publicAgentHost(agentHost),
+    workspaceRoot: agentHost.workspaceRoot,
     projects,
   });
 });
@@ -699,16 +754,20 @@ app.post("/api/client-events", (req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/api/sessions", (_req, res) => {
-  const favoriteSessionIds = new Set(readAgentSessionFavorites(AGENT_SESSION_FAVORITES_FILE));
+app.get("/api/sessions", (req, res) => {
+  const agentHost = requestAgentHost(req, res);
+  if (!agentHost) return;
+  const favoriteSessionIds = favoriteSessionIdsForHost(agentHost);
   const liveSessions = [...sessions.values()]
-    .filter((session) => !session.exited)
+    .filter((session) => !session.exited && session.hostId === agentHost.id)
     .map(publicSession)
     .map((session) => ({
       ...session,
       favorited: favoriteSessionIds.has(session.sessionId),
     }));
   const restoredSessions = listDetachedSessions().filter(
+    (session) => session.hostId === agentHost.id,
+  ).filter(
     (session) => !sessions.has(session.id) && !liveSessions.some((liveSession) => liveSession.id === session.id),
   ).map((session) => ({
     ...session,
@@ -716,6 +775,7 @@ app.get("/api/sessions", (_req, res) => {
   }));
 
   res.json({
+    host: publicAgentHost(agentHost),
     ttlMs: SESSION_TTL_MS,
     sessions: [...liveSessions, ...restoredSessions],
   });
@@ -739,6 +799,7 @@ app.post("/api/sessions/:id/restart", (req, res) => {
   }
 
   const restart = {
+    hostId: session.hostId || PERSONAL_AGENT_HOST.id,
     sessionId: session.sessionId,
     project: session.project,
     title: session.title,
@@ -759,18 +820,30 @@ app.post("/api/sessions/:id/restart", (req, res) => {
   res.json({ session: restart });
 });
 
-app.get("/api/codex-sessions", async (_req, res) => {
-  const codexSessions = await listCodexSessions({ archived: false });
-  res.json({ sessions: favoritedCodexSessions(codexSessions) });
+app.get("/api/codex-sessions", async (req, res) => {
+  const agentHost = requestAgentHost(req, res);
+  if (!agentHost) return;
+  try {
+    const codexSessions = await listCodexSessions({ archived: false, agentHost });
+    res.json({ host: publicAgentHost(agentHost), sessions: favoritedCodexSessions(codexSessions, agentHost) });
+  } catch (error) {
+    res.status(503).json({ host: publicAgentHost(agentHost), sessions: [], error: error.message });
+  }
 });
 
-app.get("/api/codex-sessions/archived", async (_req, res) => {
-  const codexSessions = await listCodexSessions({ archived: true });
-  res.json({ sessions: favoritedCodexSessions(codexSessions) });
+app.get("/api/codex-sessions/archived", async (req, res) => {
+  const agentHost = requestAgentHost(req, res);
+  if (!agentHost) return;
+  try {
+    const codexSessions = await listCodexSessions({ archived: true, agentHost });
+    res.json({ host: publicAgentHost(agentHost), sessions: favoritedCodexSessions(codexSessions, agentHost) });
+  } catch (error) {
+    res.status(503).json({ host: publicAgentHost(agentHost), sessions: [], error: error.message });
+  }
 });
 
-function favoritedCodexSessions(codexSessions) {
-  const favoriteSessionIds = new Set(readAgentSessionFavorites(AGENT_SESSION_FAVORITES_FILE));
+function favoritedCodexSessions(codexSessions, agentHost = PERSONAL_AGENT_HOST) {
+  const favoriteSessionIds = favoriteSessionIdsForHost(agentHost);
   return codexSessions.map((session) => ({
     ...session,
     favorited: favoriteSessionIds.has(session.id),
@@ -778,6 +851,8 @@ function favoritedCodexSessions(codexSessions) {
 }
 
 app.get("/api/codex-sessions/search", async (req, res) => {
+  const agentHost = requestAgentHost(req, res);
+  if (!agentHost) return;
   const searchTerm = cleanSearchTerm(req.query.q);
   if (!searchTerm) {
     res.json({ results: [] });
@@ -786,8 +861,8 @@ app.get("/api/codex-sessions/search", async (req, res) => {
 
   try {
     res.set("Cache-Control", "private, no-store");
-    const results = await searchCodexSessions(searchTerm);
-    const favoriteSessionIds = new Set(readAgentSessionFavorites(AGENT_SESSION_FAVORITES_FILE));
+    const results = await searchCodexSessions(searchTerm, agentHost);
+    const favoriteSessionIds = favoriteSessionIdsForHost(agentHost);
     res.json({
       results: results.map((result) => ({
         ...result,
@@ -928,6 +1003,12 @@ app.post("/api/sessions/:id/fork", async (req, res) => {
 });
 
 app.get("/api/session-preview/:id", async (req, res) => {
+  const agentHost = requestAgentHost(req, res);
+  if (!agentHost) return;
+  if (agentHost.type !== "local") {
+    res.status(404).json({ error: "Remote Session previews are read from the remote App Server." });
+    return;
+  }
   const id = String(req.params.id || "").trim();
   if (!isValidSessionId(id)) {
     res.status(400).json({ error: "Invalid session id." });
@@ -978,6 +1059,8 @@ function newerSessionPreview(left, right) {
 }
 
 app.put("/api/codex-sessions/:id/title", async (req, res) => {
+  const agentHost = requestAgentHost(req, res);
+  if (!agentHost) return;
   const id = String(req.params.id || "").trim();
   const title = cleanCustomTitle(req.body?.title);
 
@@ -987,22 +1070,24 @@ app.put("/api/codex-sessions/:id/title", async (req, res) => {
   }
 
   try {
-    const nativeNameSaved = await setPersistedThreadName(id, title).catch((error) => {
+    const nativeNameSaved = await setPersistedThreadName(id, title, agentHost).catch((error) => {
       logAgentEvent("thread-native-name-failed", {
         codexSessionId: id,
         message: cleanClientLogValue(error.message, 300),
       });
       return false;
     });
-    const titles = await readSessionTitles();
-    if (title) {
-      titles[id] = title;
-    } else {
-      delete titles[id];
+    if (agentHost.type === "local") {
+      const titles = await readSessionTitles();
+      if (title) {
+        titles[id] = title;
+      } else {
+        delete titles[id];
+      }
+      await writeSessionTitles(titles);
     }
-    await writeSessionTitles(titles);
     for (const session of sessions.values()) {
-      if (session.sessionId === id && title) {
+      if (session.hostId === agentHost.id && session.sessionId === id && title) {
         session.title = title;
         persistRestorableWebSession(session);
         broadcast(session, "status", publicSession(session));
@@ -1015,6 +1100,8 @@ app.put("/api/codex-sessions/:id/title", async (req, res) => {
 });
 
 app.put("/api/codex-sessions/:id/favorite", (req, res) => {
+  const agentHost = requestAgentHost(req, res);
+  if (!agentHost) return;
   const id = String(req.params.id || "").trim();
   const favorited = Boolean(req.body?.favorited);
 
@@ -1024,7 +1111,7 @@ app.put("/api/codex-sessions/:id/favorite", (req, res) => {
   }
 
   try {
-    setAgentSessionFavorite(AGENT_SESSION_FAVORITES_FILE, id, favorited);
+    setAgentSessionFavorite(agentSessionFavoritesFile(agentHost), id, favorited);
     res.json({ id, favorited });
   } catch (error) {
     res.status(500).json({ error: `Failed to update favorite: ${error.message}` });
@@ -1032,6 +1119,8 @@ app.put("/api/codex-sessions/:id/favorite", (req, res) => {
 });
 
 app.put("/api/codex-sessions/:id/archive", async (req, res) => {
+  const agentHost = requestAgentHost(req, res);
+  if (!agentHost) return;
   const id = String(req.params.id || "").trim();
   const archived = Boolean(req.body?.archived);
   const endLiveSession = archived && Boolean(req.body?.endLiveSession);
@@ -1044,10 +1133,12 @@ app.put("/api/codex-sessions/:id/archive", async (req, res) => {
   try {
     if (endLiveSession) {
       for (const session of sessions.values()) {
-        if (!session.exited && session.sessionId === id) killSessionTerminal(session);
+        if (!session.exited && session.hostId === agentHost.id && session.sessionId === id) {
+          killSessionTerminal(session);
+        }
       }
     }
-    await setSessionArchived(id, archived);
+    await setSessionArchived(id, archived, agentHost);
     res.json({ id, archived });
   } catch (error) {
     res.status(500).json({ error: `Failed to update archive: ${error.message}` });
@@ -1055,6 +1146,8 @@ app.put("/api/codex-sessions/:id/archive", async (req, res) => {
 });
 
 app.post("/api/codex-sessions/:id/viewed", (req, res) => {
+  const agentHost = requestAgentHost(req, res);
+  if (!agentHost) return;
   const id = String(req.params.id || "").trim();
   const turnId = cleanTurnId(req.body?.turnId);
 
@@ -1067,9 +1160,9 @@ app.post("/api/codex-sessions/:id/viewed", (req, res) => {
     return;
   }
 
-  const state = rememberAgentSessionViewed(id, turnId);
+  const state = rememberAgentSessionViewed(id, turnId, new Date().toISOString(), agentHost.id);
   for (const session of sessions.values()) {
-    if (!session.exited && session.sessionId === id) {
+    if (!session.exited && session.hostId === agentHost.id && session.sessionId === id) {
       broadcast(session, "status", publicSession(session));
     }
   }
@@ -1077,9 +1170,15 @@ app.post("/api/codex-sessions/:id/viewed", (req, res) => {
 });
 
 app.get("/api/git-status", async (req, res) => {
-  const cwd = resolveWorkspacePath(String(req.query.cwd || "."));
+  const agentHost = requestAgentHost(req, res);
+  if (!agentHost) return;
+  const cwd = resolveAgentHostPath(agentHost, String(req.query.cwd || "."));
   if (!cwd) {
     res.status(400).json({ error: "cwd must stay inside the workspace root" });
+    return;
+  }
+  if (agentHost.type === "ssh") {
+    res.json({ hostId: agentHost.id, cwd, git: "远端 Git 状态将在连接 Session 后读取" });
     return;
   }
 
@@ -1106,6 +1205,14 @@ wss.on("connection", async (ws, req) => {
   const shouldReplay = url.searchParams.get("replay") !== "0";
   const afterRevision = parseOutputRevision(url.searchParams.get("afterRevision"));
   const clientId = cleanWebClientId(url.searchParams.get("clientId"));
+  const requestedAgentHost = resolveAgentHost(AGENT_HOSTS, url.searchParams.get("host"));
+
+  if (!requestedAgentHost) {
+    logAgentEvent("ws-reject", { reason: "invalid-host" });
+    send(ws, "error", { message: "Unknown Agent host." });
+    ws.close();
+    return;
+  }
 
   let session = attachId ? sessions.get(attachId) : null;
   if (!session && attachId) {
@@ -1137,9 +1244,21 @@ wss.on("connection", async (ws, req) => {
     }
   }
 
+  if (session && session.hostId !== requestedAgentHost.id) {
+    logAgentEvent("ws-reject", {
+      reason: "host-mismatch",
+      webSessionId: session.id,
+      requestedHostId: requestedAgentHost.id,
+      sessionHostId: session.hostId,
+    });
+    send(ws, "error", { message: "This Session belongs to a different Agent host.", goHome: true });
+    ws.close();
+    return;
+  }
+
   if (!session) {
-    const cwd = resolveWorkspacePath(url.searchParams.get("cwd") || ".");
-    const launch = await getLaunchConfig(url.searchParams);
+    const cwd = resolveAgentHostPath(requestedAgentHost, url.searchParams.get("cwd") || ".");
+    const launch = await getLaunchConfig(url.searchParams, requestedAgentHost);
 
     if (!cwd) {
       logAgentEvent("ws-reject", { reason: "invalid-cwd" });
@@ -1151,6 +1270,14 @@ wss.on("connection", async (ws, req) => {
     if (!launch) {
       logAgentEvent("ws-reject", { reason: "invalid-launch" });
       send(ws, "error", { message: "Invalid launch mode or session ID." });
+      ws.close();
+      return;
+    }
+
+    launch.agentHost = requestedAgentHost;
+    launch.hostId = requestedAgentHost.id;
+    if (requestedAgentHost.type === "ssh" && launch.transport !== APP_SERVER_TRANSPORT) {
+      send(ws, "error", { message: "Remote hosts support App Server sessions only." });
       ws.close();
       return;
     }
@@ -1195,7 +1322,7 @@ server.listen(PORT, HOST, () => {
   console.log(`Shared App Server: ${SHARED_APP_SERVER_ENABLED ? "enabled" : "disabled"}`);
 });
 
-process.once("exit", () => agentAppServerConnection?.close());
+process.once("exit", () => agentHostAppServerPool?.close());
 
 function isDirectLoopbackRequest(req) {
   const address = req.socket.remoteAddress || "";
@@ -1220,6 +1347,10 @@ async function sendHomeTurnNotification(session, event) {
   if (session.access === FULL_ACCESS_MODE) query.set("access", FULL_ACCESS_MODE);
   const homeQuery = new URLSearchParams({ focus: "agent" });
   homeQuery.set("sessionId", session.sessionId || session.id);
+  if (session.hostId !== PERSONAL_AGENT_HOST.id) {
+    query.set("host", session.hostId);
+    homeQuery.set("host", session.hostId);
+  }
 
   const response = await fetch(HOME_PUSH_URL, {
     method: "POST",
@@ -1384,46 +1515,59 @@ function codexEnvironmentForWeb(sessionId, extra = {}) {
   };
 }
 
-function sharedAgentAppServerConnection() {
-  if (
-    agentAppServerConnection &&
-    !agentAppServerConnection.closed
-  ) {
-    return agentAppServerConnection;
-  }
-
-  const connection = new CodexAppServerConnection({
-    cwd: WORKSPACE_ROOT,
-    command: process.env.CODEX_APP_SERVER_COMMAND || "codex",
-    env: codexEnvironmentForWeb(`shared-${agentInstanceId}`),
+function sharedAgentAppServerPool() {
+  if (agentHostAppServerPool) return agentHostAppServerPool;
+  agentHostAppServerPool = new AgentHostAppServerPool({
+    spawnCwd: WORKSPACE_ROOT,
+    localCommand: process.env.CODEX_APP_SERVER_COMMAND || "codex",
+    localEnv: codexEnvironmentForWeb(`shared-${agentInstanceId}`),
   });
+  return agentHostAppServerPool;
+}
+
+function sharedAgentAppServerConnection(agentHost = PERSONAL_AGENT_HOST) {
+  const connection = sharedAgentAppServerPool().connectionFor(agentHost);
+  if (connection.agentWebEventsBound) return connection;
+  connection.agentWebEventsBound = true;
   connection.on("stderr", (text) => {
     logAgentEvent("app-server-stderr", {
       shared: true,
+      hostId: agentHost.id,
       message: cleanClientLogValue(text, 500),
     });
   });
   connection.on("protocol-error", (error) => {
     logAgentEvent("app-server-protocol-error", {
       shared: true,
+      hostId: agentHost.id,
       message: cleanClientLogValue(error?.message, 500),
     });
   });
   connection.on("exit", (error) => {
-    if (agentAppServerConnection === connection) agentAppServerConnection = null;
     logAgentEvent("shared-app-server-exit", {
+      hostId: agentHost.id,
       message: cleanClientLogValue(error?.message, 500),
     });
   });
-  agentAppServerConnection = connection;
   return connection;
 }
 
-function createAgentAppServerClient(cwd, webSessionId, clientInfo = undefined) {
+function createAgentAppServerClient(
+  cwd,
+  webSessionId,
+  clientInfo = undefined,
+  agentHost = PERSONAL_AGENT_HOST,
+) {
   if (SHARED_APP_SERVER_ENABLED) {
     return new CodexAppServerClient({
       cwd,
-      connection: sharedAgentAppServerConnection(),
+      connection: sharedAgentAppServerConnection(agentHost),
+    });
+  }
+  if (agentHost.type === "ssh") {
+    return new CodexAppServerClient({
+      cwd,
+      connection: sharedAgentAppServerConnection(agentHost),
     });
   }
   return new CodexAppServerClient({
@@ -1481,14 +1625,21 @@ function shortClientId(value) {
 
 function createSession(cwd, launch, restored = {}) {
   if (launch.transport === APP_SERVER_TRANSPORT) return createAppServerSession(cwd, launch, restored);
+  if (launch.agentHost?.type === "ssh") {
+    return { error: "Remote hosts support App Server sessions only." };
+  }
   return createTerminalSession(cwd, launch, restored);
 }
 
 function createTerminalSession(cwd, launch, restored = {}) {
+  const agentHost = launch.agentHost || PERSONAL_AGENT_HOST;
   const id = restored.id || cryptoRandomId();
   const startedAt = new Date().toISOString();
   const shell = process.env.CODEX_COMMAND || "codex";
-  const initialMemoryRouting = initialSessionMemoryRouting(launch.sessionId, restored);
+  const initialMemoryRouting =
+    agentHost.type === "local"
+      ? initialSessionMemoryRouting(launch.sessionId, restored)
+      : { mode: "auto", projects: [], source: "global" };
   const memoryContext = personalMemoryContextForPromptSync(CODEX_HOME, {
     cwd,
     title: launch.title,
@@ -1533,8 +1684,10 @@ function createTerminalSession(cwd, launch, restored = {}) {
 
   const session = {
     id,
+    hostId: agentHost.id,
+    hostLabel: agentHost.label,
     cwd,
-    project: path.relative(WORKSPACE_ROOT, cwd) || ".",
+    project: agentHostProject(agentHost, cwd),
     pid: terminal.pid,
     command: shell,
     args: commandArgs,
@@ -1569,7 +1722,7 @@ function createTerminalSession(cwd, launch, restored = {}) {
     turnState: restoreTurnState(restored.turnState),
   };
   sessions.set(id, session);
-  rememberAgentSessionAccess(session.sessionId, session.access);
+  rememberAgentSessionAccess(session.sessionId, session.access, session.hostId);
   rememberAgentSessionMemoryRouting(session);
   persistRestorableWebSession(session);
   logAgentEvent("session-start", {
@@ -1610,12 +1763,18 @@ function createTerminalSession(cwd, launch, restored = {}) {
 function createAppServerSession(cwd, launch, restored = {}) {
   const id = restored.id || cryptoRandomId();
   const startedAt = new Date().toISOString();
-  const initialMemoryRouting = initialSessionMemoryRouting(launch.sessionId, restored);
-  const appServer = createAgentAppServerClient(cwd, id);
+  const agentHost = launch.agentHost || PERSONAL_AGENT_HOST;
+  const initialMemoryRouting =
+    agentHost.type === "local"
+      ? initialSessionMemoryRouting(launch.sessionId, restored)
+      : { mode: "auto", projects: [], source: "global" };
+  const appServer = createAgentAppServerClient(cwd, id, undefined, agentHost);
   const session = {
     id,
+    hostId: agentHost.id,
+    hostLabel: agentHost.label,
     cwd,
-    project: path.relative(WORKSPACE_ROOT, cwd) || ".",
+    project: agentHostProject(agentHost, cwd),
     pid: null,
     command: "codex app-server",
     args: ["app-server"],
@@ -1756,13 +1915,13 @@ async function initializeAppServerSession(session, launch) {
         session.parentThreadTitle ||
         "主 Agent";
     }
-    rememberAgentSessionAccess(session.sessionId, session.access);
+    rememberAgentSessionAccess(session.sessionId, session.access, session.hostId);
     rememberAgentSessionRelation(session.sessionId, {
       forkedFromId: session.forkedFromId,
       forkedFromTitle: session.forkedFromTitle,
       parentThreadId: session.parentThreadId,
       parentThreadTitle: session.parentThreadTitle,
-    });
+    }, session.hostId);
     rememberAgentSessionMemoryRouting(session);
     session.ready = true;
     session.released = false;
@@ -1791,6 +1950,7 @@ function findReusableSession(launch) {
     [...sessions.values()]
       .filter((session) => !session.exited && session.sessionId === launch.sessionId)
       .filter((session) => session.transport === (launch.transport || "terminal"))
+      .filter((session) => session.hostId === (launch.hostId || PERSONAL_AGENT_HOST.id))
       .sort((a, b) => {
         if (b.clients.size !== a.clients.size) return b.clients.size - a.clients.size;
         return new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime();
@@ -1808,7 +1968,11 @@ function restoreTmuxSession(id) {
     return null;
   }
 
-  const cwd = persistedWorkspacePath(record.cwd);
+  const agentHost = resolveAgentHost(AGENT_HOSTS, record.hostId);
+  if (!agentHost) {
+    return { error: "This web session belongs to an unavailable Agent host." };
+  }
+  const cwd = resolveAgentHostPath(agentHost, record.cwd);
   if (!cwd) {
     removePersistedWebSession(id);
     return { error: "This web session has an invalid directory. Returning to Agent home." };
@@ -1816,7 +1980,11 @@ function restoreTmuxSession(id) {
 
   if (record.transport === APP_SERVER_TRANSPORT) {
     if (!record.sessionId) return null;
-    const reusable = findReusableSession({ sessionId: record.sessionId, transport: APP_SERVER_TRANSPORT });
+    const reusable = findReusableSession({
+      sessionId: record.sessionId,
+      transport: APP_SERVER_TRANSPORT,
+      hostId: agentHost.id,
+    });
     if (reusable) return reusable;
     return createSession(
       cwd,
@@ -1828,6 +1996,8 @@ function restoreTmuxSession(id) {
         args: ["app-server"],
         title: record.title || "",
         purpose: normalizeSessionPurpose(record.purpose),
+        agentHost,
+        hostId: agentHost.id,
       },
       {
         id,
@@ -1851,7 +2021,11 @@ function restoreTmuxSession(id) {
 
   if (!USE_TMUX_SESSIONS) {
     if (!record.sessionId) return null;
-    const reusable = findReusableSession({ sessionId: record.sessionId, transport: APP_SERVER_TRANSPORT });
+    const reusable = findReusableSession({
+      sessionId: record.sessionId,
+      transport: APP_SERVER_TRANSPORT,
+      hostId: agentHost.id,
+    });
     if (reusable) return reusable;
 
     return createSession(
@@ -1864,6 +2038,8 @@ function restoreTmuxSession(id) {
         args: ["app-server"],
         title: record.title || "",
         purpose: normalizeSessionPurpose(record.purpose),
+        agentHost,
+        hostId: agentHost.id,
       },
       {
         id,
@@ -1898,6 +2074,8 @@ function restoreTmuxSession(id) {
     args: Array.isArray(record.args) && record.args.length ? record.args : ["--no-alt-screen"],
     title: record.title || "",
     purpose: normalizeSessionPurpose(record.purpose),
+    agentHost,
+    hostId: agentHost.id,
   };
 
   return createSession(cwd, launch, {
@@ -1939,14 +2117,22 @@ function listDetachedSessions() {
     if (transport === "terminal" && (!USE_TMUX_SESSIONS || !tmuxName || !tmuxHasSession(tmuxName))) continue;
     if (transport === APP_SERVER_TRANSPORT && !record.sessionId) continue;
 
-    const cwd = persistedWorkspacePath(record.cwd);
+    const agentHost = resolveAgentHost(AGENT_HOSTS, record.hostId);
+    const cwd = agentHost ? resolveAgentHostPath(agentHost, record.cwd) : null;
     if (!cwd) continue;
-    const resultState = agentSessionResultState(record.sessionId, record.turnState?.lastCompletedTurnId);
+    const resultState = agentSessionResultState(
+      record.sessionId,
+      record.turnState?.lastCompletedTurnId,
+      null,
+      agentHost.id,
+    );
 
     items.push({
       id,
+      hostId: agentHost.id,
+      hostLabel: agentHost.label,
       cwd,
-      project: path.relative(WORKSPACE_ROOT, cwd) || ".",
+      project: agentHostProject(agentHost, cwd),
       title: record.title || "New Codex session",
       pid: null,
       command: record.command || "codex",
@@ -2371,7 +2557,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
     if (message.type === "set-access" && session.transport === APP_SERVER_TRANSPORT) {
       renewSessionRetention(session);
       session.access = normalizeAccessMode(message.access);
-      rememberAgentSessionAccess(session.sessionId, session.access);
+      rememberAgentSessionAccess(session.sessionId, session.access, session.hostId);
       session.lastActivityAt = new Date().toISOString();
       persistRestorableWebSession(session);
       broadcast(session, "status", publicSession(session));
@@ -2937,9 +3123,7 @@ async function handleAppServerCommand(session, ws, value) {
     if (!title) throw new Error("请使用 /rename 新名称。");
     await session.appServer.setThreadName(title);
     session.title = title;
-    const titles = await readSessionTitles();
-    titles[session.sessionId] = title;
-    await writeSessionTitles(titles);
+    await rememberSessionTitle(session.sessionId, title, agentHostForSession(session));
     persistRestorableWebSession(session);
     broadcast(session, "status", publicSession(session));
     send(ws, "app-command-result", { command, kind: "notice", title: "Rename", content: `Session 已重命名为“${title}”。` });
@@ -2954,6 +3138,9 @@ async function handleAppServerCommand(session, ws, value) {
   }
 
   if (command === "/diff") {
+    if (session.hostId !== PERSONAL_AGENT_HOST.id) {
+      throw new Error("公司 Session 暂不支持 /diff 快捷命令；可以直接让 Codex 检查远端 git diff。");
+    }
     send(ws, "app-command-result", { command, kind: "text", title: "Working tree diff", ...(await appServerGitDiff(session.cwd)) });
     return;
   }
@@ -3003,7 +3190,11 @@ async function appServerStatus(session) {
   const config = fulfilledValue(requests[1])?.config || {};
   const rateLimitResponse = fulfilledValue(requests[2]) || {};
   const account = fulfilledValue(requests[3])?.account || null;
-  const usage = session.appTokenUsage || (await appServerDiskTokenUsage(session.sessionId));
+  const usage =
+    session.appTokenUsage ||
+    (session.hostId === PERSONAL_AGENT_HOST.id
+      ? await appServerDiskTokenUsage(session.sessionId)
+      : null);
   if (usage && !session.appTokenUsage) session.appTokenUsage = usage;
   return {
     sessionId: session.sessionId,
@@ -3027,9 +3218,15 @@ async function appServerStatus(session) {
     access: session.access,
     approvalPolicy: session.access === FULL_ACCESS_MODE ? "never" : "on-request",
     sandbox: session.access === FULL_ACCESS_MODE ? "danger-full-access" : "workspace-write",
-    writableRoots: session.access === FULL_ACCESS_MODE ? ["全部服务器文件"] : [session.cwd, "/tmp"],
+    writableRoots:
+      session.access === FULL_ACCESS_MODE
+        ? [session.hostId === PERSONAL_AGENT_HOST.id ? "全部服务器文件" : `${session.hostLabel}主机全部文件`]
+        : [session.cwd, "/tmp"],
     networkAccess: session.access === FULL_ACCESS_MODE ? "允许" : "受限",
-    agentsFiles: appServerInstructionFiles(session.cwd),
+    agentsFiles:
+      session.hostId === PERSONAL_AGENT_HOST.id
+        ? appServerInstructionFiles(session.cwd)
+        : [],
     gitBranch: String(thread?.gitInfo?.branch || ""),
     activeTurn: Boolean(session.turnState?.active),
     tokenUsage: usage
@@ -3330,6 +3527,9 @@ function appServerTurnAccess(session) {
 }
 
 async function appServerPersonalMemory(session, prompt) {
+  if (session.hostId !== PERSONAL_AGENT_HOST.id) {
+    return { additionalContext: undefined, citation: null };
+  }
   try {
     const memory = await personalMemoryContextForPrompt(CODEX_HOME, {
       cwd: session.cwd,
@@ -3357,6 +3557,13 @@ async function appServerPersonalMemory(session, prompt) {
 }
 
 async function updateSessionMemoryRouting(session, options = {}) {
+  if (session.hostId !== PERSONAL_AGENT_HOST.id) {
+    session.memoryProjectMode = "auto";
+    session.memoryProjects = [];
+    session.memoryProjectSource = "global";
+    rememberAgentSessionMemoryRouting(session);
+    return { value: "", projectMode: "auto", projects: [], projectSource: "global" };
+  }
   const mode = options.mode === "manual" ? "manual" : "auto";
   const projects = Object.hasOwn(options, "projects") ? options.projects : session.memoryProjects;
   const memory = await personalMemoryContextForPrompt(CODEX_HOME, {
@@ -3671,7 +3878,8 @@ function mergeAppServerTranscriptTurns(session, turns, { historical = false } = 
 async function forkAppServerSessionInBackground(session, lastTurnId) {
   const sourceThreadId = session.sessionId;
   const title = branchThreadTitle(session.title, "分支");
-  const result = await withStandaloneAppServer(async (client) => {
+  const agentHost = agentHostForSession(session);
+  const result = await withStandaloneAppServer(agentHost, async (client) => {
     const forked = await client.forkThread(
       {
         threadId: sourceThreadId,
@@ -3697,17 +3905,21 @@ async function forkAppServerSessionInBackground(session, lastTurnId) {
   });
   const threadId = String(result?.thread?.id || "");
   if (!threadId) throw new Error("Codex 没有返回新分支 ID。");
-  await rememberSessionTitle(threadId, title).catch((error) => {
+  await rememberSessionTitle(threadId, title, agentHost).catch((error) => {
     logAgentEvent("thread-sidecar-name-failed", {
       codexSessionId: threadId,
       message: cleanClientLogValue(error.message, 300),
     });
   });
-  rememberAgentSessionAccess(threadId, session.access);
-  rememberAgentSessionRelation(threadId, {
-    forkedFromId: sourceThreadId,
-    forkedFromTitle: session.title,
-  });
+  rememberAgentSessionAccess(threadId, session.access, agentHost.id);
+  rememberAgentSessionRelation(
+    threadId,
+    {
+      forkedFromId: sourceThreadId,
+      forkedFromTitle: session.title,
+    },
+    agentHost.id,
+  );
   logAgentEvent("thread-fork-created", {
     webSessionId: session.id,
     sourceThreadId,
@@ -3717,6 +3929,7 @@ async function forkAppServerSessionInBackground(session, lastTurnId) {
   });
   return {
     threadId,
+    hostId: agentHost.id,
     title,
     project: session.project,
     transport: APP_SERVER_TRANSPORT,
@@ -3774,19 +3987,24 @@ async function editAndForkAppServerSession(session, { beforeTurnId, editedText, 
     session.restoredHistoryCursor = recentPage?.nextCursor || null;
     session.restoredHistoryHasMore = Boolean(recentPage?.nextCursor);
     session.restoredTurnCount = Array.isArray(recentPage?.data) ? recentPage.data.length : 0;
-    await rememberSessionTitle(session.sessionId, title).catch((error) => {
+    const agentHost = agentHostForSession(session);
+    await rememberSessionTitle(session.sessionId, title, agentHost).catch((error) => {
       logAgentEvent("thread-sidecar-name-failed", {
         codexSessionId: thread.id,
         message: cleanClientLogValue(error.message, 300),
       });
     });
-    rememberAgentSessionAccess(session.sessionId, session.access);
-    rememberAgentSessionRelation(session.sessionId, {
-      forkedFromId: sourceThreadId,
-      forkedFromTitle: sourceTitle,
-      parentThreadId: session.parentThreadId,
-      parentThreadTitle: session.parentThreadTitle,
-    });
+    rememberAgentSessionAccess(session.sessionId, session.access, session.hostId);
+    rememberAgentSessionRelation(
+      session.sessionId,
+      {
+        forkedFromId: sourceThreadId,
+        forkedFromTitle: sourceTitle,
+        parentThreadId: session.parentThreadId,
+        parentThreadTitle: session.parentThreadTitle,
+      },
+      agentHost.id,
+    );
     rememberAgentSessionMemoryRouting(session);
 
     broadcast(session, "app-transcript", publicAppTranscript(session));
@@ -3807,7 +4025,7 @@ async function editAndForkAppServerSession(session, { beforeTurnId, editedText, 
     broadcast(session, "status", publicSession(session));
     let sourceArchived = false;
     try {
-      await setSessionArchived(sourceThreadId, true);
+      await setSessionArchived(sourceThreadId, true, agentHost);
       sourceArchived = true;
     } catch (error) {
       logAgentEvent("thread-edit-source-archive-failed", {
@@ -3848,7 +4066,7 @@ async function sendAppServerSubagents(session, ws) {
     sortDirection: "desc",
     useStateDbOnly: true,
   });
-  const profiles = await readAgentRoleProfiles();
+  const profiles = await readAgentRoleProfiles(session);
   const threads = Array.isArray(response?.data) ? response.data : [];
   const agents = await Promise.all(
     threads.map(async (thread) => {
@@ -3876,7 +4094,10 @@ async function sendAppServerSubagents(session, ws) {
         activeTurnId,
         canStop: Boolean(activeTurnId),
         updatedAt: unixSecondsToIso(thread?.updatedAt),
-        project: projectFromCwd(String(thread?.cwd || session.cwd)),
+        project: agentHostProject(
+          resolveAgentHost(AGENT_HOSTS, session.hostId) || PERSONAL_AGENT_HOST,
+          String(thread?.cwd || session.cwd),
+        ),
       };
     }),
   );
@@ -3909,8 +4130,9 @@ function rememberCollabAgentMetadata(session, item) {
   }
 }
 
-async function readAgentRoleProfiles() {
+async function readAgentRoleProfiles(session) {
   const profiles = new Map();
+  if (session?.hostId !== PERSONAL_AGENT_HOST.id) return profiles;
   const directory = path.join(CODEX_HOME, "agents");
   let files;
   try {
@@ -4023,6 +4245,7 @@ function firstValidThreadId(...values) {
 }
 
 async function sendAppServerThreadTree(session, ws) {
+  const agentHost = agentHostForSession(session);
   const catalog = await Promise.all([
     listAllAppServerThreads(session.appServer, false),
     listAllAppServerThreads(session.appServer, true),
@@ -4036,18 +4259,28 @@ async function sendAppServerThreadTree(session, ws) {
   }
 
   const [fileRelations, persistedRecords] = await Promise.all([
-    readCodexThreadRelationsFromFiles(byId.keys()),
-    Promise.resolve(readPersistedWebSessions()),
+    agentHost.type === "local"
+      ? readCodexThreadRelationsFromFiles(byId.keys())
+      : Promise.resolve(new Map()),
+    Promise.resolve(
+      Object.fromEntries(
+        Object.entries(readPersistedWebSessions()).filter(
+          ([, record]) => (record.hostId || PERSONAL_AGENT_HOST.id) === agentHost.id,
+        ),
+      ),
+    ),
   ]);
   const persistedByCodexId = latestPersistedSessionsByCodexId(persistedRecords);
   const sessionSettings = readAgentSessionSettings();
   const liveByCodexId = new Map();
   for (const live of sessions.values()) {
-    if (isValidSessionId(live.sessionId)) liveByCodexId.set(live.sessionId, live);
+    if (live.hostId === agentHost.id && isValidSessionId(live.sessionId)) {
+      liveByCodexId.set(live.sessionId, live);
+    }
   }
   const relationFor = (threadId, thread = byId.get(threadId)?.thread) => {
     const live = liveByCodexId.get(threadId) || {};
-    const saved = sessionSettings[threadId] || {};
+    const saved = agentSessionSetting(sessionSettings, threadId, agentHost.id);
     const persisted = persistedByCodexId.get(threadId) || {};
     const file = fileRelations.get(threadId) || {};
     return {
@@ -4119,7 +4352,10 @@ async function sendAppServerThreadTree(session, ws) {
         role: String(thread.agentRole || ""),
         status: threadStatusLabel(thread.status),
         statusType: String(thread.status?.type || ""),
-        project: projectFromCwd(String(thread.cwd || "")),
+        project: agentHostProject(
+          resolveAgentHost(AGENT_HOSTS, session.hostId) || PERSONAL_AGENT_HOST,
+          String(thread.cwd || ""),
+        ),
         updatedAt: unixSecondsToIso(thread.updatedAt),
       };
     })
@@ -4199,6 +4435,7 @@ async function createSideChat(session) {
       title: "Agent Web Side Chat",
       version: "0.1.0",
     },
+    resolveAgentHost(AGENT_HOSTS, session.hostId) || PERSONAL_AGENT_HOST,
   );
   const sideChat = {
     ...restoreSideChatState(),
@@ -4556,7 +4793,12 @@ function branchThreadTitle(sourceTitle, suffix) {
   return cleanCustomTitle(`${base} · ${suffix}`);
 }
 
-async function rememberSessionTitle(threadId, title) {
+async function rememberSessionTitle(
+  threadId,
+  title,
+  agentHost = PERSONAL_AGENT_HOST,
+) {
+  if (agentHost.type !== "local") return;
   const cleaned = cleanCustomTitle(title);
   if (!threadId || !cleaned) return;
   const titles = await readSessionTitles();
@@ -4865,7 +5107,7 @@ function handleAppServerNotification(session, message) {
 
   if (method === "thread/started" && params.thread?.id) {
     session.sessionId = params.thread.id;
-    rememberAgentSessionAccess(session.sessionId, session.access);
+    rememberAgentSessionAccess(session.sessionId, session.access, session.hostId);
   }
   if (method === "thread/tokenUsage/updated" && params.tokenUsage) session.appTokenUsage = params.tokenUsage;
   if (method === "turn/started") {
@@ -4965,7 +5207,14 @@ function handleAppServerNotification(session, message) {
     );
     if (!stopped) persistCompletedSessionPreview(session, session.lastAssistantMessage);
     completeTrackedTurn(session, turnId, { stopped });
-    if (!stopped) rememberAgentSessionCompletion(session.sessionId, turnId, session.lastActivityAt);
+    if (!stopped) {
+      rememberAgentSessionCompletion(
+        session.sessionId,
+        turnId,
+        session.lastActivityAt,
+        session.hostId,
+      );
+    }
     if (turnId) session.personalMemoryCitationsByTurn.delete(turnId);
     session.turnInterruptPending = false;
     resetDetachedCleanupAfterWork(session);
@@ -4976,7 +5225,9 @@ function handleAppServerNotification(session, message) {
     persistRestorableWebSession(session);
     broadcast(session, "status", publicSession(session));
     if (!stopped) {
-      personalMemoryScheduler.schedule(session.sessionId || session.id);
+      if (session.hostId === PERSONAL_AGENT_HOST.id) {
+        personalMemoryScheduler.schedule(session.sessionId || session.id);
+      }
       void sendAppServerTurnNotification(session, turnId);
     }
   } else if (method === "error") {
@@ -5489,9 +5740,16 @@ function outputReplay(session, afterRevision) {
 }
 
 function publicSession(session) {
-  const resultState = agentSessionResultState(session.sessionId, session.turnState?.lastCompletedTurnId);
+  const resultState = agentSessionResultState(
+    session.sessionId,
+    session.turnState?.lastCompletedTurnId,
+    null,
+    session.hostId,
+  );
   return {
     id: session.id,
+    hostId: session.hostId || PERSONAL_AGENT_HOST.id,
+    hostLabel: session.hostLabel || PERSONAL_AGENT_HOST.label,
     cwd: session.cwd,
     project: session.project,
     title: session.title || "New Codex session",
@@ -5544,6 +5802,7 @@ function publicSession(session) {
 }
 
 function persistCompletedSessionPreview(session, result) {
+  if (session.hostId !== PERSONAL_AGENT_HOST.id) return null;
   if (!session.sessionId || !String(result || "").trim()) return null;
   const prompt = (session.turnState?.requirements || [])
     .map((requirement) => String(requirement?.text || "").trim())
@@ -5659,6 +5918,7 @@ function persistWebSession(session) {
   const records = readPersistedWebSessions();
   records[session.id] = {
     id: session.id,
+    hostId: session.hostId || PERSONAL_AGENT_HOST.id,
     cwd: session.cwd,
     command: session.command,
     args: session.args,
@@ -5734,6 +5994,30 @@ function readAgentSessionSettings() {
   }
 }
 
+function agentSessionSettingsKey(sessionId, hostId = PERSONAL_AGENT_HOST.id) {
+  const id = String(sessionId || "");
+  if (!isValidSessionId(id)) return "";
+  const normalizedHostId = String(hostId || PERSONAL_AGENT_HOST.id);
+  if (normalizedHostId === PERSONAL_AGENT_HOST.id) return id;
+  return /^[a-z][a-z0-9-]{0,31}$/.test(normalizedHostId)
+    ? `${normalizedHostId}:${id}`
+    : "";
+}
+
+function isValidAgentSessionSettingsKey(value) {
+  const key = String(value || "");
+  if (isValidSessionId(key)) return true;
+  const separator = key.indexOf(":");
+  if (separator <= 0) return false;
+  return Boolean(agentSessionSettingsKey(key.slice(separator + 1), key.slice(0, separator)));
+}
+
+function agentSessionSetting(settings, sessionId, hostId = PERSONAL_AGENT_HOST.id) {
+  const key = agentSessionSettingsKey(sessionId, hostId);
+  const setting = key ? settings?.[key] : null;
+  return setting && typeof setting === "object" ? setting : {};
+}
+
 function cleanTurnId(value) {
   return String(value || "")
     .trim()
@@ -5746,12 +6030,17 @@ function validIsoTimestamp(value) {
   return timestamp && Number.isFinite(Date.parse(timestamp)) ? new Date(timestamp).toISOString() : "";
 }
 
-function agentSessionResultState(sessionId, currentCompletedTurnId = "", savedSetting = null) {
+function agentSessionResultState(
+  sessionId,
+  currentCompletedTurnId = "",
+  savedSetting = null,
+  hostId = PERSONAL_AGENT_HOST.id,
+) {
   const saved =
     savedSetting && typeof savedSetting === "object"
       ? savedSetting
       : isValidSessionId(sessionId)
-        ? readAgentSessionSettings()[sessionId] || {}
+        ? agentSessionSetting(readAgentSessionSettings(), sessionId, hostId)
         : {};
   const trackedCompletedTurnId = cleanTurnId(saved.lastCompletedTurnId);
   const lastCompletedTurnId = trackedCompletedTurnId || cleanTurnId(currentCompletedTurnId);
@@ -5765,31 +6054,43 @@ function agentSessionResultState(sessionId, currentCompletedTurnId = "", savedSe
   };
 }
 
-function rememberAgentSessionCompletion(sessionId, turnId, completedAt = new Date().toISOString()) {
+function rememberAgentSessionCompletion(
+  sessionId,
+  turnId,
+  completedAt = new Date().toISOString(),
+  hostId = PERSONAL_AGENT_HOST.id,
+) {
   const cleanedTurnId = cleanTurnId(turnId);
-  if (!isValidSessionId(sessionId) || !cleanedTurnId) return agentSessionResultState(sessionId);
+  const settingsKey = agentSessionSettingsKey(sessionId, hostId);
+  if (!settingsKey || !cleanedTurnId) return agentSessionResultState(sessionId, "", null, hostId);
   const settings = readAgentSessionSettings();
-  settings[sessionId] = {
-    ...(settings[sessionId] || {}),
-    access: normalizeAccessMode(settings[sessionId]?.access),
+  settings[settingsKey] = {
+    ...(settings[settingsKey] || {}),
+    access: normalizeAccessMode(settings[settingsKey]?.access),
     lastCompletedTurnId: cleanedTurnId,
     lastCompletedAt: validIsoTimestamp(completedAt) || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
   writeAgentSessionSettings(settings);
-  return agentSessionResultState(sessionId, cleanedTurnId);
+  return agentSessionResultState(sessionId, cleanedTurnId, null, hostId);
 }
 
-function rememberAgentSessionViewed(sessionId, turnId, viewedAt = new Date().toISOString()) {
+function rememberAgentSessionViewed(
+  sessionId,
+  turnId,
+  viewedAt = new Date().toISOString(),
+  hostId = PERSONAL_AGENT_HOST.id,
+) {
   const cleanedTurnId = cleanTurnId(turnId);
-  if (!isValidSessionId(sessionId) || !cleanedTurnId) return agentSessionResultState(sessionId);
+  const settingsKey = agentSessionSettingsKey(sessionId, hostId);
+  if (!settingsKey || !cleanedTurnId) return agentSessionResultState(sessionId, "", null, hostId);
   const settings = readAgentSessionSettings();
-  const existing = settings[sessionId] || {};
+  const existing = settings[settingsKey] || {};
   const lastCompletedTurnId = cleanTurnId(existing.lastCompletedTurnId);
   if (lastCompletedTurnId && lastCompletedTurnId !== cleanedTurnId) {
-    return agentSessionResultState(sessionId);
+    return agentSessionResultState(sessionId, "", null, hostId);
   }
-  settings[sessionId] = {
+  settings[settingsKey] = {
     ...existing,
     access: normalizeAccessMode(existing.access),
     lastViewedTurnId: cleanedTurnId,
@@ -5797,14 +6098,19 @@ function rememberAgentSessionViewed(sessionId, turnId, viewedAt = new Date().toI
     updatedAt: new Date().toISOString(),
   };
   writeAgentSessionSettings(settings);
-  return agentSessionResultState(sessionId, cleanedTurnId);
+  return agentSessionResultState(sessionId, cleanedTurnId, null, hostId);
 }
 
-function rememberAgentSessionAccess(sessionId, access) {
-  if (!isValidSessionId(sessionId)) return;
+function rememberAgentSessionAccess(
+  sessionId,
+  access,
+  hostId = PERSONAL_AGENT_HOST.id,
+) {
+  const settingsKey = agentSessionSettingsKey(sessionId, hostId);
+  if (!settingsKey) return;
   const settings = readAgentSessionSettings();
-  settings[sessionId] = {
-    ...(settings[sessionId] || {}),
+  settings[settingsKey] = {
+    ...(settings[settingsKey] || {}),
     access: normalizeAccessMode(access),
     updatedAt: new Date().toISOString(),
   };
@@ -5812,11 +6118,16 @@ function rememberAgentSessionAccess(sessionId, access) {
   writeAgentSessionSettings(settings);
 }
 
-function rememberAgentSessionRelation(sessionId, relation = {}) {
-  if (!isValidSessionId(sessionId)) return;
+function rememberAgentSessionRelation(
+  sessionId,
+  relation = {},
+  hostId = PERSONAL_AGENT_HOST.id,
+) {
+  const settingsKey = agentSessionSettingsKey(sessionId, hostId);
+  if (!settingsKey) return;
   const settings = readAgentSessionSettings();
-  const existing = settings[sessionId] || {};
-  settings[sessionId] = {
+  const existing = settings[settingsKey] || {};
+  settings[settingsKey] = {
     ...existing,
     forkedFromId: isValidSessionId(relation.forkedFromId) ? String(relation.forkedFromId) : "",
     forkedFromTitle: cleanCustomTitle(relation.forkedFromTitle),
@@ -5828,6 +6139,7 @@ function rememberAgentSessionRelation(sessionId, relation = {}) {
 }
 
 function rememberAgentSessionMemoryRouting(session) {
+  if (session?.hostId !== PERSONAL_AGENT_HOST.id) return;
   if (!isValidSessionId(session?.sessionId)) return;
   const settings = readAgentSessionSettings();
   settings[session.sessionId] = {
@@ -5846,7 +6158,7 @@ function writeAgentSessionSettings(settings) {
     fsSync.mkdirSync(path.dirname(AGENT_SESSION_SETTINGS_FILE), { recursive: true });
     const cleaned = Object.fromEntries(
       Object.entries(settings)
-        .filter(([id, setting]) => isValidSessionId(id) && ["safe", "full"].includes(setting?.access))
+        .filter(([id, setting]) => isValidAgentSessionSettingsKey(id) && ["safe", "full"].includes(setting?.access))
         .map(([id, setting]) => [
           id,
           {
@@ -5876,7 +6188,9 @@ function writeAgentSessionSettings(settings) {
 }
 
 function initialSessionMemoryRouting(sessionId, restored = {}) {
-  const saved = isValidSessionId(sessionId) ? readAgentSessionSettings()[sessionId] || {} : {};
+  const saved = isValidSessionId(sessionId)
+    ? agentSessionSetting(readAgentSessionSettings(), sessionId, PERSONAL_AGENT_HOST.id)
+    : {};
   const modeValue = restored.memoryProjectMode !== undefined ? restored.memoryProjectMode : saved.memoryProjectMode;
   const projectValue = restored.memoryProjects !== undefined ? restored.memoryProjects : saved.memoryProjects;
   const sourceValue = restored.memoryProjectSource !== undefined ? restored.memoryProjectSource : saved.memoryProjectSource;
@@ -5940,8 +6254,22 @@ function mergeMemoryProjectCatalog(catalog, knownProjects) {
   return [...projects.values()].sort((a, b) => a.project.localeCompare(b.project));
 }
 
-function savedAgentSessionAccess(sessionId, persistedRecords = readPersistedWebSessions()) {
-  return preferredAccessForCodexSession(readAgentSessionSettings(), persistedRecords, sessionId);
+function savedAgentSessionAccess(
+  sessionId,
+  agentHost = PERSONAL_AGENT_HOST,
+  persistedRecords = readPersistedWebSessions(),
+) {
+  const setting = agentSessionSetting(readAgentSessionSettings(), sessionId, agentHost.id);
+  const scopedRecords = Object.fromEntries(
+    Object.entries(persistedRecords).filter(
+      ([, record]) => (record.hostId || PERSONAL_AGENT_HOST.id) === agentHost.id,
+    ),
+  );
+  return preferredAccessForCodexSession(
+    { [sessionId]: setting },
+    scopedRecords,
+    sessionId,
+  );
 }
 
 function isValidWebSessionId(value) {
@@ -5966,6 +6294,26 @@ function resolveWorkspacePath(value) {
   return requested;
 }
 
+function requestAgentHost(req, res) {
+  const agentHost = resolveAgentHost(AGENT_HOSTS, req.query.host);
+  if (agentHost) return agentHost;
+  res.status(404).json({ error: "Unknown Agent host." });
+  return null;
+}
+
+function agentHostForSession(session) {
+  return resolveAgentHost(AGENT_HOSTS, session?.hostId) || PERSONAL_AGENT_HOST;
+}
+
+function agentSessionFavoritesFile(agentHost = PERSONAL_AGENT_HOST) {
+  if (agentHost.id === PERSONAL_AGENT_HOST.id) return AGENT_SESSION_FAVORITES_FILE;
+  return path.join(AGENT_HOST_STATE_DIR, `${agentHost.id}-favorites.json`);
+}
+
+function favoriteSessionIdsForHost(agentHost = PERSONAL_AGENT_HOST) {
+  return new Set(readAgentSessionFavorites(agentSessionFavoritesFile(agentHost)));
+}
+
 function normalizeSessionPurpose(value) {
   return value === THINK_SESSION_PURPOSE ? THINK_SESSION_PURPOSE : "";
 }
@@ -5978,14 +6326,14 @@ function terminalLaunchArgs(access, tail = []) {
   return [...args, ...tail];
 }
 
-async function getLaunchConfig(searchParams) {
+async function getLaunchConfig(searchParams, agentHost = PERSONAL_AGENT_HOST) {
   const transport = searchParams.get("transport") === "terminal" ? "terminal" : APP_SERVER_TRANSPORT;
   const purpose = normalizeSessionPurpose(searchParams.get("purpose"));
   const sessionId = String(searchParams.get("sessionId") || "").trim();
   if (sessionId && !/^[a-zA-Z0-9._:-]+$/.test(sessionId)) return null;
   const access = searchParams.has("access")
     ? normalizeAccessMode(searchParams.get("access"))
-    : savedAgentSessionAccess(sessionId) || FULL_ACCESS_MODE;
+    : savedAgentSessionAccess(sessionId, agentHost) || FULL_ACCESS_MODE;
 
   if (sessionId) {
     return {
@@ -6015,7 +6363,7 @@ async function getLaunchConfig(searchParams) {
   }
   if (mode === "resume-last") {
     if (transport === APP_SERVER_TRANSPORT) {
-      const [latest] = await listCodexSessions({ archived: false });
+      const [latest] = await listCodexSessions({ archived: false, agentHost });
       if (!latest?.id) return null;
       return { mode, transport, access, purpose, sessionId: latest.id, args: ["app-server"] };
     }
@@ -6025,13 +6373,20 @@ async function getLaunchConfig(searchParams) {
 }
 
 async function titleForLaunch(launch) {
+  const agentHost = launch.agentHost || PERSONAL_AGENT_HOST;
   if (launch.sessionId) {
+    if (agentHost.type === "ssh") {
+      const thread = await withStandaloneAppServer(agentHost, (client) =>
+        client.readThread({ threadId: launch.sessionId, includeTurns: false }),
+      ).catch(() => null);
+      return cleanCustomTitle(thread?.name) || cleanTitle(thread?.preview) || "";
+    }
     const meta = await readCodexSessionById(launch.sessionId);
     return meta?.title || "";
   }
 
   if (launch.mode === "resume-last") {
-    const [latest] = await listCodexSessions({ archived: false });
+    const [latest] = await listCodexSessions({ archived: false, agentHost });
     return latest?.title || "";
   }
 
@@ -6066,23 +6421,27 @@ async function findCodexSessionFile(id) {
   return "";
 }
 
-async function listCodexSessions({ archived }) {
-  if (nativeThreadCatalogEnabled()) {
+async function listCodexSessions({ archived, agentHost = PERSONAL_AGENT_HOST }) {
+  if (nativeThreadCatalogEnabled(agentHost)) {
     try {
-      return await listCodexSessionsFromAppServer({ archived });
+      return await listCodexSessionsFromAppServer({ archived, agentHost });
     } catch (error) {
       logAgentEvent("native-thread-list-fallback", {
         archived,
+        hostId: agentHost.id,
         message: cleanClientLogValue(error.message, 300),
       });
+      if (agentHost.type === "ssh") {
+        throw new Error(`Remote Agent host ${agentHost.label} is unavailable: ${error.message}`);
+      }
     }
   }
   return listCodexSessionsFromFiles({ archived });
 }
 
-async function listCodexSessionsFromAppServer({ archived }) {
+async function listCodexSessionsFromAppServer({ archived, agentHost = PERSONAL_AGENT_HOST }) {
   const [page, customTitles, persistedRecords] = await Promise.all([
-    withStandaloneAppServer((client) =>
+    withStandaloneAppServer(agentHost, (client) =>
       client.listThreads({
         archived: Boolean(archived),
         limit: 40,
@@ -6090,8 +6449,14 @@ async function listCodexSessionsFromAppServer({ archived }) {
         sortDirection: "desc",
       }),
     ),
-    readSessionTitles(),
-    Promise.resolve(readPersistedWebSessions()),
+    agentHost.type === "local" ? readSessionTitles() : Promise.resolve({}),
+    Promise.resolve(
+      Object.fromEntries(
+        Object.entries(readPersistedWebSessions()).filter(
+          ([, record]) => (record.hostId || PERSONAL_AGENT_HOST.id) === agentHost.id,
+        ),
+      ),
+    ),
   ]);
   const persistedByCodexId = latestPersistedSessionsByCodexId(persistedRecords);
   const sessionSettings = readAgentSessionSettings();
@@ -6101,6 +6466,7 @@ async function listCodexSessionsFromAppServer({ archived }) {
       customTitles,
       persistedByCodexId,
       sessionSettings,
+      agentHost,
     }))
     .filter(Boolean);
 }
@@ -6123,10 +6489,20 @@ async function listCodexSessionsFromFiles({ archived }) {
     if (!file.endsWith(".jsonl")) continue;
     const meta = await readCodexSessionMeta(file, customTitles, archivedSessions, fileArchived);
     if (!meta) continue;
-    meta.access = normalizeAccessMode(
-      sessionSettings[meta.id]?.access || persistedByCodexId.get(meta.id)?.access,
+    meta.hostId = PERSONAL_AGENT_HOST.id;
+    meta.hostLabel = PERSONAL_AGENT_HOST.label;
+    const savedSetting = agentSessionSetting(
+      sessionSettings,
+      meta.id,
+      PERSONAL_AGENT_HOST.id,
     );
-    Object.assign(meta, agentSessionResultState(meta.id, "", sessionSettings[meta.id]));
+    meta.access = normalizeAccessMode(
+      savedSetting.access || persistedByCodexId.get(meta.id)?.access,
+    );
+    Object.assign(
+      meta,
+      agentSessionResultState(meta.id, "", savedSetting, PERSONAL_AGENT_HOST.id),
+    );
     if (Boolean(meta.archived) === archived) items.push(meta);
   }
 
@@ -6135,8 +6511,8 @@ async function listCodexSessionsFromFiles({ archived }) {
     .slice(0, 40);
 }
 
-async function searchCodexSessions(searchTerm) {
-  if (!nativeThreadCatalogEnabled()) {
+async function searchCodexSessions(searchTerm, agentHost = PERSONAL_AGENT_HOST) {
+  if (!nativeThreadCatalogEnabled(agentHost)) {
     const [active, archived] = await Promise.all([
       listCodexSessionsFromFiles({ archived: false }),
       listCodexSessionsFromFiles({ archived: true }),
@@ -6149,7 +6525,7 @@ async function searchCodexSessions(searchTerm) {
   }
 
   const [pages, customTitles] = await Promise.all([
-    withStandaloneAppServer(async (client) => {
+    withStandaloneAppServer(agentHost, async (client) => {
       const active = await client.searchThreads(searchTerm, {
         archived: false,
         limit: APP_SEARCH_RESULT_LIMIT,
@@ -6164,9 +6540,15 @@ async function searchCodexSessions(searchTerm) {
       });
       return [active, archived];
     }),
-    readSessionTitles(),
+    agentHost.type === "local" ? readSessionTitles() : Promise.resolve({}),
   ]);
-  const persistedByCodexId = latestPersistedSessionsByCodexId(readPersistedWebSessions());
+  const persistedByCodexId = latestPersistedSessionsByCodexId(
+    Object.fromEntries(
+      Object.entries(readPersistedWebSessions()).filter(
+        ([, record]) => (record.hostId || PERSONAL_AGENT_HOST.id) === agentHost.id,
+      ),
+    ),
+  );
   const sessionSettings = readAgentSessionSettings();
   return pages
     .flatMap((page, pageIndex) =>
@@ -6176,6 +6558,7 @@ async function searchCodexSessions(searchTerm) {
           customTitles,
           persistedByCodexId,
           sessionSettings,
+          agentHost,
         }),
         snippet: String(result?.snippet || ""),
       })),
@@ -6185,34 +6568,40 @@ async function searchCodexSessions(searchTerm) {
     .slice(0, APP_SEARCH_RESULT_LIMIT);
 }
 
-function nativeThreadSessionMeta(thread, { archived, customTitles, persistedByCodexId, sessionSettings }) {
+function nativeThreadSessionMeta(
+  thread,
+  { archived, customTitles, persistedByCodexId, sessionSettings, agentHost = PERSONAL_AGENT_HOST },
+) {
   const id = String(thread?.id || "");
   if (!isValidSessionId(id)) return null;
   const persisted = persistedByCodexId.get(id) || null;
+  const savedSetting = agentSessionSetting(sessionSettings, id, agentHost.id);
   const name = cleanCustomTitle(thread?.name);
   const sidecarTitle = cleanCustomTitle(customTitles[id]);
   const generatedTitle = cleanTitle(thread?.preview) || "Untitled session";
   const updatedAt = unixSecondsToIso(thread?.updatedAt) || unixSecondsToIso(thread?.createdAt) || new Date(0).toISOString();
-  const resultState = agentSessionResultState(id, "", sessionSettings[id]);
+  const resultState = agentSessionResultState(id, "", savedSetting, agentHost.id);
   return {
     id,
+    hostId: agentHost.id,
+    hostLabel: agentHost.label,
     title: name || sidecarTitle || generatedTitle,
     originalTitle: generatedTitle,
     customTitle: name || sidecarTitle,
     archived,
     archivedAt: archived ? updatedAt : "",
     cwd: String(thread?.cwd || ""),
-    project: projectFromCwd(String(thread?.cwd || "")),
+    project: agentHostProject(agentHost, String(thread?.cwd || "")),
     source: thread?.source || "",
     cliVersion: String(thread?.cliVersion || ""),
     createdAt: unixSecondsToIso(thread?.createdAt) || updatedAt,
     updatedAt,
-    access: normalizeAccessMode(sessionSettings[id]?.access || persisted?.access),
+    access: normalizeAccessMode(savedSetting.access || persisted?.access),
     forkedFromId: String(
-      thread?.forkedFromId || sessionSettings[id]?.forkedFromId || persisted?.forkedFromId || "",
+      thread?.forkedFromId || savedSetting.forkedFromId || persisted?.forkedFromId || "",
     ),
     parentThreadId: String(
-      thread?.parentThreadId || sessionSettings[id]?.parentThreadId || persisted?.parentThreadId || "",
+      thread?.parentThreadId || savedSetting.parentThreadId || persisted?.parentThreadId || "",
     ),
     agentNickname: String(thread?.agentNickname || ""),
     agentRole: String(thread?.agentRole || ""),
@@ -6220,13 +6609,32 @@ function nativeThreadSessionMeta(thread, { archived, customTitles, persistedByCo
   };
 }
 
-function nativeThreadCatalogEnabled() {
+function nativeThreadCatalogEnabled(agentHost = PERSONAL_AGENT_HOST) {
+  if (agentHost.type === "ssh") return true;
   if (process.env.AGENT_NATIVE_THREAD_CATALOG === "0") return false;
   if (process.env.AGENT_NATIVE_THREAD_CATALOG === "1") return true;
   return path.resolve(CODEX_HOME) === path.resolve(path.join(process.env.HOME, ".codex"));
 }
 
-async function withStandaloneAppServer(run) {
+async function withStandaloneAppServer(agentHost, run) {
+  if (typeof agentHost === "function") {
+    run = agentHost;
+    agentHost = PERSONAL_AGENT_HOST;
+  }
+  if (agentHost.type === "ssh") {
+    const client = createAgentAppServerClient(
+      agentHost.workspaceRoot,
+      `catalog-${agentHost.id}-${cryptoRandomId()}`,
+      undefined,
+      agentHost,
+    );
+    try {
+      await client.start();
+      return await run(client);
+    } finally {
+      client.close();
+    }
+  }
   if (SHARED_APP_SERVER_ENABLED) {
     const client = await sharedCatalogAppServer();
     return run(client);
@@ -6298,20 +6706,21 @@ function scheduleCatalogAppServerIdleStop() {
   catalogAppServerIdleTimer.unref?.();
 }
 
-async function setPersistedThreadName(threadId, title) {
+async function setPersistedThreadName(threadId, title, agentHost = PERSONAL_AGENT_HOST) {
   const live = [...sessions.values()].find(
     (session) =>
       !session.exited &&
       session.ready &&
       session.transport === APP_SERVER_TRANSPORT &&
+      session.hostId === agentHost.id &&
       session.sessionId === threadId,
   );
   if (live) {
     await live.appServer.setThreadName(title, threadId);
     return true;
   }
-  if (!nativeThreadCatalogEnabled()) return false;
-  await withStandaloneAppServer((client) => client.setThreadName(title, threadId));
+  if (!nativeThreadCatalogEnabled(agentHost)) return false;
+  await withStandaloneAppServer(agentHost, (client) => client.setThreadName(title, threadId));
   return true;
 }
 
@@ -6579,17 +6988,19 @@ async function writeSessionArchive(archive) {
   await fs.rename(tempFile, CODEX_SESSION_ARCHIVE_FILE);
 }
 
-async function setSessionArchived(id, archived) {
-  const archive = await readSessionArchive();
-  if (archived) {
-    archive[id] = { archivedAt: new Date().toISOString() };
-  } else {
-    delete archive[id];
+async function setSessionArchived(id, archived, agentHost = PERSONAL_AGENT_HOST) {
+  if (agentHost.type === "local") {
+    const archive = await readSessionArchive();
+    if (archived) {
+      archive[id] = { archivedAt: new Date().toISOString() };
+    } else {
+      delete archive[id];
+    }
+    await writeSessionArchive(archive);
   }
-  await writeSessionArchive(archive);
 
   try {
-    await execFileText("codex", [archived ? "archive" : "unarchive", id], WORKSPACE_ROOT);
+    await withStandaloneAppServer(agentHost, (client) => client.setThreadArchived(archived, id));
   } catch (error) {
     console.warn(`Codex ${archived ? "archive" : "unarchive"} failed for ${id}: ${error.message}`);
   }

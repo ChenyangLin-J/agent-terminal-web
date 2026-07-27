@@ -16,6 +16,7 @@ const controlReadyCount = document.querySelector("#control-ready-count");
 const controlHistoryCount = document.querySelector("#control-history-count");
 const controlLiveCount = document.querySelector("#control-live-count");
 const controlSummaryButtons = document.querySelectorAll("[data-summary-filter]");
+const agentHostTabs = document.querySelector("#agent-host-tabs");
 const projectSelect = document.querySelector("#project");
 const launchModeSelect = document.querySelector("#launch-mode");
 const transportSelect = document.querySelector("#transport");
@@ -251,6 +252,8 @@ let liveSessionsByCodexId = new Map();
 let liveSessionsCache = [];
 let savedSessionsCache = [];
 let archivedSessionsCache = [];
+let agentHosts = [];
+let activeAgentHostId = cleanAgentHostId(new URLSearchParams(window.location.search).get("host")) || "personal";
 let activeControlCenterFilter = "all";
 let archivedSessionsExpanded = false;
 let latestTurnState = {
@@ -568,6 +571,7 @@ async function bootstrap() {
   const data = await response.json();
   if (data.authenticated) {
     loadedAgentInstance = await readAgentInstance();
+    await loadAgentHosts();
     await loadProjects();
     if (globalThis.Notification?.permission === "granted") {
       void ensureAgentPushSubscription().catch(logPushRegistrationError);
@@ -679,6 +683,72 @@ async function loadProjects() {
   projectSelect.value = ".";
 }
 
+async function loadAgentHosts() {
+  const response = await fetch("/api/hosts", { cache: "no-store" });
+  if (!response.ok) return;
+  const data = await response.json();
+  agentHosts = Array.isArray(data.hosts) ? data.hosts : [];
+  if (!agentHosts.some((host) => host.id === activeAgentHostId)) {
+    activeAgentHostId = cleanAgentHostId(data.defaultHostId) || "personal";
+  }
+  renderAgentHostTabs();
+}
+
+function renderAgentHostTabs() {
+  if (!agentHostTabs) return;
+  agentHostTabs.replaceChildren();
+  for (const host of agentHosts) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.hostId = host.id;
+    button.dataset.hostType = host.type;
+    button.classList.toggle("active", host.id === activeAgentHostId);
+    button.toggleAttribute("aria-current", host.id === activeAgentHostId);
+    button.textContent = host.label || host.id;
+    button.addEventListener("click", () => switchAgentHost(host.id));
+    agentHostTabs.append(button);
+  }
+  agentHostTabs.classList.toggle("hidden", agentHosts.length < 2);
+  syncAgentHostCapabilities();
+}
+
+function syncAgentHostCapabilities() {
+  const remote = activeAgentHostId !== "personal";
+  attachFileButton.disabled = remote;
+  attachFileButton.title = remote
+    ? "远端 Session 暂不支持从 Agent Web 上传附件"
+    : "添加文件";
+  appSessionMemoriesButton.disabled = remote;
+  appSessionMemoriesButton.title = remote
+    ? "公司 Session 不加载个人记忆"
+    : "查看当前 Session 的个人记忆路由";
+}
+
+async function switchAgentHost(hostId) {
+  const nextHostId = cleanAgentHostId(hostId);
+  if (!nextHostId || nextHostId === activeAgentHostId) return;
+  if (!agentHosts.some((host) => host.id === nextHostId)) return;
+  activeAgentHostId = nextHostId;
+  renderAgentHostTabs();
+  syncControlCenterHostUrl();
+  liveSessionsCache = [];
+  savedSessionsCache = [];
+  archivedSessionsCache = [];
+  liveSessionsByCodexId = new Map();
+  sessionSearchInput.value = "";
+  sessionSearchResults.classList.add("hidden");
+  await loadProjects();
+  await refreshLists();
+}
+
+function syncControlCenterHostUrl() {
+  if (startScreen.classList.contains("hidden")) return;
+  const url = new URL(window.location.href);
+  url.search = "";
+  if (activeAgentHostId !== "personal") url.searchParams.set("host", activeAgentHostId);
+  window.history.replaceState(null, "", url.toString());
+}
+
 async function refreshLists() {
   const savedScrollY = startScreen.classList.contains("hidden") ? null : window.scrollY;
   await loadLiveSessions();
@@ -693,11 +763,21 @@ async function loadLiveSessions() {
 
 async function loadSavedCodexSessions() {
   const data = await apiJson("/api/codex-sessions");
+  if (data?.error) {
+    savedSessionsCache = [];
+    codexSessionsList.replaceChildren(empty(`${data.host?.label || "远端主机"}当前不可用。`));
+    return;
+  }
   if (data) renderSavedCodexSessions(data.sessions || []);
 }
 
 async function loadArchivedCodexSessions() {
   const data = await apiJson("/api/codex-sessions/archived");
+  if (data?.error) {
+    archivedSessionsCache = [];
+    archivedCodexSessionsList.replaceChildren();
+    return;
+  }
   if (data) renderArchivedCodexSessions(data.sessions || []);
 }
 
@@ -899,12 +979,14 @@ function liveSessionMeta(session, presentation = liveSessionPresentation(session
 }
 
 function liveSessionOpenParams(session) {
+  const hostId = session.hostId || activeAgentHostId;
   return {
+    host: hostId,
     attach: session.id,
     cwd: session.project || ".",
     sessionId: session.sessionId || "",
     title: session.title || "New Codex session",
-    transport: session.transport || "terminal",
+    transport: hostId === "personal" ? session.transport || "terminal" : "app-server",
     access: session.access || "safe",
     purpose: session.purpose || "",
   };
@@ -1224,8 +1306,11 @@ function renderSessionSwitcher() {
 }
 
 function openSessionInCurrentPage(params) {
-  window.history.pushState(null, "", sessionUrl(params));
-  openSocket(params);
+  const scopedParams = { host: params.host || activeAgentHostId, ...params };
+  activeAgentHostId = cleanAgentHostId(scopedParams.host) || activeAgentHostId;
+  renderAgentHostTabs();
+  window.history.pushState(null, "", sessionUrl(scopedParams));
+  openSocket(scopedParams);
 }
 
 function openResumeEngineDialog(session) {
@@ -1248,14 +1333,16 @@ function renderResumeAccessWarning() {
 function resumePendingSession(transport) {
   const session = pendingResumeSession;
   if (!session) return;
+  const hostId = session.hostId || activeAgentHostId;
   const access = resumeAccessMode.value === "full" ? "full" : "safe";
   pendingResumeSession = null;
   resumeEngineDialog.close();
   openSessionFromList({
+    host: hostId,
     cwd: projectForSession(session),
     sessionId: session.id,
     title: session.title || "Untitled session",
-    transport,
+    transport: hostId === "personal" ? transport : "app-server",
     access,
   });
 }
@@ -1372,7 +1459,7 @@ function sessionCard({
 async function setCodexSessionFavorite(sessionId, favorited) {
   if (!sessionId) return;
   try {
-    const response = await fetch(`/api/codex-sessions/${encodeURIComponent(sessionId)}/favorite`, {
+    const response = await fetch(agentHostApiUrl(`/api/codex-sessions/${encodeURIComponent(sessionId)}/favorite`), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ favorited }),
@@ -1410,7 +1497,7 @@ async function renameCodexSession(session) {
 }
 
 async function saveCodexSessionTitle(sessionId, title) {
-  const response = await fetch(`/api/codex-sessions/${encodeURIComponent(sessionId)}/title`, {
+  const response = await fetch(agentHostApiUrl(`/api/codex-sessions/${encodeURIComponent(sessionId)}/title`), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title }),
@@ -1511,7 +1598,7 @@ async function archiveCodexSession(session, archived) {
   const ok = archived ? window.confirm("Archive this session?") : true;
   if (!ok) return;
 
-  const response = await fetch(`/api/codex-sessions/${encodeURIComponent(session.id)}/archive`, {
+  const response = await fetch(agentHostApiUrl(`/api/codex-sessions/${encodeURIComponent(session.id)}/archive`), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ archived }),
@@ -1542,7 +1629,7 @@ async function archiveCurrentSession() {
 
   setArchiveSessionDisabled(true);
   try {
-    const response = await fetch(`/api/codex-sessions/${encodeURIComponent(sessionId)}/archive`, {
+    const response = await fetch(agentHostApiUrl(`/api/codex-sessions/${encodeURIComponent(sessionId)}/archive`), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ archived: true, endLiveSession: true }),
@@ -1590,6 +1677,7 @@ async function restartCurrentSession() {
   if (!window.confirm(message)) return;
 
   const restartParams = {
+    host: activeSessionParams.host || activeAgentHostId,
     cwd: activeSessionParams.cwd || ".",
     sessionId,
     title: activeSessionParams.title || "",
@@ -1639,11 +1727,13 @@ function empty(text) {
 function startSession(overrides = {}) {
   const hasSessionIdOverride = Object.prototype.hasOwnProperty.call(overrides, "sessionId");
   const sessionId = hasSessionIdOverride ? String(overrides.sessionId || "").trim() : sessionIdInput.value.trim();
+  const hostId = overrides.host || activeAgentHostId;
   const params = {
+    host: hostId,
     cwd: overrides.cwd || projectSelect.value,
     mode: overrides.mode || (sessionId ? "new" : launchModeSelect.value),
     sessionId,
-    transport: overrides.transport || transportSelect.value || DEFAULT_TRANSPORT,
+    transport: hostId === "personal" ? overrides.transport || transportSelect.value || DEFAULT_TRANSPORT : "app-server",
     purpose: overrides.purpose === "think" ? "think" : "",
   };
   const access = overrides.access || (!sessionId ? accessModeSelect.value || DEFAULT_ACCESS_MODE : "");
@@ -1681,7 +1771,11 @@ function openInitialSessionFromUrl() {
   const sessionId = params.get("sessionId") || "";
   const title = params.get("title") || "";
   const startNew = params.get("new") === "1";
-  const transport = params.has("transport")
+  const host = cleanAgentHostId(params.get("host")) || activeAgentHostId;
+  activeAgentHostId = host;
+  const transport = host !== "personal"
+    ? "app-server"
+    : params.has("transport")
     ? params.get("transport") === "terminal"
       ? "terminal"
       : "app-server"
@@ -1690,6 +1784,7 @@ function openInitialSessionFromUrl() {
   const purpose = params.get("purpose") === "think" ? "think" : "";
   syncStartSelectionsFromUrl(params);
   const launch = {
+    host,
     cwd: params.get("cwd") || ".",
     sessionId,
     transport,
@@ -1732,8 +1827,10 @@ function sessionUrl(params) {
   const url = new URL(window.location.href);
   url.search = "";
   url.hash = "";
+  const hostId = cleanAgentHostId(params.host) || activeAgentHostId;
+  if (hostId !== "personal") url.searchParams.set("host", hostId);
   for (const [key, value] of Object.entries(params)) {
-    if (value) url.searchParams.set(key, value);
+    if (key !== "host" && value) url.searchParams.set(key, value);
   }
   appendNotificationTarget(url);
   return url.toString();
@@ -1741,6 +1838,9 @@ function sessionUrl(params) {
 
 function openSocket(params, options = {}) {
   const isReconnect = Boolean(options.reconnect);
+  activeAgentHostId = cleanAgentHostId(params.host) || activeAgentHostId;
+  params = { ...params, host: activeAgentHostId };
+  renderAgentHostTabs();
   const snapshotKey = sessionSnapshotKey(params);
   saveActiveSessionSnapshot();
   saveAppReadingPosition();
@@ -1806,7 +1906,7 @@ function openSocket(params, options = {}) {
     lastOutputRevision = 0;
     queuedOutputRevision = 0;
     if (hasSnapshot) restoreSessionSnapshot(snapshotKey);
-    if (params.sessionId) {
+    if (params.sessionId && activeAgentHostId === "personal") {
       void loadSessionPreview(params.sessionId, sessionPreviewRequestSequence);
     }
   }
@@ -1991,6 +2091,10 @@ async function submitPrompt(deliveryMode = "auto") {
 
     const prompt = promptInput.value.trim();
     const attachments = uploadController.getAttachments();
+    if (activeAgentHostId !== "personal" && attachments.length) {
+      setUploadStatus("公司 Session 暂不支持从 Agent Web 传附件；请把文件保留在公司 Mac 工作区。");
+      return;
+    }
     if (!prompt && !attachments.length) return;
     if (!pendingEditFork && !attachments.length && activeTransport === "app-server" && runAppComposerCommand(prompt)) return;
     if (notificationTarget.app === "agent") {
@@ -3191,11 +3295,13 @@ function closeSocket() {
 }
 
 function sessionSnapshotKey(params = activeSessionParams) {
+  const hostId = cleanAgentHostId(params.host) || activeAgentHostId;
+  const hostPrefix = hostId === "personal" ? "" : `${hostId}:`;
   const sessionId = String(params.sessionId || "").trim();
-  if (sessionId) return `codex:${sessionId}`;
+  if (sessionId) return `${hostPrefix}codex:${sessionId}`;
 
   const attach = String(params.attach || activeSessionId || "").trim();
-  if (attach) return `web:${attach}`;
+  if (attach) return `${hostPrefix}web:${attach}`;
 
   return "";
 }
@@ -3440,6 +3546,7 @@ function probeVisibleConnection(reason) {
 function currentReconnectParams() {
   const params = new URLSearchParams(window.location.search);
   return {
+    host: activeSessionParams.host || params.get("host") || activeAgentHostId,
     attach: activeSessionId,
     cwd: activeSessionParams.cwd || params.get("cwd") || ".",
     sessionId: activeSessionParams.sessionId || params.get("sessionId") || "",
@@ -3613,8 +3720,11 @@ function sendResize() {
 }
 
 function renderStatus(status) {
+  activeAgentHostId = cleanAgentHostId(status.hostId) || activeAgentHostId;
+  renderAgentHostTabs();
   activeSessionId = status.id || activeSessionId;
   activeSessionParams = {
+    host: activeAgentHostId,
     attach: activeSessionId,
     cwd: status.project || ".",
     sessionId: status.sessionId || activeSessionParams.sessionId || "",
@@ -3841,6 +3951,7 @@ function syncSessionUrl(status) {
   if (alreadySynced) return;
 
   url.search = "";
+  if (activeAgentHostId !== "personal") url.searchParams.set("host", activeAgentHostId);
   url.searchParams.set("attach", status.id);
   url.searchParams.set("cwd", cwd);
   if (status.sessionId) url.searchParams.set("sessionId", status.sessionId);
@@ -5090,6 +5201,7 @@ async function forkFromTurn(item) {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || "无法创建分支");
     const url = sessionUrl({
+      host: payload.hostId || activeAgentHostId,
       cwd: payload.project || activeSessionParams.cwd || ".",
       sessionId: payload.threadId,
       title: payload.title || "Codex 分支",
@@ -5102,6 +5214,7 @@ async function forkFromTurn(item) {
       setUploadStatus("分支已创建。", {
         actionLabel: "打开新 Session",
         onAction: () => openSessionTab({
+          host: payload.hostId || activeAgentHostId,
           cwd: payload.project || activeSessionParams.cwd || ".",
           sessionId: payload.threadId,
           title: payload.title || "Codex 分支",
@@ -5332,7 +5445,7 @@ async function markLatestResultViewed() {
   markViewedRequestPending = true;
   lastMarkedViewedTurnId = turnId;
   try {
-    const response = await fetch(`/api/codex-sessions/${encodeURIComponent(sessionId)}/viewed`, {
+    const response = await fetch(agentHostApiUrl(`/api/codex-sessions/${encodeURIComponent(sessionId)}/viewed`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ turnId }),
@@ -5375,10 +5488,12 @@ function scheduleAppReadingPositionSave() {
 }
 
 function appReadingPositionKey() {
+  const hostId = cleanAgentHostId(activeSessionParams.host) || activeAgentHostId;
+  const hostPrefix = hostId === "personal" ? "" : `${hostId}:`;
   const threadId = String(activeSessionParams.sessionId || "").trim();
-  if (threadId) return `thread:${threadId}`;
+  if (threadId) return `${hostPrefix}thread:${threadId}`;
   const webSessionId = String(activeSessionId || activeSessionParams.attach || "").trim();
-  return webSessionId ? `web:${webSessionId}` : "";
+  return webSessionId ? `${hostPrefix}web:${webSessionId}` : "";
 }
 
 function captureAppTranscriptAnchor() {
@@ -5543,12 +5658,18 @@ function installTerminalTouchScroll() {
 }
 
 async function apiJson(url) {
-  const response = await fetch(url);
+  const response = await fetch(agentHostApiUrl(url));
   if (response.status === 401) {
     redirectToLogin();
     return null;
   }
   return response.json();
+}
+
+function agentHostApiUrl(value) {
+  const url = new URL(value, window.location.origin);
+  url.searchParams.set("host", activeAgentHostId);
+  return `${url.pathname}${url.search}${url.hash}`;
 }
 
 function redirectToLogin(loginUrl = "") {
@@ -5595,6 +5716,11 @@ function clearSessionUrl() {
   if (url.toString() !== window.location.href) {
     window.history.replaceState(null, "", url.toString());
   }
+}
+
+function cleanAgentHostId(value) {
+  const id = String(value || "").trim();
+  return /^[a-z][a-z0-9-]{0,31}$/.test(id) ? id : "";
 }
 
 function escapeHtml(value) {

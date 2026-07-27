@@ -228,3 +228,19 @@ Auth service:
 http://127.0.0.1:3060/api/verify
 https://auth.chenyanglin.com/login
 ```
+
+## Multiple execution hosts
+
+Agent Web can separate personal and company Sessions by execution host. The
+personal tab uses the server-local Codex; an optional company tab starts the
+Mac's own Codex App Server over SSH stdio. Authentication, native Sessions,
+files, Skills, plugins, and MCP configuration remain on their owning host.
+
+Remote hosts are configured outside the repository in:
+
+```text
+~/.config/agent-terminal-web/hosts.json
+```
+
+See [`docs/multi-host.md`](docs/multi-host.md) for the isolation boundary,
+configuration shape, supported workflows, and readiness checks.

@@ -29,6 +29,6 @@ test("the active Agent session can be archived from the responsive session heade
   assert.match(server, /const endLiveSession = archived && Boolean\(req\.body\?\.endLiveSession\)/);
   assert.match(
     server,
-    /if \(endLiveSession\) \{[\s\S]*if \(!session\.exited && session\.sessionId === id\) killSessionTerminal\(session\)/,
+    /if \(endLiveSession\) \{[\s\S]*!session\.exited && session\.hostId === agentHost\.id && session\.sessionId === id[\s\S]*killSessionTerminal\(session\)/,
   );
 });

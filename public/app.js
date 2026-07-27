@@ -301,6 +301,7 @@ let appSkillsRequested = false;
 let suggestionItems = [];
 let activeSuggestionIndex = 0;
 const openAppProcessGroups = new Set();
+const collapsedAppProcessGroups = new Set();
 const historicalProcessLoads = new Map();
 const clientId = getClientId();
 const notificationTarget = getNotificationTarget();
@@ -1876,6 +1877,7 @@ function openSessionPreview(params = {}) {
   appSkillsRequested = false;
   sessionPreviewRequestSequence += 1;
   openAppProcessGroups.clear();
+  collapsedAppProcessGroups.clear();
   historicalProcessLoads.clear();
   clearAgentRequest();
   renderTurnState({});
@@ -1962,6 +1964,7 @@ function openSocket(params, options = {}) {
     terminalPreviewAllowed = activeTransport === "terminal" && !hasSnapshot && resumesTerminalHistory;
     sessionPreviewRequestSequence += 1;
     openAppProcessGroups.clear();
+    collapsedAppProcessGroups.clear();
     historicalProcessLoads.clear();
     renderAppTranscript();
     lastOutputRevision = 0;
@@ -5036,7 +5039,8 @@ function createAppProcessGroup(items, groupNumber = 1) {
   const isStoppedTurn = !hasFinalAnswer && appTurnWasStopped(turnId);
   const isActiveTurn = latestTurnState.active && latestTurnState.turnId === turnId;
   const isActive = !isInterruptedTurn && !isStoppedTurn && !hasFinalAnswer && (Boolean(activeItem) || isActiveTurn);
-  const autoExpanded = isActive && !openAppProcessGroups.has(groupId);
+  const autoExpanded =
+    isActive && !openAppProcessGroups.has(groupId) && !collapsedAppProcessGroups.has(groupId);
   group.open = autoExpanded || openAppProcessGroups.has(groupId);
   const summary = document.createElement("summary");
   const currentItem = activeItem || summaryItems.at(-1);
@@ -5071,16 +5075,24 @@ function createAppProcessGroup(items, groupNumber = 1) {
   message.title = message.textContent;
   const count = document.createElement("span");
   count.className = "app-activity-count";
-  count.textContent = processGroupActionText({ historical, loadState, itemCount: contentItems.length });
+  const collapsedActionText = processGroupActionText({
+    historical,
+    loadState,
+    itemCount: contentItems.length,
+  });
+  count.textContent = group.open ? "收起" : collapsedActionText;
   group.addEventListener("toggle", () => {
+    count.textContent = group.open ? "收起" : collapsedActionText;
     if (autoExpanded && group.open) return;
     if (group.open) {
       openAppProcessGroups.add(groupId);
+      collapsedAppProcessGroups.delete(groupId);
       if (historical && !loadState) {
         void loadHistoricalProcessDetails(turnId);
       }
     } else {
       openAppProcessGroups.delete(groupId);
+      collapsedAppProcessGroups.add(groupId);
     }
   });
   summary.append(indicator, label, message, count);

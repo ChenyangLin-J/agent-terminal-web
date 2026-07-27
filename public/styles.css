@@ -1253,7 +1253,13 @@ input {
 }
 
 .app-process-group[open] > summary {
+  position: sticky;
+  top: 0;
+  z-index: 3;
   align-items: start;
+  border-bottom: 1px solid #252c38;
+  background: #0d1118;
+  box-shadow: 0 5px 12px rgb(0 0 0 / 28%);
 }
 
 .app-process-group > summary::-webkit-details-marker {

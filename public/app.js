@@ -172,6 +172,7 @@ const CLIENT_ID_KEY = "agent_terminal_client_id";
 const PUSH_DEVICE_ID_KEY = "agent_terminal_push_device_id";
 const SESSION_SNAPSHOT_STORE_KEY = "agent_terminal_session_snapshots";
 const APP_READING_POSITION_STORE_KEY = "agent_terminal_app_reading_positions";
+const LAST_SESSION_NAVIGATION_STORE_KEY = "agent_terminal_last_session_navigation";
 const SESSION_SNAPSHOT_LIMIT = 8;
 const SESSION_SNAPSHOT_MAX_CHARS = 200_000;
 const TERMINAL_RECENT_HISTORY_MAX_CHARS = 24_000;
@@ -339,22 +340,7 @@ window.visualViewport?.addEventListener("resize", followAppTranscriptAfterViewpo
 logoutButton.addEventListener("click", logout);
 restartAgentButton.addEventListener("click", restartAgentWeb);
 navControlCenterButton.addEventListener("click", showStartScreen);
-navCurrentSessionButton.addEventListener("click", () => {
-  if (!activeSessionId && !activeSessionParams.sessionId && !activeSessionPreviewOnly) return;
-  showSessionScreen();
-  if (activeSessionPreviewOnly) syncPreviewSessionUrl();
-  else {
-    syncSessionUrl({
-      id: activeSessionId,
-      project: activeSessionParams.cwd || ".",
-      sessionId: activeSessionParams.sessionId || "",
-      title: activeSessionParams.title || "",
-      transport: activeSessionParams.transport || activeTransport,
-      access: activeSessionParams.access || activeAccessMode,
-      purpose: activeSessionParams.purpose || "",
-    });
-  }
-});
+navCurrentSessionButton.addEventListener("click", openCurrentSessionNavigation);
 openNewSessionButton.addEventListener("click", () => toggleNewSessionPanel(true));
 closeNewSessionButton.addEventListener("click", () => toggleNewSessionPanel(false));
 controlCenterFilters.addEventListener("click", (event) => {
@@ -745,6 +731,7 @@ async function switchAgentHost(hostId) {
   sessionSearchResults.classList.add("hidden");
   await loadProjects();
   await refreshLists();
+  syncPrimaryNavigation("center");
 }
 
 function syncControlCenterHostUrl() {
@@ -1392,10 +1379,40 @@ function renderSessionSwitcher() {
 function openSessionInCurrentPage(params) {
   const scopedParams = { host: params.host || activeAgentHostId, ...params };
   activeAgentHostId = cleanAgentHostId(scopedParams.host) || activeAgentHostId;
+  rememberSessionNavigation(scopedParams);
   renderAgentHostTabs();
   window.history.pushState(null, "", sessionUrl(scopedParams));
   if (scopedParams.preview === "1") openSessionPreview(scopedParams);
   else openSocket(scopedParams);
+}
+
+function openCurrentSessionNavigation() {
+  const activeHost = cleanAgentHostId(activeSessionParams.host) || activeAgentHostId;
+  const hasCurrentSession =
+    activeHost === activeAgentHostId &&
+    Boolean(activeSessionId || activeSessionParams.sessionId || activeSessionPreviewOnly);
+  if (hasCurrentSession) {
+    showSessionScreen();
+    if (activeSessionPreviewOnly) {
+      syncPreviewSessionUrl();
+      return;
+    }
+    syncSessionUrl({
+      id: activeSessionId,
+      project: activeSessionParams.cwd || ".",
+      sessionId: activeSessionParams.sessionId || "",
+      title: activeSessionParams.title || "",
+      transport: activeSessionParams.transport || activeTransport,
+      access: activeSessionParams.access || activeAccessMode,
+      purpose: activeSessionParams.purpose || "",
+    });
+    return;
+  }
+
+  const remembered = rememberedSessionNavigation(activeAgentHostId);
+  if (!remembered) return;
+  const live = liveSessionsCache.find((session) => session.sessionId === remembered.sessionId);
+  openSessionInCurrentPage(live ? liveSessionOpenParams(live) : remembered);
 }
 
 function openSavedSessionPreview(session) {
@@ -1747,6 +1764,7 @@ async function saveCurrentSessionRename() {
     const payload = await saveCodexSessionTitle(sessionId, title);
     const savedTitle = String(payload.customTitle || title);
     activeSessionParams.title = savedTitle;
+    rememberSessionNavigation(activeSessionParams);
     statusEls.project.textContent = savedTitle;
     statusEls.project.title = savedTitle;
     setDocumentTitle(savedTitle);
@@ -1799,6 +1817,13 @@ async function archiveCodexSession(session, archived) {
   if (!response.ok) {
     window.alert(archived ? "Failed to archive session." : "Failed to restore session.");
     return;
+  }
+  if (archived) {
+    forgetSessionNavigation({
+      host: session.hostId || activeAgentHostId,
+      sessionId: session.id,
+    });
+    syncPrimaryNavigation("center");
   }
   await Promise.all([loadSavedCodexSessions(), loadArchivedCodexSessions()]);
 }
@@ -1864,8 +1889,15 @@ async function archiveSessionFromSwitcher(session) {
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.error || "归档失败");
     }
+    forgetSessionNavigation({
+      host: session.hostId || activeAgentHostId,
+      sessionId,
+    });
     if (session.id === activeSessionId || sessionId === activeSessionParams.sessionId) detach(true);
-    else await refreshLists();
+    else {
+      syncPrimaryNavigation("center");
+      await refreshLists();
+    }
   } catch (error) {
     window.alert(`归档失败：${error.message}`);
   }
@@ -1892,8 +1924,15 @@ async function endSessionFromSwitcher(session) {
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.error || "结束失败");
     }
+    forgetSessionNavigation({
+      host: session.hostId || activeAgentHostId,
+      sessionId: session.sessionId,
+    });
     if (webSessionId === activeSessionId || session.sessionId === activeSessionParams.sessionId) detach(true);
-    else await refreshLists();
+    else {
+      syncPrimaryNavigation("center");
+      await refreshLists();
+    }
   } catch (error) {
     window.alert(`结束失败：${error.message}`);
   }
@@ -2123,6 +2162,7 @@ function openSessionPreview(params = {}) {
     preview: "1",
     new: params.sessionId ? "" : "1",
   };
+  rememberSessionNavigation(activeSessionParams);
   activeSessionId = "";
   currentSessionExited = false;
   historySyncPending = false;
@@ -2188,6 +2228,7 @@ function openSocket(params, options = {}) {
   ensureTerminal();
   activeTransport = params.transport === "app-server" ? "app-server" : "terminal";
   activeSessionParams = { ...activeSessionParams, ...params, preview: "", new: "" };
+  rememberSessionNavigation(activeSessionParams);
   const hasSnapshot = !isReconnect && hasSessionSnapshot(snapshotKey);
   const shouldReplay = options.replay !== false;
   const resumesTerminalHistory =
@@ -3697,6 +3738,7 @@ function detach(goHome = true) {
   saveActiveSessionSnapshot();
   closeSocket();
   if (goHome) {
+    forgetSessionNavigation(activeSessionParams);
     activeSessionPreviewOnly = false;
     pendingPreviewSubmission = null;
     activeSessionId = "";
@@ -4160,6 +4202,7 @@ function renderStatus(status) {
     access: status.access || "safe",
     purpose: status.purpose === "think" ? "think" : "",
   };
+  rememberSessionNavigation(activeSessionParams);
   activeTransport = status.transport === "app-server" ? "app-server" : "terminal";
   activeAccessMode = status.access === "full" ? "full" : "safe";
   activeMemoryProjectMode = status.memoryProjectMode === "manual" ? "manual" : "auto";
@@ -4334,6 +4377,7 @@ function setConnectedState(state) {
 function showStartScreen() {
   saveActiveSessionSnapshot();
   stopAppTranscriptSubmitFollow();
+  rememberSessionNavigation(activeSessionParams);
   setSessionPageMode(false);
   setDocumentTitle(DEFAULT_DOCUMENT_TITLE);
   clearSessionUrl();
@@ -4369,11 +4413,18 @@ function showSessionScreen() {
 
 function syncPrimaryNavigation(screen) {
   const onControlCenter = screen === "center";
+  const remembered = rememberedSessionNavigation(activeAgentHostId);
+  const activeHost = cleanAgentHostId(activeSessionParams.host) || activeAgentHostId;
+  const hasCurrentSession =
+    activeHost === activeAgentHostId &&
+    Boolean(activeSessionId || activeSessionParams.sessionId || activeSessionPreviewOnly);
   navControlCenterButton.classList.toggle("active", onControlCenter);
   navControlCenterButton.toggleAttribute("aria-current", onControlCenter);
   navCurrentSessionButton.classList.toggle("active", !onControlCenter);
   navCurrentSessionButton.toggleAttribute("aria-current", !onControlCenter);
-  navCurrentSessionButton.disabled = !activeSessionId && !activeSessionParams.sessionId && !activeSessionPreviewOnly;
+  navCurrentSessionButton.disabled = !hasCurrentSession && !remembered;
+  navCurrentSessionButton.title =
+    !hasCurrentSession && remembered?.title ? `回到 ${remembered.title}` : "回到当前 Session";
   renderSessionSwitcher();
 }
 
@@ -6223,6 +6274,66 @@ function clearSessionUrl() {
   }
   if (url.toString() !== window.location.href) {
     window.history.replaceState(null, "", url.toString());
+  }
+}
+
+function rememberedSessionNavigation(hostId = activeAgentHostId) {
+  const host = cleanAgentHostId(hostId) || "personal";
+  const stored = readSessionNavigationStore()[host];
+  return normalizeSessionNavigation({ ...stored, host });
+}
+
+function rememberSessionNavigation(params = {}) {
+  const target = normalizeSessionNavigation(params);
+  if (!target) return;
+  const stored = readSessionNavigationStore();
+  stored[target.host] = { ...target, savedAt: Date.now() };
+  writeSessionNavigationStore(stored);
+}
+
+function forgetSessionNavigation(params = {}) {
+  const sessionId = String(params.sessionId || "").trim();
+  if (!sessionId) return;
+  const host = cleanAgentHostId(params.host) || activeAgentHostId || "personal";
+  const stored = readSessionNavigationStore();
+  const current = normalizeSessionNavigation({ ...stored[host], host });
+  if (current?.sessionId !== sessionId) return;
+  delete stored[host];
+  writeSessionNavigationStore(stored);
+}
+
+function normalizeSessionNavigation(params = {}) {
+  const sessionId = String(params.sessionId || "").trim();
+  if (!sessionId || sessionId.length > 120) return null;
+  const host = cleanAgentHostId(params.host) || "personal";
+  const title = String(params.title || "Untitled session").replace(/\s+/g, " ").trim().slice(0, 240);
+  const cwd = String(params.cwd || ".").trim().slice(0, 1_000) || ".";
+  return {
+    host,
+    cwd,
+    sessionId,
+    title,
+    transport: "app-server",
+    access: params.access === "full" ? "full" : "safe",
+    purpose: params.purpose === "think" ? "think" : "",
+    preview: host === "personal" ? "1" : "",
+  };
+}
+
+function readSessionNavigationStore() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LAST_SESSION_NAVIGATION_STORE_KEY) || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeSessionNavigationStore(stored) {
+  try {
+    localStorage.setItem(LAST_SESSION_NAVIGATION_STORE_KEY, JSON.stringify(stored));
+  } catch {
+    // Navigation persistence is optional; the current in-memory Session remains usable.
   }
 }
 

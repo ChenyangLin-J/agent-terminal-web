@@ -27,9 +27,11 @@ test("one app-server connection is shared per execution host", async () => {
 
   assert.equal(spawns.length, 1);
   assert.equal(spawns[0].command, "ssh");
-  assert.deepEqual(spawns[0].args.slice(-3), [
+  assert.deepEqual(spawns[0].args.slice(-5), [
     "company-mac",
     "/Applications/ChatGPT.app/Contents/Resources/codex",
+    "-c",
+    "notify='[]'",
     "app-server",
   ]);
   assert.equal(spawns[0].options.cwd, "/server/workspace");

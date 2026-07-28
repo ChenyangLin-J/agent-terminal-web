@@ -932,6 +932,10 @@ function connectControlEvents() {
       applyControlSessionEvent(payload.session);
       return;
     }
+    if (payload?.type === "remote-completion") {
+      applyRemoteCompletionEvent(payload);
+      return;
+    }
     if (payload?.type === "catalog") scheduleControlCatalogRefresh();
   };
   controlEvents.onerror = () => {
@@ -951,6 +955,55 @@ function applyControlSessionEvent(session) {
   }
   renderLiveSessions(next);
   if (session.exited || session.released) scheduleControlCatalogRefresh();
+}
+
+function applyRemoteCompletionEvent(payload) {
+  const hostId = cleanAgentHostId(payload?.hostId);
+  const sessionId = String(payload?.sessionId || "");
+  const turnId = String(payload?.turnId || "");
+  if (!hostId || !sessionId || !turnId) return;
+
+  const completedSessionState = (session) => {
+    return {
+      ...session,
+      lastCompletedTurnId: turnId,
+      lastCompletedAt: String(payload?.completedAt || ""),
+      hasUnreadResult: true,
+      updatedAt: String(payload?.completedAt || session.updatedAt || ""),
+    };
+  };
+  const applyLiveCompletion = (session) => {
+    if (
+      String(session?.sessionId || "") !== sessionId ||
+      (cleanAgentHostId(session?.hostId) || "personal") !== hostId
+    ) {
+      return session;
+    }
+    return completedSessionState(session);
+  };
+  const applySavedCompletion = (session) => {
+    if (
+      String(session?.id || "") !== sessionId ||
+      (cleanAgentHostId(session?.hostId) || "personal") !== hostId
+    ) {
+      return session;
+    }
+    return completedSessionState(session);
+  };
+  liveSessionsCache = liveSessionsCache.map(applyLiveCompletion);
+  savedSessionsCache = savedSessionsCache.map(applySavedCompletion);
+  renderLiveSessions(liveSessionsCache);
+  renderSavedCodexSessions(savedSessionsCache);
+
+  if (
+    activeSessionPreviewOnly &&
+    activeAgentHostId === hostId &&
+    activeSessionParams.sessionId === sessionId
+  ) {
+    activeSessionUnreadTurnId = turnId;
+    sessionPreviewRequestSequence += 1;
+    void loadSessionPreview(sessionId, sessionPreviewRequestSequence);
+  }
 }
 
 function scheduleControlCatalogRefresh() {

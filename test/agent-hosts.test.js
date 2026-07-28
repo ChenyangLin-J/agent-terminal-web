@@ -77,9 +77,11 @@ test("remote app-server uses SSH stdio and the Mac Codex absolute path", () => {
   });
 
   assert.equal(spawn.command, "ssh");
-  assert.deepEqual(spawn.args.slice(-3), [
+  assert.deepEqual(spawn.args.slice(-5), [
     "company-mac",
     "/Applications/ChatGPT.app/Contents/Resources/codex",
+    "-c",
+    "notify='[]'",
     "app-server",
   ]);
   assert.ok(spawn.args.includes("BatchMode=yes"));

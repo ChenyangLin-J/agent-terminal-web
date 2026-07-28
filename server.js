@@ -85,6 +85,11 @@ import {
 import { createAmapMcpProxy } from "./lib/amap-mcp-proxy.js";
 import { createPlaywrightMcpProxy } from "./lib/playwright-mcp-proxy.js";
 import { buildAppServerTurnAdditionalContext } from "./lib/app-server-turn-context.js";
+import {
+  normalizeRemoteTurnCompletion,
+  readRemoteNotificationTokens,
+  resolveRemoteNotificationHost,
+} from "./lib/remote-agent-notification.js";
 
 const AGENT_TIME_ZONE = "Asia/Shanghai";
 process.env.TZ = AGENT_TIME_ZONE;
@@ -135,6 +140,13 @@ const AGENT_HOST_STATE_DIR = path.resolve(
   process.env.AGENT_HOST_STATE_DIR ||
     path.join(path.dirname(AGENT_HOSTS_FILE), "host-state"),
 );
+const AGENT_REMOTE_NOTIFY_TOKENS_FILE = path.resolve(
+  process.env.AGENT_REMOTE_NOTIFY_TOKENS_FILE ||
+    path.join(path.dirname(AGENT_HOSTS_FILE), "notify-tokens.json"),
+);
+const AGENT_REMOTE_NOTIFY_TOKENS = readRemoteNotificationTokens(
+  AGENT_REMOTE_NOTIFY_TOKENS_FILE,
+);
 const AGENT_INTEGRATIONS_DIR = path.resolve(
   process.env.AGENT_INTEGRATIONS_DIR ||
     path.join(process.env.HOME, ".config", "agent-terminal-web", "integrations"),
@@ -184,6 +196,8 @@ const THREAD_CATALOG_CACHE_MS = Math.max(
   Number(process.env.AGENT_THREAD_CATALOG_CACHE_MS) || 2 * 60_000,
 );
 const CONTROL_EVENT_HEARTBEAT_MS = 25_000;
+const REMOTE_AGENT_NOTIFY_RATE_LIMIT = 120;
+const REMOTE_AGENT_NOTIFY_RATE_WINDOW_MS = 60_000;
 const HOME_PUSH_URL = process.env.HOME_PUSH_URL || "http://127.0.0.1:3050/internal/push";
 const HOME_PUSH_SUBSCRIBE_URL = process.env.HOME_PUSH_SUBSCRIBE_URL || `${HOME_PUSH_URL}/subscriptions`;
 const HOME_VAPID_PUBLIC_KEY = process.env.HOME_VAPID_PUBLIC_KEY || "";
@@ -248,6 +262,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/terminal" });
 const sessions = new Map();
 const controlEventClients = new Set();
+let remoteAgentNotifyRateWindow = { startedAt: Date.now(), requests: 0 };
 const pendingSessionControlEvents = new Map();
 const integrationMutationAttempts = new Map();
 const sessionShareStore = new SessionShareStore(AGENT_SESSION_SHARES_FILE);
@@ -370,6 +385,78 @@ app.post("/internal/codex-notify", async (req, res) => {
     });
     res.status(502).json({ error: "Home push failed." });
   }
+});
+
+app.post("/internal/remote-agent-notify", async (req, res) => {
+  if (!acceptRemoteAgentNotificationRequest()) {
+    res.status(429).json({ error: "Remote notification rate limit exceeded." });
+    return;
+  }
+  const agentHost = resolveRemoteNotificationHost({
+    authorization: req.get("authorization"),
+    hosts: AGENT_HOSTS,
+    tokens: AGENT_REMOTE_NOTIFY_TOKENS,
+  });
+  if (!agentHost) {
+    res.status(401).json({ error: "Remote notification is not authorized." });
+    return;
+  }
+
+  const completion = normalizeRemoteTurnCompletion(req.body);
+  if (!completion) {
+    res.status(400).json({ error: "Invalid remote completion event." });
+    return;
+  }
+
+  if (hasRememberedAgentSessionCompletion(completion.threadId, completion.turnId, agentHost.id)) {
+    res.json({ ok: true, duplicate: true });
+    return;
+  }
+
+  const state = rememberAgentSessionCompletion(
+    completion.threadId,
+    completion.turnId,
+    completion.completedAt,
+    agentHost.id,
+  );
+  invalidateThreadCatalog(agentHost);
+  emitControlEvent({
+    type: "remote-completion",
+    hostId: agentHost.id,
+    sessionId: completion.threadId,
+    turnId: completion.turnId,
+    completedAt: completion.completedAt,
+  });
+
+  const managedLiveSession = [...sessions.values()].some(
+    (session) =>
+      !session.exited &&
+      session.hostId === agentHost.id &&
+      session.sessionId === completion.threadId,
+  );
+  let notification = managedLiveSession
+    ? { sent: 0, subscriptionCount: 0, skipped: "managed-live-session" }
+    : { sent: 0, subscriptionCount: 0 };
+  if (!managedLiveSession) {
+    try {
+      notification = await sendRemoteAgentTurnNotification(agentHost, completion);
+    } catch (error) {
+      logAgentEvent("remote-turn-notification-failed", {
+        hostId: agentHost.id,
+        codexSessionId: completion.threadId,
+        turnId: completion.turnId,
+        message: cleanClientLogValue(error.message, 300),
+      });
+    }
+  }
+  logAgentEvent("remote-turn-completed", {
+    hostId: agentHost.id,
+    codexSessionId: completion.threadId,
+    turnId: completion.turnId,
+    sent: notification.sent,
+    subscriptionCount: notification.subscriptionCount,
+  });
+  res.json({ ok: true, state, notification });
 });
 
 app.post("/internal/mcp/amap", async (req, res) => {
@@ -1622,6 +1709,36 @@ async function sendHomeTurnNotification(session, event) {
     signal: AbortSignal.timeout(8_000),
   });
 
+  if (!response.ok) {
+    const detail = (await response.text()).slice(0, 300);
+    throw new Error(`Home push returned ${response.status}: ${detail}`);
+  }
+  return response.json();
+}
+
+async function sendRemoteAgentTurnNotification(agentHost, completion) {
+  const query = new URLSearchParams({
+    host: agentHost.id,
+    sessionId: completion.threadId,
+    transport: APP_SERVER_TRANSPORT,
+    preview: "1",
+  });
+  const response = await fetch(HOME_PUSH_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      source: "agent-web",
+      notification: {
+        title: `${agentHost.label} Agent 已完成`,
+        body: "任务已完成，点开查看结果。",
+        url: `/?${query}`,
+        tag: `agent-${agentHost.id}-${completion.threadId}`,
+        badge: 0,
+      },
+      target: { app: "agent" },
+    }),
+    signal: AbortSignal.timeout(8_000),
+  });
   if (!response.ok) {
     const detail = (await response.text()).slice(0, 300);
     throw new Error(`Home push returned ${response.status}: ${detail}`);
@@ -6770,15 +6887,52 @@ function rememberAgentSessionCompletion(
   const settingsKey = agentSessionSettingsKey(sessionId, hostId);
   if (!settingsKey || !cleanedTurnId) return agentSessionResultState(sessionId, "", null, hostId);
   const settings = readAgentSessionSettings();
+  const existing = settings[settingsKey] || {};
+  const recentCompletedTurnIds = normalizeRecentCompletedTurnIds([
+    ...(Array.isArray(existing.recentCompletedTurnIds) ? existing.recentCompletedTurnIds : []),
+    cleanedTurnId,
+  ]);
+  const existingCompletedAt = validIsoTimestamp(existing.lastCompletedAt);
+  const nextCompletedAt = validIsoTimestamp(completedAt) || new Date().toISOString();
+  const keepExistingLatest =
+    existingCompletedAt &&
+    new Date(existingCompletedAt).getTime() > new Date(nextCompletedAt).getTime();
   settings[settingsKey] = {
-    ...(settings[settingsKey] || {}),
-    access: normalizeAccessMode(settings[settingsKey]?.access),
-    lastCompletedTurnId: cleanedTurnId,
-    lastCompletedAt: validIsoTimestamp(completedAt) || new Date().toISOString(),
+    ...existing,
+    access: normalizeAccessMode(existing.access),
+    lastCompletedTurnId: keepExistingLatest
+      ? cleanTurnId(existing.lastCompletedTurnId)
+      : cleanedTurnId,
+    lastCompletedAt: keepExistingLatest ? existingCompletedAt : nextCompletedAt,
+    recentCompletedTurnIds,
     updatedAt: new Date().toISOString(),
   };
   writeAgentSessionSettings(settings);
   return agentSessionResultState(sessionId, cleanedTurnId, null, hostId);
+}
+
+function hasRememberedAgentSessionCompletion(
+  sessionId,
+  turnId,
+  hostId = PERSONAL_AGENT_HOST.id,
+) {
+  const cleanedTurnId = cleanTurnId(turnId);
+  if (!cleanedTurnId) return false;
+  const saved = agentSessionSetting(readAgentSessionSettings(), sessionId, hostId);
+  return (
+    cleanTurnId(saved.lastCompletedTurnId) === cleanedTurnId ||
+    normalizeRecentCompletedTurnIds(saved.recentCompletedTurnIds).includes(cleanedTurnId)
+  );
+}
+
+function normalizeRecentCompletedTurnIds(value) {
+  return [
+    ...new Set(
+      (Array.isArray(value) ? value : [])
+        .map((turnId) => cleanTurnId(turnId))
+        .filter(Boolean),
+    ),
+  ].slice(-100);
 }
 
 function rememberAgentSessionViewed(
@@ -6879,6 +7033,9 @@ function writeAgentSessionSettings(settings) {
             parentThreadTitle: cleanCustomTitle(setting.parentThreadTitle),
             lastCompletedTurnId: cleanTurnId(setting.lastCompletedTurnId),
             lastCompletedAt: validIsoTimestamp(setting.lastCompletedAt),
+            recentCompletedTurnIds: normalizeRecentCompletedTurnIds(
+              setting.recentCompletedTurnIds,
+            ),
             lastViewedTurnId: cleanTurnId(setting.lastViewedTurnId),
             lastViewedAt: validIsoTimestamp(setting.lastViewedAt),
           },
@@ -8035,6 +8192,15 @@ function emitCatalogControlEvent(agentHost = PERSONAL_AGENT_HOST) {
 
 function emitControlEvent(payload) {
   for (const response of controlEventClients) writeControlEvent(response, payload);
+}
+
+function acceptRemoteAgentNotificationRequest() {
+  const now = Date.now();
+  if (now - remoteAgentNotifyRateWindow.startedAt >= REMOTE_AGENT_NOTIFY_RATE_WINDOW_MS) {
+    remoteAgentNotifyRateWindow = { startedAt: now, requests: 0 };
+  }
+  remoteAgentNotifyRateWindow.requests += 1;
+  return remoteAgentNotifyRateWindow.requests <= REMOTE_AGENT_NOTIFY_RATE_LIMIT;
 }
 
 function writeControlEvent(response, payload) {

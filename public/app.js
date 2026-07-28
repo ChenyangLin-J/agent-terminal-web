@@ -203,6 +203,9 @@ const APP_READING_POSITION_SAVE_MS = 120;
 const LIVE_SESSIONS_FALLBACK_MS = 60_000;
 const SESSION_CATALOG_FALLBACK_MS = 5 * 60_000;
 const CONTROL_EVENT_CATALOG_DEBOUNCE_MS = 500;
+const REMOTE_AGENT_REQUEST_TIMEOUT_MS = 5_000;
+const REMOTE_HOST_RETRY_BASE_MS = 15_000;
+const REMOTE_HOST_RETRY_MAX_MS = 2 * 60_000;
 const DEFAULT_TRANSPORT = "app-server";
 const DEFAULT_ACCESS_MODE = "full";
 const APP_COMMANDS = [
@@ -244,6 +247,8 @@ let controlEventCatalogTimer = null;
 let sessionCatalogRefreshPromise = null;
 let sessionCatalogLastRefreshedAt = 0;
 let sessionCatalogLoaded = false;
+const remoteHostRetryTimers = new Map();
+const remoteHostRetryAttempts = new Map();
 let reconnectTimer = null;
 let clientHeartbeatTimer = null;
 let visibleProbeTimer = null;
@@ -790,6 +795,11 @@ function agentHostLabel(hostId) {
   return agentHosts.find((host) => host.id === id)?.label || (id === "personal" ? "个人" : id);
 }
 
+function isRemoteAgentHost(hostId) {
+  const id = cleanAgentHostId(hostId) || "personal";
+  return agentHosts.find((host) => host.id === id)?.type === "ssh";
+}
+
 function accountMatches(session, filter = activeAccountFilter) {
   return filter === "all" || (cleanAgentHostId(session?.hostId) || "personal") === filter;
 }
@@ -963,21 +973,93 @@ async function loadSessionsAcrossHosts(path, { previousSessions = [], onPartial 
   const combinedSessions = () => hosts.flatMap((host) => sessionsByHost.get(host.id) || []);
   await Promise.all(
     hosts.map(async (host) => {
+      const retryKey = remoteHostRetryKey(path, host.id);
+      if (isRemoteAgentHost(host.id) && remoteHostRetryTimers.has(retryKey)) return;
       try {
         const data = await apiJsonForHost(path, host.id);
-        if (!data || data.error) return;
-        sessionsByHost.set(host.id, (Array.isArray(data.sessions) ? data.sessions : []).map((session) => ({
-          ...session,
-          hostId: session.hostId || data.host?.id || host.id,
-          hostLabel: session.hostLabel || data.host?.label || host.label || host.id,
-        })));
+        if (!data || data.error) throw new Error(data?.error || "Session 列表暂不可用");
+        clearRemoteHostRetry(path, host.id);
+        sessionsByHost.set(host.id, normalizeHostSessions(data, host));
         onPartial?.(combinedSessions());
       } catch {
         // Keep the last successful data for this host while it is temporarily unavailable.
+        scheduleRemoteHostRetry(path, host.id);
       }
     }),
   );
   return combinedSessions();
+}
+
+function normalizeHostSessions(data, host) {
+  return (Array.isArray(data.sessions) ? data.sessions : []).map((session) => ({
+    ...session,
+    hostId: session.hostId || data.host?.id || host.id,
+    hostLabel: session.hostLabel || data.host?.label || host.label || host.id,
+  }));
+}
+
+function remoteHostRetryKey(path, hostId) {
+  return `${cleanAgentHostId(hostId) || "personal"}:${path}`;
+}
+
+function clearRemoteHostRetry(path, hostId) {
+  const key = remoteHostRetryKey(path, hostId);
+  window.clearTimeout(remoteHostRetryTimers.get(key));
+  remoteHostRetryTimers.delete(key);
+  remoteHostRetryAttempts.delete(key);
+}
+
+function scheduleRemoteHostRetry(path, hostId) {
+  if (!isRemoteAgentHost(hostId)) return;
+  const key = remoteHostRetryKey(path, hostId);
+  if (remoteHostRetryTimers.has(key)) return;
+  const attempt = remoteHostRetryAttempts.get(key) || 0;
+  const delay = Math.min(REMOTE_HOST_RETRY_BASE_MS * 2 ** attempt, REMOTE_HOST_RETRY_MAX_MS);
+  remoteHostRetryAttempts.set(key, attempt + 1);
+  remoteHostRetryTimers.set(
+    key,
+    window.setTimeout(() => {
+      remoteHostRetryTimers.delete(key);
+      if (navigator.onLine === false) {
+        scheduleRemoteHostRetry(path, hostId);
+        return;
+      }
+      void retryRemoteSessionList(path, hostId);
+    }, delay),
+  );
+}
+
+async function retryRemoteSessionList(path, hostId) {
+  const host = agentHosts.find((candidate) => candidate.id === hostId);
+  if (!host || !isRemoteAgentHost(hostId)) return;
+  try {
+    const data = await apiJsonForHost(path, hostId);
+    if (!data || data.error) throw new Error(data?.error || "Session 列表暂不可用");
+    const previousSessions = currentSessionsForPath(path);
+    const sessions = [
+      ...previousSessions.filter(
+        (session) => (cleanAgentHostId(session?.hostId) || "personal") !== hostId,
+      ),
+      ...normalizeHostSessions(data, host),
+    ];
+    clearRemoteHostRetry(path, hostId);
+    renderSessionsForPath(path, sessions);
+  } catch {
+    scheduleRemoteHostRetry(path, hostId);
+  }
+}
+
+function currentSessionsForPath(path) {
+  if (path === "/api/sessions") return liveSessionsCache;
+  if (path === "/api/codex-sessions") return savedSessionsCache;
+  if (path === "/api/codex-sessions/archived") return archivedSessionsCache;
+  return [];
+}
+
+function renderSessionsForPath(path, sessions) {
+  if (path === "/api/sessions") renderLiveSessions(sessions);
+  if (path === "/api/codex-sessions") renderSavedCodexSessions(sessions);
+  if (path === "/api/codex-sessions/archived") renderArchivedCodexSessions(sessions);
 }
 
 async function searchSavedSessions() {
@@ -7100,12 +7182,32 @@ async function apiJson(url) {
 }
 
 async function apiJsonForHost(url, hostId) {
-  const response = await fetch(agentHostApiUrl(url, hostId));
-  if (response.status === 401) {
-    redirectToLogin();
-    return null;
+  const timeoutMs = isRemoteAgentHost(hostId) ? REMOTE_AGENT_REQUEST_TIMEOUT_MS : 0;
+  const controller = timeoutMs > 0 ? new AbortController() : null;
+  const timeout = controller
+    ? window.setTimeout(() => controller.abort(), timeoutMs)
+    : null;
+  try {
+    const response = await fetch(
+      agentHostApiUrl(url, hostId),
+      controller ? { signal: controller.signal } : undefined,
+    );
+    if (response.status === 401) {
+      redirectToLogin();
+      return null;
+    }
+    return await response.json();
+  } catch (error) {
+    if (controller?.signal.aborted) {
+      const timeoutError = new Error(`远端 Host 请求超过 ${timeoutMs}ms`);
+      timeoutError.name = "AgentHostTimeoutError";
+      timeoutError.code = "AGENT_HOST_TIMEOUT";
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    if (timeout !== null) window.clearTimeout(timeout);
   }
-  return response.json();
 }
 
 function agentHostApiUrl(value, hostId = activeAgentHostId) {

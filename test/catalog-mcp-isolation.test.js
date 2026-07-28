@@ -14,6 +14,7 @@ test("catalog metadata uses the shared App Server by default", () => {
     /SHARED_APP_SERVER_ENABLED\s*\?\s*createAgentAppServerClient\(WORKSPACE_ROOT,/,
   );
   assert.match(serverSource, /const THREAD_CATALOG_CACHE_MS = Math\.max/);
+  assert.match(serverSource, /AGENT_THREAD_CATALOG_CACHE_MS\) \|\| 2 \* 60_000/);
   assert.match(serverSource, /cachedThreadCatalogPage\(\{ archived, agentHost \}\)/);
   assert.match(serverSource, /if \(cached\?\.promise\) return cached\.promise/);
   assert.match(serverSource, /thread-catalog-stale-fallback/);

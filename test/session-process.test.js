@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { extractSessionProcessFromJsonl } from "../lib/session-process.js";
+import {
+  extractSessionProcessFromJsonl,
+  warmSessionProcessIndex,
+} from "../lib/session-process.js";
 
 const turnId = "019f8d05-7a2d-7f43-a52c-caa9f5dcd1cf";
 
@@ -70,6 +73,7 @@ test("historical process details are extracted for one requested turn", async (t
 test("older process details stream from outside the recent tail", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "agent-session-process-old-"));
   const file = path.join(directory, "rollout.jsonl");
+  const indexFile = path.join(directory, "index", "turns.json");
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const record = response("message", {
     id: "message-old",
@@ -81,10 +85,51 @@ test("older process details stream from outside the recent tail", async (t) => {
   const filler = JSON.stringify({ type: "event_msg", payload: { text: "x".repeat(1024) } });
   await fs.writeFile(file, `${JSON.stringify(record)}\n${`${filler}\n`.repeat(80)}`);
 
-  const items = await extractSessionProcessFromJsonl(file, "turn-old", { maxBytes: 64 * 1024 });
+  const index = await warmSessionProcessIndex(file, indexFile);
+  const items = await extractSessionProcessFromJsonl(file, "turn-old", {
+    maxBytes: 64 * 1024,
+    indexFile,
+  });
 
   assert.equal(items.length, 1);
   assert.equal(items[0].text, "较早的处理过程");
+  assert.ok(index.turns["turn-old"][1] < index.sourceSize);
+  assert.deepEqual(JSON.parse(await fs.readFile(indexFile, "utf8")).turns["turn-old"], index.turns["turn-old"]);
+});
+
+test("the process offset index scans only appended JSONL content on refresh", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "agent-session-process-append-"));
+  const file = path.join(directory, "rollout.jsonl");
+  const indexFile = path.join(directory, "index.json");
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const first = response("message", {
+    id: "message-first",
+    role: "assistant",
+    phase: "commentary",
+    content: [{ type: "output_text", text: "第一轮" }],
+    internal_chat_message_metadata_passthrough: { turn_id: "turn-first" },
+  });
+  await fs.writeFile(file, `${JSON.stringify(first)}\n`);
+  const initial = await warmSessionProcessIndex(file, indexFile);
+
+  const second = response("message", {
+    id: "message-second",
+    role: "assistant",
+    phase: "commentary",
+    content: [{ type: "output_text", text: "新增一轮" }],
+    internal_chat_message_metadata_passthrough: { turn_id: "turn-second" },
+  });
+  await fs.appendFile(file, `${JSON.stringify(second)}\n`);
+  const updated = await warmSessionProcessIndex(file, indexFile);
+
+  assert.equal(updated.turns["turn-first"][0], initial.turns["turn-first"][0]);
+  assert.ok(updated.turns["turn-second"][0] >= initial.sourceSize);
+  assert.equal(updated.sourceSize, (await fs.stat(file)).size);
+  const items = await extractSessionProcessFromJsonl(file, "turn-first", {
+    maxBytes: 64 * 1024,
+    indexFile,
+  });
+  assert.equal(items[0].text, "第一轮");
 });
 
 test("exec orchestration restores nested commands instead of the exec wrapper", async (t) => {
@@ -134,6 +179,8 @@ test("historical process details load only when a restored group is expanded", a
   assert.match(server, /app\.get\("\/api\/session-process\/:sessionId\/:turnId"/);
   assert.match(server, /\(!isRestoredTurn && !isCodexTurnId\(turnId\)\)/);
   assert.match(server, /session\.historyProcessCache \|\|= new Map\(\)/);
+  assert.match(server, /indexFile: sessionProcessIndexFile\(session\.sessionId\)/);
+  assert.match(server, /scheduleSessionProcessIndexWarm\(session\)/);
   assert.match(server, /logAgentEvent\("session-process-load"/);
   assert.match(app, /group\.addEventListener\("toggle"[\s\S]*loadHistoricalProcessDetails\(turnId\)/);
   assert.match(app, /historicalProcessLoads\.set\(turnId, \{ status: "loading", items: \[\] \}\)/);

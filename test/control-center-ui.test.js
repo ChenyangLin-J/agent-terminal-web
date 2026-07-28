@@ -23,8 +23,14 @@ test("the default Agent home is a two-destination Session control center", () =>
   assert.match(app, /function setControlCenterFilter\(filter\)/);
   assert.match(app, /function controlStatusFilterMatches\(kind\)/);
   assert.match(app, /function syncControlCenterFilterReset\(\)/);
-  assert.match(app, /sessionCatalogTimer = window\.setInterval\(refreshSessionCatalogs, 60_000\)/);
-  assert.match(app, /sessionsTimer = window\.setInterval\(loadLiveSessions, 10_000\)/);
+  assert.match(app, /const LIVE_SESSIONS_FALLBACK_MS = 60_000/);
+  assert.match(app, /const SESSION_CATALOG_FALLBACK_MS = 5 \* 60_000/);
+  assert.match(app, /new EventSource\("\/api\/control-events"\)/);
+  assert.match(app, /payload\.instanceId !== loadedAgentInstance[\s\S]*refreshLists\(\{ forceCatalog: true \}\)/);
+  assert.match(app, /Date\.now\(\) - sessionCatalogLastRefreshedAt < SESSION_CATALOG_FALLBACK_MS/);
+  assert.match(app, /if \(sessionCatalogRefreshPromise\) return sessionCatalogRefreshPromise/);
+  assert.match(app, /sessionCatalogTimer = window\.setInterval\(refreshSessionCatalogs, SESSION_CATALOG_FALLBACK_MS\)/);
+  assert.match(app, /sessionsTimer = window\.setInterval\(loadLiveSessions, LIVE_SESSIONS_FALLBACK_MS\)/);
   assert.match(app, /previousSessions: savedSessionsCache,[\s\S]*onPartial: renderSavedCodexSessions/);
   assert.match(app, /Keep the last successful data for this host while it is temporarily unavailable/);
 });

@@ -200,6 +200,9 @@ const TERMINAL_DELAYED_HISTORY_GUARD_MS = 60_000;
 const APP_INITIAL_TURN_LIMIT = 10;
 const APP_READING_POSITION_LIMIT = 40;
 const APP_READING_POSITION_SAVE_MS = 120;
+const LIVE_SESSIONS_FALLBACK_MS = 60_000;
+const SESSION_CATALOG_FALLBACK_MS = 5 * 60_000;
+const CONTROL_EVENT_CATALOG_DEBOUNCE_MS = 500;
 const DEFAULT_TRANSPORT = "app-server";
 const DEFAULT_ACCESS_MODE = "full";
 const APP_COMMANDS = [
@@ -236,6 +239,11 @@ let pageDownLongPressFired = false;
 let socket = null;
 let sessionsTimer = null;
 let sessionCatalogTimer = null;
+let controlEvents = null;
+let controlEventCatalogTimer = null;
+let sessionCatalogRefreshPromise = null;
+let sessionCatalogLastRefreshedAt = 0;
+let sessionCatalogLoaded = false;
 let reconnectTimer = null;
 let clientHeartbeatTimer = null;
 let visibleProbeTimer = null;
@@ -609,6 +617,7 @@ async function bootstrap() {
     loadedAgentInstance = await readAgentInstance();
     await loadAgentHosts();
     await loadProjects();
+    connectControlEvents();
     if (globalThis.Notification?.permission === "granted") {
       void ensureAgentPushSubscription().catch(logPushRegistrationError);
     }
@@ -838,14 +847,33 @@ function syncControlCenterHostUrl() {
   window.history.replaceState(null, "", url.toString());
 }
 
-async function refreshLists() {
+async function refreshLists({ forceCatalog = false } = {}) {
   const savedScrollY = startScreen.classList.contains("hidden") ? null : window.scrollY;
-  await Promise.all([loadLiveSessions(), refreshSessionCatalogs()]);
+  await Promise.all([loadLiveSessions(), refreshSessionCatalogs({ force: forceCatalog })]);
   if (savedScrollY !== null) window.scrollTo({ top: savedScrollY, behavior: "auto" });
 }
 
-async function refreshSessionCatalogs() {
-  await Promise.all([loadSavedCodexSessions(), loadArchivedCodexSessions()]);
+async function refreshSessionCatalogs({ force = false } = {}) {
+  if (
+    !force &&
+    sessionCatalogLoaded &&
+    Date.now() - sessionCatalogLastRefreshedAt < SESSION_CATALOG_FALLBACK_MS
+  ) {
+    return;
+  }
+  if (sessionCatalogRefreshPromise) return sessionCatalogRefreshPromise;
+  sessionCatalogRefreshPromise = Promise.all([
+    loadSavedCodexSessions(),
+    loadArchivedCodexSessions(),
+  ])
+    .then(() => {
+      sessionCatalogLoaded = true;
+      sessionCatalogLastRefreshedAt = Date.now();
+    })
+    .finally(() => {
+      sessionCatalogRefreshPromise = null;
+    });
+  return sessionCatalogRefreshPromise;
 }
 
 async function loadLiveSessions() {
@@ -854,6 +882,56 @@ async function loadLiveSessions() {
     onPartial: renderLiveSessions,
   });
   renderLiveSessions(sessions);
+}
+
+function connectControlEvents() {
+  if (!globalThis.EventSource || controlEvents) return;
+  controlEvents = new EventSource("/api/control-events");
+  controlEvents.onmessage = (event) => {
+    let payload;
+    try {
+      payload = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+    if (payload?.type === "ready") {
+      if (payload.instanceId && loadedAgentInstance && payload.instanceId !== loadedAgentInstance) {
+        loadedAgentInstance = payload.instanceId;
+        void refreshLists({ forceCatalog: true });
+      }
+      return;
+    }
+    if (payload?.type === "session" && payload.session) {
+      applyControlSessionEvent(payload.session);
+      return;
+    }
+    if (payload?.type === "catalog") scheduleControlCatalogRefresh();
+  };
+  controlEvents.onerror = () => {
+    // The periodic refresh remains as a fallback while EventSource reconnects.
+  };
+}
+
+function applyControlSessionEvent(session) {
+  const hostId = cleanAgentHostId(session.hostId) || "personal";
+  const next = liveSessionsCache.filter(
+    (candidate) => !(candidate.id === session.id && (cleanAgentHostId(candidate.hostId) || "personal") === hostId),
+  );
+  if (session.released) {
+    next.push({ ...session, hostId, exited: false, suspended: true });
+  } else if (!session.exited) {
+    next.push({ ...session, hostId });
+  }
+  renderLiveSessions(next);
+  if (session.exited || session.released) scheduleControlCatalogRefresh();
+}
+
+function scheduleControlCatalogRefresh() {
+  window.clearTimeout(controlEventCatalogTimer);
+  controlEventCatalogTimer = window.setTimeout(() => {
+    controlEventCatalogTimer = null;
+    void refreshSessionCatalogs({ force: true });
+  }, CONTROL_EVENT_CATALOG_DEBOUNCE_MS);
 }
 
 async function loadSavedCodexSessions() {
@@ -1929,7 +2007,7 @@ async function setCodexSessionFavorite(sessionId, favorited, hostId = activeAgen
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.error || "Session 置顶状态保存失败。");
     }
-    await refreshLists();
+    await refreshLists({ forceCatalog: true });
     if (sessionSearchInput.value.trim() && !sessionSearchResults.classList.contains("hidden")) {
       await searchSavedSessions();
     }
@@ -4839,11 +4917,41 @@ function renderStatus(status) {
   ) {
     renderAppTranscript({ follow: isAppTranscriptAtBottom() });
   }
+  if (activeTransport === "app-server" && status.released && status.exited) {
+    enterReleasedSessionPreview(status);
+    return;
+  }
   if (activeTransport === "app-server" && activeSessionReady && promptInput.value.includes("$")) {
     updateComposerSuggestions();
   }
   syncSessionUrl(status);
   if (!status.exited) flushPendingPreviewSubmission();
+}
+
+function enterReleasedSessionPreview(status) {
+  closeSocket();
+  activeSessionPreviewOnly = true;
+  activeSessionId = "";
+  activeSessionParams = {
+    ...activeSessionParams,
+    attach: "",
+    mode: "resume-id",
+    preview: "1",
+    new: "",
+  };
+  currentSessionExited = false;
+  activeSessionReady = false;
+  activeStartupQueueSupported = false;
+  activeTurnInterruptSupported = false;
+  activeSessionCapabilities = {};
+  appTranscriptSource = "disk";
+  const banner = appServerTranscript.querySelector(".app-history-banner span");
+  if (banner) banner.textContent = "运行时已自动释放 · 发送消息时恢复";
+  rememberSessionNavigation(activeSessionParams);
+  syncAppSessionToolbar();
+  setConnectedState("preview");
+  syncPreviewSessionUrl();
+  scheduleControlCatalogRefresh();
 }
 
 function transcriptTurnStateKey() {
@@ -4995,8 +5103,8 @@ function showStartScreen() {
   window.clearInterval(sessionsTimer);
   window.clearInterval(sessionCatalogTimer);
   refreshLists().then(scrollStartScreenToTop);
-  sessionsTimer = window.setInterval(loadLiveSessions, 10_000);
-  sessionCatalogTimer = window.setInterval(refreshSessionCatalogs, 60_000);
+  sessionsTimer = window.setInterval(loadLiveSessions, LIVE_SESSIONS_FALLBACK_MS);
+  sessionCatalogTimer = window.setInterval(refreshSessionCatalogs, SESSION_CATALOG_FALLBACK_MS);
 }
 
 function scrollStartScreenToTop() {
@@ -5016,7 +5124,7 @@ function showSessionScreen() {
   window.clearInterval(sessionsTimer);
   window.clearInterval(sessionCatalogTimer);
   void loadLiveSessions();
-  sessionsTimer = window.setInterval(loadLiveSessions, 10_000);
+  sessionsTimer = window.setInterval(loadLiveSessions, LIVE_SESSIONS_FALLBACK_MS);
   fitTerminal();
 }
 

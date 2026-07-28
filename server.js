@@ -65,7 +65,10 @@ import {
   readSessionPreviews,
   saveSessionPreview,
 } from "./lib/session-preview.js";
-import { extractSessionProcessFromJsonl } from "./lib/session-process.js";
+import {
+  extractSessionProcessFromJsonl,
+  warmSessionProcessIndex,
+} from "./lib/session-process.js";
 import {
   normalizeShareMessages,
   renderSessionSharePage,
@@ -117,6 +120,7 @@ const CODEX_SESSION_ARCHIVE_FILE = path.join(CODEX_HOME, "session-archive.json")
 const AGENT_WEB_SESSIONS_FILE = path.join(CODEX_HOME, "agent-web-sessions.json");
 const AGENT_SESSION_SETTINGS_FILE = path.join(CODEX_HOME, "agent-session-settings.json");
 const CODEX_SESSION_PREVIEWS_FILE = path.join(CODEX_HOME, "agent-session-previews.json");
+const CODEX_SESSION_PROCESS_INDEX_ROOT = path.join(CODEX_HOME, "agent-session-process-index");
 const AGENT_SESSION_FAVORITES_FILE = path.resolve(
   process.env.AGENT_SESSION_FAVORITES_FILE ||
     path.join(path.dirname(CODEX_HOME), ".local", "share", "home-portal", "agent-session-favorites.json"),
@@ -175,13 +179,15 @@ const CATALOG_APP_SERVER_IDLE_MS = Math.max(
 );
 const THREAD_CATALOG_CACHE_MS = Math.max(
   1_000,
-  Number(process.env.AGENT_THREAD_CATALOG_CACHE_MS) || 30_000,
+  Number(process.env.AGENT_THREAD_CATALOG_CACHE_MS) || 2 * 60_000,
 );
+const CONTROL_EVENT_HEARTBEAT_MS = 25_000;
 const HOME_PUSH_URL = process.env.HOME_PUSH_URL || "http://127.0.0.1:3050/internal/push";
 const HOME_PUSH_SUBSCRIBE_URL = process.env.HOME_PUSH_SUBSCRIBE_URL || `${HOME_PUSH_URL}/subscriptions`;
 const HOME_VAPID_PUBLIC_KEY = process.env.HOME_VAPID_PUBLIC_KEY || "";
 const APP_SERVER_TRANSPORT = "app-server";
 const APP_SERVER_RELEASE_REASON_DETACHED_TTL = "detached-ttl";
+const APP_SERVER_RELEASE_REASON_IDLE_TTL = "idle-ttl";
 const FULL_ACCESS_MODE = "full";
 const THINK_SESSION_PURPOSE = "think";
 const THINKING_SKILL_INVOCATION = "$thinking-partner";
@@ -208,6 +214,8 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/terminal" });
 const sessions = new Map();
+const controlEventClients = new Set();
+const pendingSessionControlEvents = new Map();
 const integrationMutationAttempts = new Map();
 const sessionShareStore = new SessionShareStore(AGENT_SESSION_SHARES_FILE);
 void pruneExpiredSessionShares();
@@ -219,6 +227,10 @@ let catalogAppServerIdleTimer = null;
 let catalogAppServerActiveUses = 0;
 let agentHostAppServerPool = null;
 const threadCatalogPageCache = new Map();
+const codexSessionFileCache = new Map();
+const sessionProcessIndexWarmQueue = new Map();
+let sessionProcessIndexWarmTimer = null;
+let sessionProcessIndexWarmRunning = false;
 const agentInstanceId = cryptoRandomId();
 const personalMemoryScheduler = createPersonalMemoryScheduler({
   delayMs: PERSONAL_MEMORY_SETTLE_MS,
@@ -302,6 +314,7 @@ app.post("/internal/codex-notify", async (req, res) => {
   resetDetachedCleanupAfterWork(session);
   persistRestorableWebSession(session);
   broadcast(session, "status", publicSession(session));
+  scheduleSessionProcessIndexWarm(session);
   if (session.hostId === PERSONAL_AGENT_HOST.id) {
     personalMemoryScheduler.schedule(threadId || session.id);
   }
@@ -481,6 +494,24 @@ app.get("/open/local", async (req, res) => {
 
 app.use("/api", requireAuth);
 
+app.get("/api/control-events", (req, res) => {
+  res.set({
+    "Cache-Control": "private, no-store",
+    Connection: "keep-alive",
+    "Content-Type": "text/event-stream",
+    "X-Accel-Buffering": "no",
+  });
+  res.flushHeaders?.();
+  controlEventClients.add(res);
+  writeControlEvent(res, { type: "ready", instanceId: agentInstanceId });
+  const heartbeat = setInterval(() => res.write(": keepalive\n\n"), CONTROL_EVENT_HEARTBEAT_MS);
+  heartbeat.unref?.();
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    controlEventClients.delete(res);
+  });
+});
+
 app.get("/api/session-shares", async (req, res) => {
   const agentHost = requestAgentHost(req, res);
   if (!agentHost) return;
@@ -649,8 +680,7 @@ app.get("/api/session-image/:sessionId/:itemId", async (req, res) => {
     try {
       session.historyProcessCache ||= new Map();
       if (!session.historyProcessCache.has(turnId)) {
-        const file = await findCodexSessionFile(session.sessionId);
-        const items = file ? await extractSessionProcessFromJsonl(file, turnId) : [];
+        const items = await loadHistoricalSessionProcess(session, turnId);
         session.historyProcessCache.set(turnId, items);
       }
       filePath = viewedImagePath(session, itemId);
@@ -707,8 +737,7 @@ app.get("/api/session-process/:sessionId/:turnId", async (req, res) => {
     session.historyProcessCache ||= new Map();
     const cached = session.historyProcessCache.has(turnId);
     if (!cached) {
-      const file = await findCodexSessionFile(session.sessionId);
-      const items = file ? await extractSessionProcessFromJsonl(file, turnId) : [];
+      const items = await loadHistoricalSessionProcess(session, turnId);
       session.historyProcessCache.set(turnId, items);
     }
     const items = session.historyProcessCache.get(turnId) || [];
@@ -1267,6 +1296,7 @@ app.put("/api/codex-sessions/:id/title", async (req, res) => {
         broadcast(session, "status", publicSession(session));
       }
     }
+    invalidateThreadCatalog(agentHost);
     res.json({ id, customTitle: title, nativeNameSaved });
   } catch (error) {
     res.status(500).json({ error: `Failed to save title: ${error.message}` });
@@ -1286,6 +1316,7 @@ app.put("/api/codex-sessions/:id/favorite", (req, res) => {
 
   try {
     setAgentSessionFavorite(agentSessionFavoritesFile(agentHost), id, favorited);
+    emitCatalogControlEvent(agentHost);
     res.json({ id, favorited });
   } catch (error) {
     res.status(500).json({ error: `Failed to update favorite: ${error.message}` });
@@ -2022,6 +2053,8 @@ function createAppServerSession(cwd, launch, restored = {}) {
     appServiceTier: ["priority", "default"].includes(restored.appServiceTier) ? restored.appServiceTier : null,
     clients: new Set(),
     cleanupTimer: null,
+    runtimeLeaseTimer: null,
+    lastMeaningfulActivityAt: startedAt,
     exited: false,
     exitCode: null,
     signal: null,
@@ -2040,6 +2073,7 @@ function createAppServerSession(cwd, launch, restored = {}) {
   sessions.set(id, session);
   persistRestorableWebSession(session);
   wireAppServerSession(session);
+  renewAppServerRuntimeLease(session);
   void initializeAppServerSession(session, launch);
   logAgentEvent("session-start", {
     webSessionId: session.id,
@@ -2131,6 +2165,7 @@ async function initializeAppServerSession(session, launch) {
     persistRestorableWebSession(session);
     broadcast(session, "app-transcript", publicAppTranscript(session));
     broadcast(session, "status", publicSession(session));
+    scheduleSessionProcessIndexWarm(session);
     void drainAppServerStartupPrompts(session);
   } catch (error) {
     appendSessionOutput(session, `\r\n\x1b[31mApp Server failed to start: ${error.message}\x1b[0m\r\n`);
@@ -2342,7 +2377,8 @@ function listDetachedSessions() {
     const transport = record.transport === APP_SERVER_TRANSPORT ? APP_SERVER_TRANSPORT : "terminal";
     const explicitlyReleased =
       transport === APP_SERVER_TRANSPORT
-        ? record.released === true && record.releaseReason === APP_SERVER_RELEASE_REASON_DETACHED_TTL
+        ? record.released === true &&
+          [APP_SERVER_RELEASE_REASON_DETACHED_TTL, APP_SERVER_RELEASE_REASON_IDLE_TTL].includes(record.releaseReason)
         : Boolean(record.released);
     // Older builds rewrote every App Server record as released during boot.
     // Only a reason-tagged release was an intentional runtime pause.
@@ -2432,6 +2468,11 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
   ws.clientId = clientId;
   closeDuplicateClient(session, ws);
   session.clients.add(ws);
+  if (session.transport === APP_SERVER_TRANSPORT) {
+    session.detachedAt = null;
+    persistRestorableWebSession(session);
+  }
+  queueSessionControlEvent(session);
   logAgentEvent("ws-attach", {
     webSessionId: session.id,
     codexSessionId: session.sessionId,
@@ -2895,6 +2936,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
   ws.on("close", (code, reason) => {
     clearInterval(heartbeatTimer);
     session.clients.delete(ws);
+    queueSessionControlEvent(session);
     logAgentEvent("ws-close", {
       webSessionId: session.id,
       codexSessionId: session.sessionId,
@@ -2971,6 +3013,16 @@ function logControlMessage(session, ws, kind, data, fields = {}) {
 }
 
 function scheduleCleanup(session) {
+  if (session.transport === APP_SERVER_TRANSPORT) {
+    if (session.exited) {
+      sessions.delete(session.id);
+      return;
+    }
+    if (!session.detachedAt) session.detachedAt = new Date().toISOString();
+    persistRestorableWebSession(session);
+    scheduleAppServerRuntimeLease(session);
+    return;
+  }
   if (session.cleanupTimer) return;
   if (!session.detachedAt) session.detachedAt = new Date().toISOString();
   if (!session.exited) persistRestorableWebSession(session);
@@ -3035,6 +3087,56 @@ function renewSessionRetention(session) {
     clearTimeout(session.cleanupTimer);
     session.cleanupTimer = null;
   }
+  renewAppServerRuntimeLease(session);
+}
+
+function renewAppServerRuntimeLease(session) {
+  if (session?.transport !== APP_SERVER_TRANSPORT || session.exited || session.released) return;
+  session.lastMeaningfulActivityAt = new Date().toISOString();
+  scheduleAppServerRuntimeLease(session, { reset: true });
+}
+
+function scheduleAppServerRuntimeLease(session, { reset = false } = {}) {
+  if (session?.transport !== APP_SERVER_TRANSPORT || session.exited || session.released) return;
+  if (session.runtimeLeaseTimer && !reset) return;
+  if (session.runtimeLeaseTimer) clearTimeout(session.runtimeLeaseTimer);
+  const lastMeaningfulAt =
+    validSessionTimestamp(session.lastMeaningfulActivityAt) || new Date().toISOString();
+  const expiresAt = new Date(Date.parse(lastMeaningfulAt) + SESSION_TTL_MS).toISOString();
+  const delayMs = Math.max(0, Date.parse(expiresAt) - Date.now());
+  session.runtimeLeaseTimer = setTimeout(() => expireAppServerRuntimeLease(session), delayMs);
+  session.runtimeLeaseTimer.unref?.();
+}
+
+function expireAppServerRuntimeLease(session) {
+  session.runtimeLeaseTimer = null;
+  if (session.exited || session.released) return;
+  const lastMeaningfulAt =
+    validSessionTimestamp(session.lastMeaningfulActivityAt) || new Date().toISOString();
+  const remainingMs = Date.parse(lastMeaningfulAt) + SESSION_TTL_MS - Date.now();
+  if (remainingMs > 0) {
+    scheduleAppServerRuntimeLease(session);
+    return;
+  }
+  if (sessionHasActiveWork(session)) {
+    const activeRecheckMs = Math.min(60_000, Math.max(100, Math.floor(SESSION_TTL_MS / 4)));
+    session.runtimeLeaseTimer = setTimeout(() => expireAppServerRuntimeLease(session), activeRecheckMs);
+    session.runtimeLeaseTimer.unref?.();
+    logAgentEvent("runtime-release-deferred", {
+      webSessionId: session.id,
+      codexSessionId: session.sessionId,
+      reason: "active-work",
+    });
+    return;
+  }
+  logAgentEvent("session-runtime-release", {
+    webSessionId: session.id,
+    codexSessionId: session.sessionId,
+    reason: APP_SERVER_RELEASE_REASON_IDLE_TTL,
+    connectedClients: session.clients.size,
+  });
+  releaseAppServerSessionRuntime(session, { reason: APP_SERVER_RELEASE_REASON_IDLE_TTL });
+  sessions.delete(session.id);
 }
 
 function sessionHasActiveWork(session) {
@@ -3042,6 +3144,7 @@ function sessionHasActiveWork(session) {
     session?.turnState?.active ||
       session?.appServer?.activeTurnId ||
       session?.pendingStartupPrompts?.length ||
+      session?.pendingServerRequests?.size ||
       session?.sideChat?.active ||
       realtimeBusy(session?.realtime),
   );
@@ -5630,6 +5733,7 @@ function handleAppServerNotification(session, message) {
     );
     persistRestorableWebSession(session);
     broadcast(session, "status", publicSession(session));
+    scheduleSessionProcessIndexWarm(session);
     if (!stopped) {
       if (session.hostId === PERSONAL_AGENT_HOST.id) {
         personalMemoryScheduler.schedule(session.sessionId || session.id);
@@ -5881,6 +5985,10 @@ async function sendAppServerTurnNotification(session, turnId) {
 
 function markAppServerExited(session, error) {
   if (session.exited) return;
+  if (session.runtimeLeaseTimer) {
+    clearTimeout(session.runtimeLeaseTimer);
+    session.runtimeLeaseTimer = null;
+  }
   closeSideChat(session);
   session.realtime = { ...restoreRealtimeState(), status: "failed", error: error?.message || "App Server 已关闭。" };
   session.ready = false;
@@ -6186,10 +6294,19 @@ function publicSession(session) {
         ? detachedExpiresAt({ ...session, detachedAt: session.detachedAt || new Date().toISOString() })
         : null,
     released: Boolean(session.released),
+    releaseReason: String(session.releaseReason || ""),
+    runtimeExpiresAt:
+      session.transport === APP_SERVER_TRANSPORT && !session.released && !session.exited
+        ? new Date(
+            Date.parse(validSessionTimestamp(session.lastMeaningfulActivityAt) || new Date().toISOString()) +
+              SESSION_TTL_MS,
+          ).toISOString()
+        : null,
     exited: session.exited,
     exitCode: session.exitCode,
     signal: session.signal,
     outputRevision: session.outputRevision,
+    pendingServerRequestCount: session.pendingServerRequests?.size || 0,
     capabilities: {
       startupQueue: session.transport === APP_SERVER_TRANSPORT,
       interruptTurn: session.transport === APP_SERVER_TRANSPORT,
@@ -6254,6 +6371,10 @@ function tmuxHasSession(tmuxName) {
 
 function killSessionTerminal(session) {
   if (session.transport === APP_SERVER_TRANSPORT) {
+    if (session.runtimeLeaseTimer) {
+      clearTimeout(session.runtimeLeaseTimer);
+      session.runtimeLeaseTimer = null;
+    }
     removePersistedWebSession(session.id);
     closeSideChat(session);
     session.realtime = restoreRealtimeState();
@@ -6277,19 +6398,26 @@ function killSessionTerminal(session) {
   session.terminal.kill();
 }
 
-function releaseAppServerSessionRuntime(session) {
+function releaseAppServerSessionRuntime(
+  session,
+  { reason = APP_SERVER_RELEASE_REASON_DETACHED_TTL } = {},
+) {
+  if (session.runtimeLeaseTimer) {
+    clearTimeout(session.runtimeLeaseTimer);
+    session.runtimeLeaseTimer = null;
+  }
   closeSideChat(session);
   session.realtime = restoreRealtimeState();
   session.ready = false;
   session.released = true;
-  session.releaseReason = APP_SERVER_RELEASE_REASON_DETACHED_TTL;
+  session.releaseReason = reason;
   session.exited = true;
   session.exitCode = 0;
   session.signal = null;
   persistWebSession(session);
   releaseAgentAppServerClient(session.appServer);
   broadcast(session, "status", publicSession(session));
-  for (const client of session.clients) client.close();
+  emitCatalogControlEvent(agentHostForSession(session));
 }
 
 function tmuxNameForWebSession(id) {
@@ -6355,8 +6483,9 @@ function persistWebSession(session) {
     detachedAt: validSessionTimestamp(session.detachedAt),
     released: Boolean(session.released),
     releaseReason:
-      session.released && session.releaseReason === APP_SERVER_RELEASE_REASON_DETACHED_TTL
-        ? APP_SERVER_RELEASE_REASON_DETACHED_TTL
+      session.released &&
+      [APP_SERVER_RELEASE_REASON_DETACHED_TTL, APP_SERVER_RELEASE_REASON_IDLE_TTL].includes(session.releaseReason)
+        ? session.releaseReason
         : "",
     turnState: publicTurnState(session.turnState),
   };
@@ -6840,13 +6969,88 @@ async function readCodexSessionById(id) {
 }
 
 async function findCodexSessionFile(id) {
+  const cached = codexSessionFileCache.get(id);
+  if (cached) {
+    try {
+      await fs.access(cached);
+      return cached;
+    } catch {
+      codexSessionFileCache.delete(id);
+    }
+  }
   const roots = [CODEX_SESSIONS_ROOT, CODEX_ARCHIVED_SESSIONS_ROOT];
   for (const root of roots) {
     const files = await walkFiles(root);
     const match = files.find((file) => file.endsWith(".jsonl") && sessionIdFromFilename(file) === id);
-    if (match) return match;
+    if (match) {
+      codexSessionFileCache.set(id, match);
+      return match;
+    }
   }
   return "";
+}
+
+async function loadHistoricalSessionProcess(session, turnId) {
+  const file = await findCodexSessionFile(session.sessionId);
+  if (!file) return [];
+  return extractSessionProcessFromJsonl(file, turnId, {
+    indexFile: sessionProcessIndexFile(session.sessionId),
+  });
+}
+
+function sessionProcessIndexFile(sessionId) {
+  return path.join(CODEX_SESSION_PROCESS_INDEX_ROOT, `${String(sessionId)}.json`);
+}
+
+function scheduleSessionProcessIndexWarm(session) {
+  if (
+    session?.hostId !== PERSONAL_AGENT_HOST.id ||
+    !isValidSessionId(session.sessionId)
+  ) {
+    return;
+  }
+  sessionProcessIndexWarmQueue.set(session.sessionId, {
+    sessionId: session.sessionId,
+    webSessionId: session.id,
+  });
+  if (sessionProcessIndexWarmRunning || sessionProcessIndexWarmTimer) return;
+  sessionProcessIndexWarmTimer = setTimeout(drainSessionProcessIndexWarmQueue, 5_000);
+  sessionProcessIndexWarmTimer.unref?.();
+}
+
+async function drainSessionProcessIndexWarmQueue() {
+  sessionProcessIndexWarmTimer = null;
+  if (sessionProcessIndexWarmRunning) return;
+  const next = sessionProcessIndexWarmQueue.entries().next().value;
+  if (!next) return;
+  const [sessionId, task] = next;
+  sessionProcessIndexWarmRunning = true;
+  const startedAt = Date.now();
+  try {
+    const file = await findCodexSessionFile(sessionId);
+    if (file) {
+      await warmSessionProcessIndex(file, sessionProcessIndexFile(sessionId));
+      logAgentEvent("session-process-index-warm", {
+        webSessionId: task.webSessionId,
+        codexSessionId: sessionId,
+        durationMs: Date.now() - startedAt,
+      });
+    }
+  } catch (error) {
+    logAgentEvent("session-process-index-warm-failed", {
+      webSessionId: task.webSessionId,
+      codexSessionId: sessionId,
+      durationMs: Date.now() - startedAt,
+      message: cleanClientLogValue(error.message, 300),
+    });
+  } finally {
+    sessionProcessIndexWarmQueue.delete(sessionId);
+    sessionProcessIndexWarmRunning = false;
+    if (sessionProcessIndexWarmQueue.size > 0) {
+      sessionProcessIndexWarmTimer = setTimeout(drainSessionProcessIndexWarmQueue, 50);
+      sessionProcessIndexWarmTimer.unref?.();
+    }
+  }
 }
 
 async function listCodexSessions({ archived, agentHost = PERSONAL_AGENT_HOST }) {
@@ -6945,6 +7149,7 @@ function invalidateThreadCatalog(agentHost = PERSONAL_AGENT_HOST) {
   for (const key of threadCatalogPageCache.keys()) {
     if (key.startsWith(prefix)) threadCatalogPageCache.delete(key);
   }
+  emitCatalogControlEvent(agentHost);
 }
 
 async function listCodexSessionsFromFiles({ archived }) {
@@ -7653,6 +7858,42 @@ function send(ws, type, payload) {
 
 function broadcast(session, type, payload) {
   for (const client of session.clients) send(client, type, payload);
+  if (type === "status") queueSessionControlEvent(session);
+}
+
+function queueSessionControlEvent(session) {
+  if (!session?.id || pendingSessionControlEvents.has(session.id)) return;
+  const timer = setTimeout(() => {
+    pendingSessionControlEvents.delete(session.id);
+    const agentHost = agentHostForSession(session);
+    emitControlEvent({
+      type: "session",
+      session: {
+        ...publicSession(session),
+        favorited: session.sessionId
+          ? favoriteSessionIdsForHost(agentHost).has(session.sessionId)
+          : false,
+      },
+    });
+  }, 250);
+  timer.unref?.();
+  pendingSessionControlEvents.set(session.id, timer);
+}
+
+function emitCatalogControlEvent(agentHost = PERSONAL_AGENT_HOST) {
+  emitControlEvent({ type: "catalog", hostId: agentHost.id });
+}
+
+function emitControlEvent(payload) {
+  for (const response of controlEventClients) writeControlEvent(response, payload);
+}
+
+function writeControlEvent(response, payload) {
+  try {
+    response.write(`data: ${JSON.stringify(payload)}\n\n`);
+  } catch {
+    controlEventClients.delete(response);
+  }
 }
 
 function clampInteger(value, min, max, fallback) {

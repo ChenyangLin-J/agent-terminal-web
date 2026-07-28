@@ -32,7 +32,8 @@ test("App Server image cards link through the authenticated session image route"
   assert.match(server, /app\.use\("\/api", requireAuth\)[\s\S]*app\.get\("\/api\/session-image\/:sessionId\/:itemId"/);
   assert.match(server, /presentation\.kind !== "inline" \|\| !presentation\.mime\.startsWith\("image\/"\)/);
   assert.match(server, /viewedImagePath\(session, itemId\)/);
-  assert.match(server, /extractSessionProcessFromJsonl\(file, turnId\)/);
+  assert.match(server, /loadHistoricalSessionProcess\(session, turnId\)/);
+  assert.match(server, /indexFile: sessionProcessIndexFile\(session\.sessionId\)/);
   assert.match(server, /session\.historyProcessCache\.set\(turnId, items\)/);
   assert.match(app, /item\.type === "tool" && item\.label === "查看图片" && activeSessionId/);
   assert.match(app, /`\/api\/session-image\/\$\{encodeURIComponent\(activeSessionId\)\}\/\$\{encodeURIComponent\(item\.id\)\}`/);

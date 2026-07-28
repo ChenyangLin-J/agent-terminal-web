@@ -204,6 +204,7 @@ const LIVE_SESSIONS_FALLBACK_MS = 60_000;
 const SESSION_CATALOG_FALLBACK_MS = 5 * 60_000;
 const CONTROL_EVENT_CATALOG_DEBOUNCE_MS = 500;
 const REMOTE_AGENT_REQUEST_TIMEOUT_MS = 5_000;
+const REMOTE_AGENT_INITIAL_REQUEST_TIMEOUT_MS = 12_000;
 const REMOTE_HOST_RETRY_BASE_MS = 15_000;
 const REMOTE_HOST_RETRY_MAX_MS = 2 * 60_000;
 const DEFAULT_TRANSPORT = "app-server";
@@ -249,6 +250,7 @@ let sessionCatalogLastRefreshedAt = 0;
 let sessionCatalogLoaded = false;
 const remoteHostRetryTimers = new Map();
 const remoteHostRetryAttempts = new Map();
+const successfulRemoteSessionLists = new Set();
 let reconnectTimer = null;
 let clientHeartbeatTimer = null;
 let visibleProbeTimer = null;
@@ -976,8 +978,14 @@ async function loadSessionsAcrossHosts(path, { previousSessions = [], onPartial 
       const retryKey = remoteHostRetryKey(path, host.id);
       if (isRemoteAgentHost(host.id) && remoteHostRetryTimers.has(retryKey)) return;
       try {
-        const data = await apiJsonForHost(path, host.id);
+        const data = await apiJsonForHost(path, host.id, {
+          timeoutMs:
+            isRemoteAgentHost(host.id) && !successfulRemoteSessionLists.has(retryKey)
+              ? REMOTE_AGENT_INITIAL_REQUEST_TIMEOUT_MS
+              : undefined,
+        });
         if (!data || data.error) throw new Error(data?.error || "Session 列表暂不可用");
+        if (isRemoteAgentHost(host.id)) successfulRemoteSessionLists.add(retryKey);
         clearRemoteHostRetry(path, host.id);
         sessionsByHost.set(host.id, normalizeHostSessions(data, host));
         onPartial?.(combinedSessions());
@@ -1033,8 +1041,14 @@ async function retryRemoteSessionList(path, hostId) {
   const host = agentHosts.find((candidate) => candidate.id === hostId);
   if (!host || !isRemoteAgentHost(hostId)) return;
   try {
-    const data = await apiJsonForHost(path, hostId);
+    const key = remoteHostRetryKey(path, hostId);
+    const data = await apiJsonForHost(path, hostId, {
+      timeoutMs: successfulRemoteSessionLists.has(key)
+        ? undefined
+        : REMOTE_AGENT_INITIAL_REQUEST_TIMEOUT_MS,
+    });
     if (!data || data.error) throw new Error(data?.error || "Session 列表暂不可用");
+    successfulRemoteSessionLists.add(key);
     const previousSessions = currentSessionsForPath(path);
     const sessions = [
       ...previousSessions.filter(
@@ -7236,11 +7250,16 @@ async function apiJson(url) {
   return apiJsonForHost(url, activeAgentHostId);
 }
 
-async function apiJsonForHost(url, hostId) {
-  const timeoutMs = isRemoteAgentHost(hostId) ? REMOTE_AGENT_REQUEST_TIMEOUT_MS : 0;
-  const controller = timeoutMs > 0 ? new AbortController() : null;
+async function apiJsonForHost(url, hostId, options = {}) {
+  const requestTimeoutMs =
+    Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+      ? options.timeoutMs
+      : isRemoteAgentHost(hostId)
+        ? REMOTE_AGENT_REQUEST_TIMEOUT_MS
+        : 0;
+  const controller = requestTimeoutMs > 0 ? new AbortController() : null;
   const timeout = controller
-    ? window.setTimeout(() => controller.abort(), timeoutMs)
+    ? window.setTimeout(() => controller.abort(), requestTimeoutMs)
     : null;
   try {
     const response = await fetch(
@@ -7254,7 +7273,7 @@ async function apiJsonForHost(url, hostId) {
     return await response.json();
   } catch (error) {
     if (controller?.signal.aborted) {
-      const timeoutError = new Error(`远端 Host 请求超过 ${timeoutMs}ms`);
+      const timeoutError = new Error(`远端 Host 请求超过 ${requestTimeoutMs}ms`);
       timeoutError.name = "AgentHostTimeoutError";
       timeoutError.code = "AGENT_HOST_TIMEOUT";
       throw timeoutError;

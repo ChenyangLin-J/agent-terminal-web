@@ -70,7 +70,7 @@ test("a slow remote Host keeps its last Sessions and recovers in the background"
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
   const page = await browser.newPage();
-  let slowCompanySessions = false;
+  let slowCompanySessions = true;
   let companySessionTitle = "公司旧数据";
   let companyLiveRequests = 0;
 
@@ -124,11 +124,14 @@ test("a slow remote Host keeps its last Sessions and recovers in the background"
     await route.continue();
   });
 
+  const initialLoadStartedAt = Date.now();
   await page.goto(`http://127.0.0.1:${agentPort}/`);
   const controlCenterSessions = page.locator("#sessions-list");
   await controlCenterSessions.getByText("公司旧数据", { exact: true }).waitFor();
+  const initialLoadElapsedMs = Date.now() - initialLoadStartedAt;
+  assert.ok(initialLoadElapsedMs >= 6_500, `cold remote request ended too soon after ${initialLoadElapsedMs}ms`);
+  assert.ok(initialLoadElapsedMs < 11_500, `cold remote request blocked the UI for ${initialLoadElapsedMs}ms`);
 
-  slowCompanySessions = true;
   const startedAt = Date.now();
   await page.evaluate(() => loadLiveSessions());
   const elapsedMs = Date.now() - startedAt;

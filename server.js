@@ -84,6 +84,7 @@ import {
 } from "./lib/integrations.js";
 import { createAmapMcpProxy } from "./lib/amap-mcp-proxy.js";
 import { createPlaywrightMcpProxy } from "./lib/playwright-mcp-proxy.js";
+import { buildAppServerTurnAdditionalContext } from "./lib/app-server-turn-context.js";
 
 const AGENT_TIME_ZONE = "Asia/Shanghai";
 process.env.TZ = AGENT_TIME_ZONE;
@@ -3967,12 +3968,7 @@ function normalizeOrchestrationMode(value) {
 }
 
 function appServerTurnAdditionalContext(session, personalMemoryContext) {
-  const mode = normalizeOrchestrationMode(session.orchestrationMode);
-  const orchestrationContext =
-    mode === "auto"
-      ? '<multi_agent_mode mode="auto">The user enabled Auto orchestration for this Session. Apply the Agent Web multi-agent policy and delegate only when it is a net benefit.</multi_agent_mode>'
-      : '<multi_agent_mode mode="manual">Do not spawn sub-agents unless the user explicitly requests delegation in this task.</multi_agent_mode>';
-  return [String(personalMemoryContext || "").trim(), orchestrationContext].filter(Boolean).join("\n\n");
+  return buildAppServerTurnAdditionalContext(session.orchestrationMode, personalMemoryContext);
 }
 
 async function appServerPersonalMemory(session, prompt) {

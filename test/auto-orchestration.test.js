@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { buildAppServerTurnAdditionalContext } from "../lib/app-server-turn-context.js";
 
 test("Auto orchestration persists per Session and applies a token-conscious role policy", async () => {
   const [server, app, page, styles] = await Promise.all([
@@ -55,4 +56,37 @@ test("live context usage reaches the toolbar and warns at 100k and 150k", async 
   assert.match(app, /建议完成当前阶段后 \/compact 或新建 Session/);
   assert.match(styles, /button\[data-context-state="watch"\]/);
   assert.match(styles, /button\[data-context-state="critical"\]/);
+});
+
+test("turn additional context remains an App Server map when orchestration mode is added", () => {
+  const personalMemoryContext = {
+    "personal-memory": {
+      kind: "application",
+      value: "Remember the current project.",
+    },
+  };
+
+  const context = buildAppServerTurnAdditionalContext("auto", personalMemoryContext);
+
+  assert.notEqual(context, personalMemoryContext);
+  assert.deepEqual(context["personal-memory"], personalMemoryContext["personal-memory"]);
+  assert.deepEqual(context["multi-agent-mode"], {
+    kind: "application",
+    value:
+      '<multi_agent_mode mode="auto">The user enabled Auto orchestration for this Session. Apply the Agent Web multi-agent policy and delegate only when it is a net benefit.</multi_agent_mode>',
+  });
+  assert.equal(typeof context, "object");
+  assert.equal(Array.isArray(context), false);
+});
+
+test("turn additional context uses a map without personal memory and supports manual mode", () => {
+  const context = buildAppServerTurnAdditionalContext("manual", undefined);
+
+  assert.deepEqual(context, {
+    "multi-agent-mode": {
+      kind: "application",
+      value:
+        '<multi_agent_mode mode="manual">Do not spawn sub-agents unless the user explicitly requests delegation in this task.</multi_agent_mode>',
+    },
+  });
 });

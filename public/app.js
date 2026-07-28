@@ -2377,8 +2377,14 @@ async function endSessionFromSwitcher(session) {
       (cleanAgentHostId(session.hostId) || "personal") ===
         (cleanAgentHostId(activeSessionParams.host) || activeAgentHostId) &&
       (webSessionId === activeSessionId || session.sessionId === activeSessionParams.sessionId);
-    if (isCurrentSession && payload.session) {
-      enterStoppedSessionPreview(payload.session);
+    if (isCurrentSession) {
+      openNewSessionAfterEnd({
+        host: session.hostId || activeAgentHostId,
+        cwd: activeSessionParams.cwd || ".",
+        access: activeAccessMode,
+        sessionId: session.sessionId,
+        endedSession: payload.session,
+      });
     } else {
       forgetSessionNavigation({
         host: session.hostId || activeAgentHostId,
@@ -4756,8 +4762,8 @@ async function endSession() {
   const webSessionId = String(activeSessionId || "").trim();
   if (!webSessionId) return;
   const message = latestTurnState.active
-    ? "结束这个 Session？当前任务会停止，Session 会移到最近历史，之后仍可恢复。"
-    : "结束这个 Session？它会移到最近历史，之后仍可恢复。";
+    ? "结束这个 Session？当前任务会停止，它会从当前列表移到最近历史，随后打开新建 Session。"
+    : "结束这个 Session？它会从当前列表移到最近历史，随后打开新建 Session。";
   if (!window.confirm(message)) return;
   try {
     const response = await fetch(
@@ -4773,14 +4779,26 @@ async function endSession() {
     }
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || "结束失败");
-    if (payload.session && activeTransport === "app-server") {
-      enterStoppedSessionPreview(payload.session);
-    } else {
-      setConnectedState("exited");
-    }
+    openNewSessionAfterEnd({
+      host: activeSessionParams.host || activeAgentHostId,
+      cwd: activeSessionParams.cwd || ".",
+      access: activeAccessMode,
+      sessionId: activeSessionParams.sessionId,
+      endedSession: payload.session,
+    });
   } catch (error) {
     window.alert(`结束失败：${error.message}`);
   }
+}
+
+function openNewSessionAfterEnd({ host, cwd, access, sessionId, endedSession } = {}) {
+  if (endedSession) applyControlSessionEvent(endedSession);
+  forgetSessionNavigation({ host, sessionId });
+  openNewSessionDraft({
+    cwd: cwd || ".",
+    access: ["safe", "full"].includes(access) ? access : activeAccessMode,
+  });
+  void refreshLists({ forceCatalog: true });
 }
 
 function send(message, { allowStale = false } = {}) {

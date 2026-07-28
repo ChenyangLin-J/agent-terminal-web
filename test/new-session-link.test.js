@@ -21,5 +21,5 @@ test("URL shortcut opens a new workspace draft without starting a runtime", () =
   assert.doesNotMatch(pageSource, /id="transport"|id="launch-mode"|id="session-id"/);
   assert.match(pageSource, /<option value="full" selected>全部允许（默认，高风险）<\/option>/);
   assert.match(pageSource, /id="session-host"/);
-  assert.match(pageSource, /app\.js\?v=20260728-end-session-status-1/);
+  assert.match(pageSource, /app\.js\?v=20260728-end-to-new-session-2/);
 });

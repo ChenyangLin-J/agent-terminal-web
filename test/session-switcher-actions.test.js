@@ -48,11 +48,15 @@ test("the desktop and Pad Session switcher collapses and exposes contextual acti
   );
   assert.match(
     app,
-    /function endSessionFromSwitcher\(session\)[\s\S]*if \(isCurrentSession && payload\.session\) \{[\s\S]*enterStoppedSessionPreview\(payload\.session\)/,
+    /function endSessionFromSwitcher\(session\)[\s\S]*if \(isCurrentSession\) \{[\s\S]*openNewSessionAfterEnd\(\{/,
   );
   assert.match(
     app,
-    /async function endSession\(\)[\s\S]*agentHostApiUrl\([\s\S]*\/api\/sessions\/\$\{encodeURIComponent\(webSessionId\)\}\/end[\s\S]*enterStoppedSessionPreview\(payload\.session\)/,
+    /async function endSession\(\)[\s\S]*agentHostApiUrl\([\s\S]*\/api\/sessions\/\$\{encodeURIComponent\(webSessionId\)\}\/end[\s\S]*openNewSessionAfterEnd\(\{/,
+  );
+  assert.match(
+    app,
+    /function openNewSessionAfterEnd\([\s\S]*applyControlSessionEvent\(endedSession\)[\s\S]*openNewSessionDraft\(\{/,
   );
   assert.match(app, /Session 已结束 · 发送消息时恢复/);
   assert.match(

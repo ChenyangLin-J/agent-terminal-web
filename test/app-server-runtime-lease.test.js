@@ -247,15 +247,20 @@ input.on("line", (line) => {
   assert.ok(resumedUrl.searchParams.get("attach"));
   desktopPage.once("dialog", (dialog) => dialog.accept());
   await desktopPage.locator("#kill-session").click();
-  await desktopPage.locator("#connection").filter({ hasText: "仅查看" }).waitFor({ timeout: 2_000 });
   await desktopPage
-    .locator("#upload-status")
-    .filter({ hasText: "Session 已结束；发送消息时会恢复。" })
+    .locator("#connection")
+    .filter({ hasText: "发送第一条消息时创建" })
     .waitFor({ timeout: 2_000 });
   const endedUrl = new URL(desktopPage.url());
   assert.equal(endedUrl.searchParams.get("preview"), "1");
+  assert.equal(endedUrl.searchParams.get("new"), "1");
   assert.equal(endedUrl.searchParams.has("attach"), false);
+  assert.equal(endedUrl.searchParams.has("sessionId"), false);
   assert.equal(await desktopPage.locator("#prompt").isEnabled(), true);
+  assert.equal(
+    await desktopPage.locator("#session-switcher-list").getByText("Idle preview", { exact: true }).count(),
+    0,
+  );
   viewedClient.ws.close();
 });
 

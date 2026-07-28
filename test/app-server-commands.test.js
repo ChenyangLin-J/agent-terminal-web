@@ -36,6 +36,7 @@ test("App Server exposes slash commands and structured Skill mentions", async ()
   assert.match(page, /id="app-command-dialog"/);
   assert.match(page, /id="app-session-tools"/);
   assert.match(page, /id="app-session-permissions"/);
+  assert.match(page, /id="app-session-context"/);
   assert.match(page, /id="app-session-task-control"/);
   assert.match(page, /id="app-session-task-state">连接中/);
   assert.match(page, /id="app-session-task-stop" class="task-stop-action hidden">停止/);
@@ -69,6 +70,7 @@ test("App Server exposes slash commands and structured Skill mentions", async ()
   assert.match(app, /function renderAppCommandResult\(payload = \{\}\)/);
   assert.match(app, /function syncAppSessionToolbar\(\)/);
   assert.match(app, /appSessionPermissionsButton\.addEventListener\("click", openPermissionsPanel\)/);
+  assert.match(app, /appSessionContextButton\.addEventListener\("click", \(\) => runAppCommand\("\/status"\)\)/);
   assert.match(app, /appSessionTaskControl\.addEventListener\("click", interruptCurrentTurn\)/);
   assert.match(app, /function appSessionTaskStateValue\(\)/);
   assert.match(app, /return \{ value: "working", label: "正在处理" \}/);

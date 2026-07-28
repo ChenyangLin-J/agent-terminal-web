@@ -649,6 +649,57 @@ input {
   overflow-y: auto;
 }
 
+.orchestration-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 14px;
+  padding: 12px;
+  border: 1px solid #354052;
+  border-radius: 12px;
+  background: #111722;
+}
+
+.orchestration-panel > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.orchestration-panel > div:first-child span,
+.orchestration-panel > p {
+  color: #929eb1;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.orchestration-mode-options {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid #303a4b;
+  border-radius: 9px;
+  background: #0c1119;
+}
+
+.orchestration-mode-options button {
+  min-height: 30px;
+  padding: 5px 10px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.orchestration-mode-options button[aria-pressed="true"] {
+  border-color: #4d6793;
+  color: #e6edff;
+  background: #202c43;
+}
+
+.orchestration-panel > p {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
 .agent-card {
   display: grid;
   gap: 10px;
@@ -2166,10 +2217,28 @@ input {
   color: #ffbec7;
 }
 
+.app-session-tools button[data-context-state="watch"] {
+  border-color: #6c5530;
+  background: #211a0d;
+}
+
+.app-session-tools button[data-context-state="watch"] strong {
+  color: #f4c97d;
+}
+
+.app-session-tools button[data-context-state="critical"] {
+  border-color: #713842;
+  background: #281419;
+}
+
+.app-session-tools button[data-context-state="critical"] strong {
+  color: #ffb4bf;
+}
+
 @media (max-width: 520px) {
   .app-server-session .app-session-tools {
     display: grid;
-    grid-template-columns: minmax(0, 1.7fr) repeat(3, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1.6fr) repeat(4, minmax(0, 1fr));
     gap: 6px;
   }
 
@@ -2183,6 +2252,7 @@ input {
 
   .task-control-caption,
   #app-session-permissions span,
+  #app-session-context span,
   #app-session-memories strong,
   .app-session-more > summary strong {
     display: none;
@@ -2198,6 +2268,18 @@ input {
     position: absolute;
     right: 0;
     bottom: calc(100% + 8px);
+  }
+
+  .orchestration-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .orchestration-mode-options {
+    width: 100%;
+  }
+
+  .orchestration-mode-options button {
+    flex: 1;
   }
 }
 

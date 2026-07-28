@@ -204,11 +204,42 @@ const APP_THREAD_SOURCE_KINDS = [
   "subAgentOther",
   "unknown",
 ];
+const AUTO_ORCHESTRATION_ROLE_DEFAULTS = [
+  {
+    name: "explorer",
+    description: "只读探索、日志排查和大范围检索",
+    model: "gpt-5.6-terra",
+    reasoningEffort: "medium",
+  },
+  {
+    name: "worker",
+    description: "边界清晰的实现任务",
+    model: "gpt-5.6-sol",
+    reasoningEffort: "high",
+  },
+  {
+    name: "reviewer",
+    description: "高风险改动的只读复核",
+    model: "gpt-5.6-sol",
+    reasoningEffort: "high",
+  },
+];
 const AGENT_WEB_DEVELOPER_INSTRUCTIONS = [
   "Agent Web service safety:",
   "- Never stop, restart, kill, or otherwise terminate agent-terminal-web.service from this Codex session, including through systemctl or an absolute executable path.",
   "- When Agent Web changes need deployment, finish verification, commit the changes, and tell the user that an external restart is required.",
   "- Do not restart Agent Web before sending the final answer. A restart terminates this turn and every other active web session.",
+  "",
+  "Agent Web multi-agent orchestration:",
+  "- A per-turn <multi_agent_mode> marker declares either auto or manual mode.",
+  "- Auto mode is the user's standing authorization to classify the task and delegate only when delegation is likely to save main-thread context or wall-clock time.",
+  "- Handle conversation, decisions, simple questions, and small single-file work in the main agent without delegation.",
+  "- Use one explorer for read-heavy repository discovery, broad search, logs, or unfamiliar execution paths. Explorer is read-only and uses gpt-5.6-terra at medium reasoning.",
+  "- Use one worker for a bounded implementation with explicit file or module ownership. Set gpt-5.6-sol at high reasoning and tell it that other agents may be editing the codebase.",
+  "- Add a reviewer only for security, auth, migration, concurrency, destructive operations, or other high-regression-risk changes. Reviewer is read-only and uses gpt-5.6-sol at high reasoning.",
+  "- Default to at most one sub-agent. Use two concurrently only for independent work with non-overlapping ownership. Never delegate merely because agents are available.",
+  "- The main agent owns scope, user communication, decisions, integration, and final verification. Avoid re-reading raw material already summarized by a sub-agent.",
+  "- Manual mode forbids delegation unless the user explicitly asks for it in that task.",
 ].join("\n");
 
 const app = express();
@@ -2067,6 +2098,7 @@ function createAppServerSession(cwd, launch, restored = {}) {
     appModel: String(restored.appModel || ""),
     appReasoningEffort: String(restored.appReasoningEffort || ""),
     appServiceTier: ["priority", "default"].includes(restored.appServiceTier) ? restored.appServiceTier : null,
+    orchestrationMode: normalizeOrchestrationMode(restored.orchestrationMode),
     clients: new Set(),
     cleanupTimer: null,
     runtimeLeaseTimer: null,
@@ -2298,6 +2330,7 @@ function restoreTmuxSession(id) {
         appModel: record.appModel,
         appReasoningEffort: record.appReasoningEffort,
         appServiceTier: record.appServiceTier,
+        orchestrationMode: record.orchestrationMode,
         memoryProjectMode: record.memoryProjectMode,
         memoryProjects: record.memoryProjects,
         memoryProjectSource: record.memoryProjectSource,
@@ -2340,6 +2373,7 @@ function restoreTmuxSession(id) {
         appModel: record.appModel,
         appReasoningEffort: record.appReasoningEffort,
         appServiceTier: record.appServiceTier,
+        orchestrationMode: record.orchestrationMode,
         memoryProjectMode: record.memoryProjectMode,
         memoryProjects: record.memoryProjects,
         memoryProjectSource: record.memoryProjectSource,
@@ -2450,6 +2484,7 @@ function listDetachedSessions() {
       suspended: transport === APP_SERVER_TRANSPORT,
       mode: record.mode || "new",
       sessionId: record.sessionId || "",
+      orchestrationMode: normalizeOrchestrationMode(record.orchestrationMode),
       memoryProjectMode: record.memoryProjectMode === "manual" ? "manual" : "auto",
       memoryProjects: normalizeMemoryProjectNames(record.memoryProjects),
       memoryProjectSource: normalizeMemoryProjectSource(record.memoryProjectSource),
@@ -2899,6 +2934,20 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
           });
         })
         .catch((error) => send(ws, "error", { message: `记忆项目没有修改：${error.message}` }));
+      return;
+    }
+
+    if (message.type === "set-orchestration-mode" && session.transport === APP_SERVER_TRANSPORT) {
+      renewSessionRetention(session);
+      session.orchestrationMode = normalizeOrchestrationMode(message.mode);
+      session.lastActivityAt = new Date().toISOString();
+      persistRestorableWebSession(session);
+      broadcast(session, "status", publicSession(session));
+      send(ws, "control-ack", {
+        kind: "orchestration-mode",
+        mode: session.orchestrationMode,
+        receivedAt: Date.now(),
+      });
       return;
     }
 
@@ -3582,6 +3631,8 @@ async function appServerStatus(session) {
     model: session.appModel || config.model || "default",
     reasoningEffort: session.appReasoningEffort || config.model_reasoning_effort || "default",
     serviceTier: session.appServiceTier === "priority" ? "priority" : session.appServiceTier === "default" ? "default" : config.service_tier || "default",
+    orchestrationMode: normalizeOrchestrationMode(session.orchestrationMode),
+    orchestrationRoles: AUTO_ORCHESTRATION_ROLE_DEFAULTS,
     account: account
       ? {
           type: String(account.type || ""),
@@ -3603,19 +3654,30 @@ async function appServerStatus(session) {
         : [],
     gitBranch: String(thread?.gitInfo?.branch || ""),
     activeTurn: Boolean(session.turnState?.active),
-    tokenUsage: usage
-      ? {
-          totalTokens: Number(usage.total?.totalTokens || 0),
-          inputTokens: Number(usage.total?.inputTokens || 0),
-          outputTokens: Number(usage.total?.outputTokens || 0),
-          cachedInputTokens: Number(usage.total?.cachedInputTokens || 0),
-          reasoningOutputTokens: Number(usage.total?.reasoningOutputTokens || 0),
-          contextUsedTokens: Number(usage.last?.totalTokens || 0),
-          modelContextWindow: Number(usage.modelContextWindow || config.model_context_window || 0),
-        }
-      : null,
+    tokenUsage: publicAppTokenUsage(usage, config.model_context_window),
     rateLimits: appServerRateLimits(rateLimitResponse),
     resetCredits: Number(rateLimitResponse.rateLimitResetCredits?.availableCount || 0),
+  };
+}
+
+function publicAppTokenUsage(usage, fallbackContextWindow = 0) {
+  if (!usage) return null;
+  const contextUsedTokens = Number(usage.last?.totalTokens || 0);
+  const modelContextWindow = Number(usage.modelContextWindow || fallbackContextWindow || 0);
+  return {
+    totalTokens: Number(usage.total?.totalTokens || 0),
+    inputTokens: Number(usage.total?.inputTokens || 0),
+    outputTokens: Number(usage.total?.outputTokens || 0),
+    cachedInputTokens: Number(usage.total?.cachedInputTokens || 0),
+    reasoningOutputTokens: Number(usage.total?.reasoningOutputTokens || 0),
+    contextUsedTokens,
+    modelContextWindow,
+    contextAlert:
+      contextUsedTokens >= 150_000
+        ? "critical"
+        : contextUsedTokens >= 100_000
+          ? "watch"
+          : "normal",
   };
 }
 
@@ -3900,6 +3962,19 @@ function appServerTurnAccess(session) {
   return settings;
 }
 
+function normalizeOrchestrationMode(value) {
+  return value === "manual" ? "manual" : "auto";
+}
+
+function appServerTurnAdditionalContext(session, personalMemoryContext) {
+  const mode = normalizeOrchestrationMode(session.orchestrationMode);
+  const orchestrationContext =
+    mode === "auto"
+      ? '<multi_agent_mode mode="auto">The user enabled Auto orchestration for this Session. Apply the Agent Web multi-agent policy and delegate only when it is a net benefit.</multi_agent_mode>'
+      : '<multi_agent_mode mode="manual">Do not spawn sub-agents unless the user explicitly requests delegation in this task.</multi_agent_mode>';
+  return [String(personalMemoryContext || "").trim(), orchestrationContext].filter(Boolean).join("\n\n");
+}
+
 async function appServerPersonalMemory(session, prompt) {
   if (session.hostId !== PERSONAL_AGENT_HOST.id) {
     return { additionalContext: undefined, citation: null };
@@ -4010,7 +4085,7 @@ async function submitAppServerPrompt(
     void appServer
       .queueTurn(input(queuePromptText(text)), {
         ...appServerTurnAccess(session),
-        additionalContext: personalMemory.additionalContext,
+        additionalContext: appServerTurnAdditionalContext(session, personalMemory.additionalContext),
         clientUserMessageId: requirement.id,
       })
       .catch((error) => {
@@ -4032,7 +4107,7 @@ async function submitAppServerPrompt(
     trimTrackedRequirements(state);
     try {
       const result = await appServer.steerTurn(input(steerPromptText(text, state.requirements.length)), {
-        additionalContext: personalMemory.additionalContext,
+        additionalContext: appServerTurnAdditionalContext(session, personalMemory.additionalContext),
         clientUserMessageId: requirement.id,
       });
       state.active = true;
@@ -4071,7 +4146,7 @@ async function submitAppServerPrompt(
   try {
     turn = await appServer.startTurn(input(lateSteer ? lateFollowupPromptText(text) : text), {
       ...appServerTurnAccess(session),
-      additionalContext: personalMemory.additionalContext,
+      additionalContext: appServerTurnAdditionalContext(session, personalMemory.additionalContext),
       clientUserMessageId: requirement.id,
     });
   } catch (error) {
@@ -4477,6 +4552,15 @@ async function sendAppServerSubagents(session, ws) {
     useStateDbOnly: true,
   });
   const profiles = await readAgentRoleProfiles(session);
+  const roles = AUTO_ORCHESTRATION_ROLE_DEFAULTS.map((defaults) => {
+    const profile = profiles.get(defaults.name) || {};
+    return {
+      ...defaults,
+      description: profile.description || defaults.description,
+      model: profile.model || defaults.model,
+      reasoningEffort: profile.reasoningEffort || defaults.reasoningEffort,
+    };
+  });
   const threads = Array.isArray(response?.data) ? response.data : [];
   const agents = await Promise.all(
     threads.map(async (thread) => {
@@ -4514,10 +4598,14 @@ async function sendAppServerSubagents(session, ws) {
   send(ws, "app-command-result", {
     kind: "subagents",
     title: "Agent 管理",
+    orchestrationMode: normalizeOrchestrationMode(session.orchestrationMode),
+    roles,
     agents,
     note: agents.length
       ? "这里显示当前 Session 树中的子 Agent。打开可进入完整线程；运行中的 Agent 可以单独停止。"
-      : "还没有子 Agent。需要时在 Prompt 中明确要求 Codex 并行委派。",
+      : normalizeOrchestrationMode(session.orchestrationMode) === "auto"
+        ? "当前没有子 Agent。Auto 只会在确实节省主线程上下文或等待时间时委派。"
+        : "当前没有子 Agent。手动模式只在你明确要求时委派。",
   });
 }
 
@@ -5671,7 +5759,10 @@ function handleAppServerNotification(session, message) {
     session.sessionId = params.thread.id;
     rememberAgentSessionAccess(session.sessionId, session.access, session.hostId);
   }
-  if (method === "thread/tokenUsage/updated" && params.tokenUsage) session.appTokenUsage = params.tokenUsage;
+  if (method === "thread/tokenUsage/updated" && params.tokenUsage) {
+    session.appTokenUsage = params.tokenUsage;
+    broadcast(session, "status", publicSession(session));
+  }
   if (method === "turn/started") {
     session.turnInterruptPending = false;
     session.turnState.active = true;
@@ -6337,6 +6428,13 @@ function publicSession(session) {
     memoryProjectMode: session.memoryProjectMode === "manual" ? "manual" : "auto",
     memoryProjects: normalizeMemoryProjectNames(session.memoryProjects),
     memoryProjectSource: normalizeMemoryProjectSource(session.memoryProjectSource),
+    orchestrationMode: normalizeOrchestrationMode(session.orchestrationMode),
+    model: String(session.appModel || ""),
+    reasoningEffort: String(session.appReasoningEffort || ""),
+    tokenUsage:
+      session.transport === APP_SERVER_TRANSPORT
+        ? publicAppTokenUsage(session.appTokenUsage)
+        : null,
     startedAt: session.startedAt,
     lastActivityAt: session.lastActivityAt,
     cols: session.cols,
@@ -6519,6 +6617,7 @@ function persistWebSession(session) {
     appModel: String(session.appModel || ""),
     appReasoningEffort: String(session.appReasoningEffort || ""),
     appServiceTier: ["priority", "default"].includes(session.appServiceTier) ? session.appServiceTier : null,
+    orchestrationMode: normalizeOrchestrationMode(session.orchestrationMode),
     memoryProjectMode: session.memoryProjectMode === "manual" ? "manual" : "auto",
     memoryProjects: normalizeMemoryProjectNames(session.memoryProjects),
     memoryProjectSource: normalizeMemoryProjectSource(session.memoryProjectSource),

@@ -35,7 +35,10 @@ test("App Server resume restores structured history without terminal replay", as
   assert.match(server, /async function loadEarlierAppServerHistory\(session\)/);
   assert.match(server, /cursor: session\.restoredHistoryCursor/);
   assert.match(server, /prependAppServerTranscript\(session, turns\)/);
-  assert.match(app, /fetch\(`\/api\/session-preview\/\$\{encodeURIComponent\(sessionId\)\}`\)/);
+  assert.match(
+    app,
+    /fetch\([\s\S]*agentHostApiUrl\([\s\S]*`\/api\/session-preview\/\$\{encodeURIComponent\(sessionId\)\}`/,
+  );
   assert.match(server, /extractSessionConversationFromJsonl\(file, \{ limit: APP_INITIAL_TURN_LIMIT \}\)/);
   assert.match(app, /function diskConversationItems\(conversation = \{\}\)/);
   assert.match(app, /`已从磁盘显示最近 \$\{restoredAppTurnCount\} 轮`/);
@@ -83,7 +86,10 @@ test("App Server resume restores structured history without terminal replay", as
   assert.match(app, /card\.classList\.add\("app-transcript-commentary"\)/);
   assert.match(server, /memoryCitation: normalizeMemoryCitation\(item\.memoryCitation\)/);
   assert.match(server, /memoryCitation: mergeMemoryCitations\(/);
-  assert.match(server, /additionalContext: personalMemory\.additionalContext/);
+  assert.match(
+    server,
+    /additionalContext: appServerTurnAdditionalContext\(session, personalMemory\.additionalContext\)/,
+  );
   assert.match(app, /读取了 \$\{labels\.length\} 个上下文文档/);
   assert.match(app, /memoryCitationDocumentLabels/);
   assert.match(app, /formatMemoryCitation\(item\.memoryCitation\)/);

@@ -14,18 +14,22 @@ test("Agent Web exposes dedicated Multi-Agent, thread tree, side chat, and Realt
   for (const id of [
     "app-session-more",
     "app-session-agents",
+    "app-session-agents-mode",
     "app-session-tree",
     "app-session-side-chat",
     "app-session-realtime",
     "agent-manager-dialog",
+    "orchestration-mode-auto",
+    "orchestration-mode-manual",
     "thread-tree-dialog",
     "side-chat-dialog",
     "realtime-dialog",
   ]) {
     assert.match(page, new RegExp(`id="${id}"`));
   }
-  assert.match(page, /agent-realtime\.js\?v=20260726-1[\s\S]*app\.js\?v=20260728-end-to-new-session-2/);
+  assert.match(page, /agent-realtime\.js\?v=20260726-1[\s\S]*app\.js\?v=20260728-auto-orchestration-1/);
   assert.match(client, /type: "subagent-stop"/);
+  assert.match(client, /type: "set-orchestration-mode"/);
   assert.match(client, /type: "session-tree"/);
   assert.match(client, /type: "side-chat-submit"/);
   assert.match(client, /realtimeController\.handleMessage/);

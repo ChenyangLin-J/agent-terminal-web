@@ -52,12 +52,15 @@ const sendStatusButton = document.querySelector("#send-status");
 const sendPermissionsButton = document.querySelector("#send-permissions");
 const appSessionPermissionsButton = document.querySelector("#app-session-permissions");
 const appSessionPermissionsValue = document.querySelector("#app-session-permissions-value");
+const appSessionContextButton = document.querySelector("#app-session-context");
+const appSessionContextValue = document.querySelector("#app-session-context-value");
 const appSessionMemoriesButton = document.querySelector("#app-session-memories");
 const appSessionMemoryProjects = document.querySelector("#app-session-memory-projects");
 const appSessionTaskControl = document.querySelector("#app-session-task-control");
 const appSessionTaskState = document.querySelector("#app-session-task-state");
 const appSessionTaskStop = document.querySelector("#app-session-task-stop");
 const appSessionAgentsButton = document.querySelector("#app-session-agents");
+const appSessionAgentsMode = document.querySelector("#app-session-agents-mode");
 const appSessionTreeButton = document.querySelector("#app-session-tree");
 const appSessionShareButton = document.querySelector("#app-session-share");
 const appSessionSideChatButton = document.querySelector("#app-session-side-chat");
@@ -118,6 +121,10 @@ const agentManagerRefresh = document.querySelector("#agent-manager-refresh");
 const agentManagerClose = document.querySelector("#agent-manager-close");
 const agentManagerNote = document.querySelector("#agent-manager-note");
 const agentManagerList = document.querySelector("#agent-manager-list");
+const orchestrationModeSummary = document.querySelector("#orchestration-mode-summary");
+const orchestrationModeAuto = document.querySelector("#orchestration-mode-auto");
+const orchestrationModeManual = document.querySelector("#orchestration-mode-manual");
+const orchestrationRoleSummary = document.querySelector("#orchestration-role-summary");
 const threadTreeDialog = document.querySelector("#thread-tree-dialog");
 const threadTreeRefresh = document.querySelector("#thread-tree-refresh");
 const threadTreeClose = document.querySelector("#thread-tree-close");
@@ -305,6 +312,9 @@ let activeAccessMode = DEFAULT_ACCESS_MODE;
 let activeMemoryProjectMode = "auto";
 let activeMemoryProjects = [];
 let activeMemoryProjectSource = "global";
+let activeOrchestrationMode = "auto";
+let activeTokenUsage = null;
+let lastContextNoticeKey = "";
 let activeSessionReady = true;
 let activeStartupQueueSupported = false;
 let activeTurnInterruptSupported = false;
@@ -457,6 +467,7 @@ keyEscButton.addEventListener("click", () => sendTerminalKey("\x1b"));
 sendStatusButton.addEventListener("click", () => command("/status"));
 sendPermissionsButton.addEventListener("click", openPermissionsPanel);
 appSessionPermissionsButton.addEventListener("click", openPermissionsPanel);
+appSessionContextButton.addEventListener("click", () => runAppCommand("/status"));
 appSessionMemoriesButton.addEventListener("click", openMemoryManager);
 appSessionAgentsButton.addEventListener("click", () => {
   closeAppSessionMoreMenu();
@@ -527,6 +538,8 @@ agentManagerDialog.addEventListener("click", (event) => {
   if (event.target === agentManagerDialog) agentManagerDialog.close();
 });
 agentManagerDialog.addEventListener("close", stopAgentManagerRefresh);
+orchestrationModeAuto.addEventListener("click", () => updateOrchestrationMode("auto"));
+orchestrationModeManual.addEventListener("click", () => updateOrchestrationMode("manual"));
 threadTreeRefresh.addEventListener("click", requestThreadTree);
 threadTreeClose.addEventListener("click", () => threadTreeDialog.close());
 threadTreeDialog.addEventListener("click", (event) => {
@@ -2657,6 +2670,9 @@ function openSessionPreview(params = {}) {
   activeMemoryProjectMode = "auto";
   activeMemoryProjects = [];
   activeMemoryProjectSource = "global";
+  activeOrchestrationMode = "auto";
+  activeTokenUsage = null;
+  lastContextNoticeKey = "";
   appTranscriptItems = [];
   restoredAppTurnCount = 0;
   restoredAppHistoryHasMore = false;
@@ -2781,6 +2797,9 @@ async function openSocket(params, options = {}) {
     activeMemoryProjectMode = "auto";
     activeMemoryProjects = [];
     activeMemoryProjectSource = "global";
+    activeOrchestrationMode = "auto";
+    activeTokenUsage = null;
+    lastContextNoticeKey = "";
     activeForkedFromId = "";
     activeForkedFromTitle = "";
     activeParentThreadId = "";
@@ -3075,6 +3094,17 @@ function handleControlAck(payload = {}) {
     setUploadStatus("当前 Session 的项目记忆已更新。", { clear: true });
     return;
   }
+  if (payload.kind === "orchestration-mode") {
+    activeOrchestrationMode = payload.mode === "manual" ? "manual" : "auto";
+    syncOrchestrationMode();
+    setUploadStatus(
+      activeOrchestrationMode === "auto"
+        ? "Auto 协作已开启；Codex 会先判断任务，只在有净收益时委派。"
+        : "已切换为手动协作；只有你明确要求时才会委派。",
+      { clear: true },
+    );
+    return;
+  }
   if (payload.kind === "agent-response") {
     setUploadStatus("已提交给 Codex。", { clear: true });
     return;
@@ -3277,6 +3307,18 @@ function updateMemoryProjectSelection(selection = {}) {
   }
 }
 
+function updateOrchestrationMode(mode) {
+  const nextMode = mode === "manual" ? "manual" : "auto";
+  if (nextMode === activeOrchestrationMode) return;
+  orchestrationModeAuto.disabled = true;
+  orchestrationModeManual.disabled = true;
+  if (!send({ type: "set-orchestration-mode", mode: nextMode })) {
+    orchestrationModeAuto.disabled = false;
+    orchestrationModeManual.disabled = false;
+    setUploadStatus("连接恢复中，协作模式尚未修改。", { clear: true });
+  }
+}
+
 function renderAppCommandResult(payload = {}) {
   if (payload.kind === "permissions") {
     renderAppPermissions(payload);
@@ -3326,6 +3368,13 @@ function renderAppCommandResult(payload = {}) {
   }
   if (payload.kind !== "status") return;
 
+  if (payload.tokenUsage) {
+    activeTokenUsage = payload.tokenUsage;
+    syncContextUsage();
+    maybeNotifyContextAlert({ ...activeSessionParams, tokenUsage: payload.tokenUsage });
+  }
+  activeOrchestrationMode = payload.orchestrationMode === "manual" ? "manual" : "auto";
+  syncOrchestrationMode();
   const rows = [
     ["Account", formatAppAccount(payload.account)],
     ["Session", payload.title || "未命名"],
@@ -3334,6 +3383,7 @@ function renderAppCommandResult(payload = {}) {
     ["Model", [payload.model, payload.reasoningEffort].filter(Boolean).join(" · ")],
     ["Provider", payload.modelProvider || "default"],
     ["Service tier", payload.serviceTier === "priority" ? "Fast" : payload.serviceTier || "default"],
+    ["Multi-Agent", payload.orchestrationMode === "manual" ? "手动" : "Auto"],
     ["Directory", payload.cwd || payload.project || "."],
     ["Permissions", appAccessLabel(payload.access)],
     ["Approval", payload.approvalPolicy || "-"],
@@ -3373,6 +3423,7 @@ function renderAppCommandResult(payload = {}) {
 function openSubagentList() {
   agentManagerNote.textContent = "正在读取当前 Session 的子 Agent…";
   agentManagerList.replaceChildren();
+  syncOrchestrationMode();
   if (!agentManagerDialog.open) agentManagerDialog.showModal();
   requestSubagentList();
   stopAgentManagerRefresh();
@@ -3395,6 +3446,19 @@ function stopAgentManagerRefresh() {
 
 function renderAppSubagents(payload = {}) {
   const agents = Array.isArray(payload.agents) ? payload.agents : [];
+  activeOrchestrationMode = payload.orchestrationMode === "manual" ? "manual" : "auto";
+  syncOrchestrationMode();
+  const roles = Array.isArray(payload.roles) ? payload.roles : [];
+  orchestrationRoleSummary.textContent = roles.length
+    ? roles
+        .map((role) =>
+          [
+            role.name ? role.name[0].toUpperCase() + role.name.slice(1) : "Agent",
+            [shortModelName(role.model), role.reasoningEffort].filter(Boolean).join("/"),
+          ].join(" · "),
+        )
+        .join("　")
+    : "Explorer · Terra/medium　Worker · Sol/high　Reviewer · Sol/high";
   agentManagerRefresh.disabled = false;
   agentManagerNote.textContent = payload.note || "";
   if (!agents.length) {
@@ -3402,6 +3466,25 @@ function renderAppSubagents(payload = {}) {
     return;
   }
   agentManagerList.replaceChildren(...agents.map(createAgentCard));
+}
+
+function syncOrchestrationMode() {
+  const auto = activeOrchestrationMode !== "manual";
+  appSessionAgentsMode.textContent = auto ? "Auto" : "手动";
+  orchestrationModeAuto.setAttribute("aria-pressed", String(auto));
+  orchestrationModeManual.setAttribute("aria-pressed", String(!auto));
+  orchestrationModeAuto.disabled = false;
+  orchestrationModeManual.disabled = false;
+  orchestrationModeSummary.textContent = auto
+    ? "Auto 会先判断任务，只在节省主线程上下文或等待时间时委派。"
+    : "手动模式只在你明确要求时委派。";
+}
+
+function shortModelName(model) {
+  const value = String(model || "");
+  if (value.includes("terra")) return "Terra";
+  if (value.includes("sol")) return "Sol";
+  return value || "default";
 }
 
 function createAgentCard(agent) {
@@ -4350,6 +4433,8 @@ function syncAppSessionToolbar() {
   appSessionPermissionsValue.textContent = appAccessLabel(activeAccessMode);
   appSessionPermissionsButton.setAttribute("aria-label", `权限：${appAccessLabel(activeAccessMode)}`);
   syncMemoryProjectLabel();
+  syncContextUsage();
+  syncOrchestrationMode();
   const canInterrupt =
     activeTransport === "app-server" &&
     activeTurnInterruptSupported &&
@@ -4368,11 +4453,48 @@ function syncAppSessionToolbar() {
   );
 }
 
+function syncContextUsage() {
+  const used = Number(activeTokenUsage?.contextUsedTokens || 0);
+  const windowSize = Number(activeTokenUsage?.modelContextWindow || 0);
+  const level =
+    activeTokenUsage?.contextAlert ||
+    (used >= 150_000 ? "critical" : used >= 100_000 ? "watch" : used ? "normal" : "unknown");
+  const remaining = windowSize ? Math.max(0, Math.round((1 - used / windowSize) * 100)) : null;
+  appSessionContextButton.dataset.contextState = level;
+  appSessionContextValue.textContent = used ? formatCount(used) : "等待";
+  const guidance =
+    level === "critical"
+      ? "建议尽快总结并在新 Session 继续"
+      : level === "watch"
+        ? "建议完成当前阶段后 /compact 或新建 Session"
+        : "点击查看 Token 明细";
+  const detail = used
+    ? `${formatCount(used)}${windowSize ? ` / ${formatCount(windowSize)}，剩余 ${remaining}%` : ""}`
+    : "尚未收到当前线程的 Token 更新";
+  appSessionContextButton.title = `上下文：${detail}；${guidance}`;
+  appSessionContextButton.setAttribute("aria-label", `上下文：${detail}。${guidance}`);
+}
+
 function syncMemoryProjectLabel() {
   appSessionMemoryProjects.textContent = "自动运行";
   const runtime = appSessionMemoriesButton.dataset.memoryRuntimeTitle || "个人记忆自动运行中";
   appSessionMemoriesButton.title = `${runtime}；默认读取 Core 与 Now，项目规则由所在项目 AGENTS.md 提供`;
   appSessionMemoriesButton.setAttribute("aria-label", "记忆与规则：自动运行");
+}
+
+function maybeNotifyContextAlert(status) {
+  const usage = status?.tokenUsage;
+  const level = usage?.contextAlert;
+  if (!["watch", "critical"].includes(level)) return;
+  const key = `${status.sessionId || status.id || "session"}:${level}`;
+  if (lastContextNoticeKey === key) return;
+  lastContextNoticeKey = key;
+  setUploadStatus(
+    level === "critical"
+      ? `当前上下文已达 ${formatCount(usage.contextUsedTokens)}。建议尽快让 Codex 总结，并在新 Session 继续。`
+      : `当前上下文已达 ${formatCount(usage.contextUsedTokens)}。建议完成当前阶段后 /compact 或新建 Session。`,
+    { clear: true },
+  );
 }
 
 function normalizeSessionMemoryProjects(value) {
@@ -4998,6 +5120,8 @@ function renderStatus(status) {
   activeMemoryProjectSource = ["manual", "prompt", "retained", "cwd", "title", "global"].includes(status.memoryProjectSource)
     ? status.memoryProjectSource
     : "global";
+  activeOrchestrationMode = status.orchestrationMode === "manual" ? "manual" : "auto";
+  activeTokenUsage = status.tokenUsage || null;
   activeSessionReady = status.ready !== false;
   activeStartupQueueSupported = Boolean(status.capabilities?.startupQueue);
   activeTurnInterruptSupported = Boolean(status.capabilities?.interruptTurn);
@@ -5017,6 +5141,7 @@ function renderStatus(status) {
   activeParentThreadId = String(status.parentThreadId || "");
   activeParentThreadTitle = String(status.parentThreadTitle || "");
   syncAppSessionToolbar();
+  maybeNotifyContextAlert(status);
   globalThis.AgentMemories?.updateSessionRouting({
     mode: activeMemoryProjectMode,
     projects: activeMemoryProjects,
@@ -5210,8 +5335,11 @@ function setConnectedState(state) {
   sendStatusButton.disabled = !canCompose;
   sendPermissionsButton.disabled = !canCompose;
   appSessionPermissionsButton.disabled = activeTransport !== "app-server" || !canCompose;
+  appSessionContextButton.disabled = activeTransport !== "app-server" || !canCompose;
   appSessionAgentsButton.disabled =
     activeTransport !== "app-server" || !connected || !activeSessionCapabilities.subagents;
+  orchestrationModeAuto.disabled = activeTransport !== "app-server" || !connected;
+  orchestrationModeManual.disabled = activeTransport !== "app-server" || !connected;
   appSessionTreeButton.disabled =
     activeTransport !== "app-server" || !connected || !activeSessionCapabilities.threadTree;
   appSessionShareButton.disabled = activeTransport !== "app-server" || !activeSessionParams.sessionId;

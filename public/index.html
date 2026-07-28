@@ -35,7 +35,7 @@
         background: #0f1115;
       }
     </style>
-    <link rel="stylesheet" href="/styles.css?v=20260727-account-control-center-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260728-auto-orchestration-1" />
     <link rel="stylesheet" href="/agent-hosts.css?v=20260727-account-control-center-1" />
     <link rel="stylesheet" href="/session-focus-mode.css?v=20260720-app-toolbar-1" />
     <link rel="stylesheet" href="/thinking-session.css?v=20260716-1" />
@@ -345,6 +345,15 @@
             <strong id="app-session-permissions-value">按需确认</strong>
           </button>
           <button
+            id="app-session-context"
+            type="button"
+            data-context-state="unknown"
+            title="查看当前 Session 的 Token 与上下文用量"
+          >
+            <span>上下文</span>
+            <strong id="app-session-context-value">等待</strong>
+          </button>
+          <button
             id="app-session-memories"
             class="memory-trigger"
             type="button"
@@ -362,7 +371,7 @@
             <div class="app-session-more-menu">
               <button id="app-session-agents" type="button" title="查看当前 Session 的子 Agent">
                 <span>Agents</span>
-                <strong>管理</strong>
+                <strong id="app-session-agents-mode">Auto</strong>
               </button>
               <button id="app-session-tree" type="button" title="查看 Session 分支与 Agent 关系">
                 <span>关系</span>
@@ -471,6 +480,19 @@
             <button id="agent-manager-close" class="dialog-close" type="button" aria-label="关闭">×</button>
           </div>
         </header>
+        <section class="orchestration-panel" aria-labelledby="orchestration-mode-title">
+          <div>
+            <strong id="orchestration-mode-title">协作模式</strong>
+            <span id="orchestration-mode-summary">Auto 会先判断任务，只在有净收益时委派。</span>
+          </div>
+          <div class="orchestration-mode-options" role="group" aria-label="Multi-Agent 协作模式">
+            <button id="orchestration-mode-auto" type="button" data-mode="auto" aria-pressed="true">Auto</button>
+            <button id="orchestration-mode-manual" type="button" data-mode="manual" aria-pressed="false">手动</button>
+          </div>
+          <p id="orchestration-role-summary">
+            Explorer · Terra/medium　Worker · Sol/high　Reviewer · Sol/high
+          </p>
+        </section>
         <p id="agent-manager-note" class="feature-dialog-note">正在读取当前 Session 的子 Agent…</p>
         <div id="agent-manager-list" class="agent-manager-list" aria-live="polite"></div>
       </section>
@@ -658,7 +680,7 @@
     <script src="/agent-upload.js?v=20260725-attachment-wait-1"></script>
     <script src="/agent-voice-input.js?v=20260717-recovery-2"></script>
     <script src="/agent-realtime.js?v=20260726-1"></script>
-    <script src="/app.js?v=20260728-end-to-new-session-2"></script>
+    <script src="/app.js?v=20260728-auto-orchestration-1"></script>
     <script src="/session-focus-mode.js?v=20260716-app-chrome-1"></script>
   </body>
 </html>

@@ -62,6 +62,7 @@ import {
   extractSessionConversationFromJsonl,
   extractSessionPreviewFromJsonl,
   extractSessionTokenUsageFromJsonl,
+  readAppServerSessionConversation,
   readSessionPreviews,
   saveSessionPreview,
 } from "./lib/session-preview.js";
@@ -1208,10 +1209,6 @@ app.post("/api/sessions/:id/fork", async (req, res) => {
 app.get("/api/session-preview/:id", async (req, res) => {
   const agentHost = requestAgentHost(req, res);
   if (!agentHost) return;
-  if (agentHost.type !== "local") {
-    res.status(404).json({ error: "Remote Session previews are read from the remote App Server." });
-    return;
-  }
   const id = String(req.params.id || "").trim();
   if (!isValidSessionId(id)) {
     res.status(400).json({ error: "Invalid session id." });
@@ -1219,6 +1216,20 @@ app.get("/api/session-preview/:id", async (req, res) => {
   }
 
   try {
+    if (agentHost.type !== "local") {
+      const conversation = await withStandaloneAppServer(agentHost, (client) =>
+        readAppServerSessionConversation(client, id, { limit: APP_INITIAL_TURN_LIMIT }),
+      );
+      const preview = sessionPreviewFromConversation(conversation);
+      if (!preview && !conversation.turns.length) {
+        res.status(404).json({ error: "No Session history is available yet." });
+        return;
+      }
+      res.set("Cache-Control", "private, no-store");
+      res.json({ preview, conversation });
+      return;
+    }
+
     const cached = readSessionPreviews(CODEX_SESSION_PREVIEWS_FILE)[id];
     const file = await findCodexSessionFile(id);
     const conversation = file ? await extractSessionConversationFromJsonl(file, { limit: APP_INITIAL_TURN_LIMIT }) : null;
@@ -1236,7 +1247,12 @@ app.get("/api/session-preview/:id", async (req, res) => {
     res.json({ preview, conversation: conversation || { turns: [], hasEarlier: false } });
   } catch (error) {
     console.error(`Failed to read session preview ${id}: ${error.message}`);
-    res.status(500).json({ error: "Session preview is unavailable." });
+    res.status(agentHost.type === "local" ? 500 : 503).json({
+      error:
+        agentHost.type === "local"
+          ? "Session preview is unavailable."
+          : `${agentHost.label} Session 暂时无法读取，请确认远端设备在线后重试。`,
+    });
   }
 });
 

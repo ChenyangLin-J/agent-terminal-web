@@ -15,7 +15,18 @@ test("saved and released Sessions open from disk before a runtime is attached", 
     app,
     /function openSessionInCurrentPage\(params\)[\s\S]*if \(scopedParams\.preview === "1"\) openSessionPreview\(scopedParams\);[\s\S]*else openSocket\(scopedParams\)/,
   );
-  assert.match(app, /fetch\(`\/api\/session-preview\/\$\{encodeURIComponent\(sessionId\)\}`\)/);
+  assert.match(
+    app,
+    /agentHostApiUrl\(\s*`\/api\/session-preview\/\$\{encodeURIComponent\(sessionId\)\}`,\s*activeSessionParams\.host \|\| activeAgentHostId/,
+  );
+  assert.match(
+    app,
+    /function openSavedSessionPreview\(session\)[\s\S]*host: hostId,[\s\S]*preview: "1"/,
+  );
+  assert.match(
+    app,
+    /function openSessionPreview\(params = \{\}\)[\s\S]*if \(activeSessionParams\.sessionId\) \{\s*void loadSessionPreview/,
+  );
   assert.match(app, /const resumesRenderedPreview =[\s\S]*appTranscriptSource === "disk"/);
   assert.match(app, /if \(!resumesRenderedPreview\) renderAppTranscript\(\)/);
   assert.match(
@@ -54,6 +65,10 @@ test("the first message activates a previewed Session and keeps permissions loca
   assert.match(
     server,
     /async function resumeAppServerThread\(session, launch, params\)[\s\S]*setThreadArchived\(false, threadId\)[\s\S]*resumeThreadWithResult\(threadId, params\)/,
+  );
+  assert.match(
+    server,
+    /app\.get\("\/api\/session-preview\/:id"[\s\S]*agentHost\.type !== "local"[\s\S]*readAppServerSessionConversation\(client, id,[\s\S]*res\.json\(\{ preview, conversation \}\)/,
   );
   assert.match(
     server,

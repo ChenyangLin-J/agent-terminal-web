@@ -4,9 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  appServerConversationFromTurnPage,
   extractSessionConversationFromJsonl,
   extractSessionPreviewFromJsonl,
   extractSessionTokenUsageFromJsonl,
+  readAppServerSessionConversation,
   readSessionPreviews,
   saveSessionPreview,
 } from "../lib/session-preview.js";
@@ -112,6 +114,85 @@ test("extracts recent user and assistant conversation turns directly from disk",
     conversation.turns.at(-1).assistant.map((item) => item.phase),
     ["commentary", "final_answer"],
   );
+});
+
+test("reads a remote Session preview through turns without resuming the thread", async () => {
+  const calls = [];
+  const client = {
+    async listThreadTurns(params) {
+      calls.push({ method: "listThreadTurns", params });
+      return {
+        data: [
+          {
+            id: "turn-2",
+            startedAt: 1_785_227_200,
+            status: "interrupted",
+            items: [
+              { type: "userMessage", content: [{ type: "text", text: "继续处理" }] },
+              { type: "reasoning", summary: ["private"] },
+            ],
+          },
+          {
+            id: "turn-1",
+            startedAt: 1_785_226_600,
+            completedAt: 1_785_226_660,
+            status: "completed",
+            items: [
+              { type: "userMessage", content: [{ type: "text", text: "先检查现状" }] },
+              { type: "agentMessage", phase: "commentary", text: "正在检查" },
+              { type: "agentMessage", phase: "final_answer", text: "检查完成" },
+            ],
+          },
+        ],
+        nextCursor: "earlier-page",
+      };
+    },
+  };
+
+  const conversation = await readAppServerSessionConversation(client, "company-thread", { limit: 10 });
+
+  assert.deepEqual(calls, [
+    {
+      method: "listThreadTurns",
+      params: {
+        threadId: "company-thread",
+        limit: 10,
+        sortDirection: "desc",
+        itemsView: "full",
+      },
+    },
+  ]);
+  assert.equal(conversation.hasEarlier, true);
+  assert.deepEqual(conversation.turns.map((turn) => turn.id), ["turn-1", "turn-2"]);
+  assert.equal(conversation.turns[0].startedAt, "2026-07-28T08:16:40.000Z");
+  assert.deepEqual(
+    conversation.turns[0].assistant.map((item) => [item.phase, item.text]),
+    [
+      ["commentary", "正在检查"],
+      ["final_answer", "检查完成"],
+    ],
+  );
+  assert.equal(conversation.turns[1].user, "继续处理");
+});
+
+test("normalizes App Server preview pages without exposing reasoning items", () => {
+  const conversation = appServerConversationFromTurnPage({
+    data: [
+      {
+        id: "turn-1",
+        startedAt: "2026-07-28T08:00:00.000Z",
+        items: [
+          { type: "reasoning", summary: ["hidden"] },
+          { type: "agentMessage", phase: "final_answer", text: "可见回答" },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(conversation.turns.length, 1);
+  assert.deepEqual(conversation.turns[0].assistant, [
+    { text: "可见回答", phase: "final_answer", completedAt: "" },
+  ]);
 });
 
 test("preview cache is stored atomically and normalized by session id", async (t) => {

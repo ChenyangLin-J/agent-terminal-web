@@ -47,6 +47,15 @@ test("the desktop and Pad Session switcher collapses and exposes contextual acti
     /agentHostApiUrl\(`\/api\/sessions\/\$\{encodeURIComponent\(webSessionId\)\}\/end`, session\.hostId \|\| activeAgentHostId\)/,
   );
   assert.match(
+    app,
+    /function endSessionFromSwitcher\(session\)[\s\S]*if \(isCurrentSession && payload\.session\) \{[\s\S]*enterStoppedSessionPreview\(payload\.session\)/,
+  );
+  assert.match(
+    app,
+    /async function endSession\(\)[\s\S]*agentHostApiUrl\([\s\S]*\/api\/sessions\/\$\{encodeURIComponent\(webSessionId\)\}\/end[\s\S]*enterStoppedSessionPreview\(payload\.session\)/,
+  );
+  assert.match(app, /Session 已结束 · 发送消息时恢复/);
+  assert.match(
     styles,
     /\.session-switcher-row:hover \.session-switcher-actions > summary,[\s\S]*opacity: 1;[\s\S]*pointer-events: auto;/,
   );
@@ -57,6 +66,7 @@ test("the desktop and Pad Session switcher collapses and exposes contextual acti
     server,
     /session && !session\.exited && session\.hostId === agentHost\.id[\s\S]*killSessionTerminal\(session\)/,
   );
+  assert.match(server, /res\.json\(\{ id, ended: true, session: publicSession\(session\) \}\)/);
   assert.match(
     server,
     /listDetachedSessions\(\)\.find\([\s\S]*candidate\.hostId === agentHost\.id[\s\S]*removePersistedWebSession\(id\)/,

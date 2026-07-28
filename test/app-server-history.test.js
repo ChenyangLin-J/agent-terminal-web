@@ -14,6 +14,11 @@ test("App Server resume restores structured history without terminal replay", as
   assert.match(server, /initialTurnsPage: \{[\s\S]*limit: APP_INITIAL_TURN_LIMIT/);
   assert.match(server, /const recentPage = resumed\.initialTurnsPage/);
   assert.match(server, /restoreAppServerTranscript\(session, \{ \.\.\.thread, turns: recentPage\?\.data \|\| \[\] \}, \{ resumed: true \}\)/);
+  assert.match(server, /restoreResumedActiveTurnState\(session, recentPage\?\.data \|\| \[\]\)/);
+  assert.match(
+    server,
+    /function restoreResumedActiveTurnState\(session, turns\)[\s\S]*session\.appServer\?\.activeTurnId[\s\S]*state\.active = true/,
+  );
   assert.match(server, /for \(const turn of turns\)[\s\S]*for \(const item of Array\.isArray\(turn\?\.items\)/);
   assert.match(server, /send\(ws, "app-transcript", publicAppTranscript\(session\)\)/);
   assert.match(server, /item\.type === "userMessage"/);

@@ -69,7 +69,7 @@ test("app-server client interrupts only the active turn", async (t) => {
 });
 
 test("app-server client resumes with its initial paginated turn page", async (t) => {
-  const fake = createFakeAppServer();
+  const fake = createFakeAppServer({ resumedTurnStatus: "inProgress" });
   const client = new CodexAppServerClient({ spawnImpl: () => fake.child, requestTimeoutMs: 1_000 });
   t.after(() => client.close());
 
@@ -86,7 +86,24 @@ test("app-server client resumes with its initial paginated turn page", async (t)
     initialTurnsPage: { limit: 3, sortDirection: "desc", itemsView: "full" },
   });
   assert.equal(result.initialTurnsPage.data.length, 1);
+  assert.equal(client.activeTurnId, "recent-turn");
   assert.equal(fake.received.some((message) => message.method === "thread/turns/list"), false);
+});
+
+test("a resumed turn that completes with the resume response is not left active", async (t) => {
+  const fake = createFakeAppServer({
+    resumedTurnStatus: "inProgress",
+    completeResumedTurnImmediately: true,
+  });
+  const client = new CodexAppServerClient({ spawnImpl: () => fake.child, requestTimeoutMs: 1_000 });
+  t.after(() => client.close());
+
+  await client.start();
+  await client.resumeThreadWithResult("thread-large", {
+    initialTurnsPage: { limit: 3, sortDirection: "desc", itemsView: "full" },
+  });
+
+  assert.equal(client.activeTurnId, "");
 });
 
 test("app-server client can read turns for an explicit thread without resuming it", async (t) => {
@@ -403,7 +420,12 @@ test("a shared initialization failure closes every attached thread client", asyn
   assert.equal(fake.killCount, 1);
 });
 
-function createFakeAppServer({ completeTurnImmediately = false, initializeError = false } = {}) {
+function createFakeAppServer({
+  completeResumedTurnImmediately = false,
+  completeTurnImmediately = false,
+  initializeError = false,
+  resumedTurnStatus = "",
+} = {}) {
   const child = new EventEmitter();
   const stdout = new PassThrough();
   const stderr = new PassThrough();
@@ -453,16 +475,27 @@ function createFakeAppServer({ completeTurnImmediately = false, initializeError 
       return;
     }
     if (message.method === "thread/resume") {
-      send({
+      const response = {
         id: message.id,
         result: {
           thread: { id: message.params.threadId, turns: [] },
           initialTurnsPage: {
-            data: [{ id: "recent-turn", items: [] }],
+            data: [{ id: "recent-turn", status: resumedTurnStatus, items: [] }],
             nextCursor: "older",
           },
         },
-      });
+      };
+      if (completeResumedTurnImmediately) {
+        sendTogether([
+          response,
+          {
+            method: "turn/completed",
+            params: { threadId: message.params.threadId, turn: { id: "recent-turn" } },
+          },
+        ]);
+      } else {
+        send(response);
+      }
       return;
     }
     if (message.method === "thread/fork") {

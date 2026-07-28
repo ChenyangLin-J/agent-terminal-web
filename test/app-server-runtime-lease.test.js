@@ -11,6 +11,8 @@ import WebSocket from "ws";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const threadId = "019f9db5-cdfd-7c10-b477-4859c23313be";
+const activeThreadId = "019f9db5-cdfd-7c10-b477-4859c23313c0";
+const activeTurnId = "019f9db5-cdfd-7c10-b477-4859c23313c1";
 
 test("an idle App Server runtime is released even while its page remains connected", async (t) => {
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "agent-app-runtime-lease-"));
@@ -32,11 +34,25 @@ input.on("line", (line) => {
   } else if (message.method === "thread/start") {
     send({ id: message.id, result: { thread: { id: "${threadId}", turns: [] } } });
   } else if (message.method === "thread/resume") {
+    const active = message.params.threadId === "${activeThreadId}";
     send({
       id: message.id,
       result: {
         thread: { id: message.params.threadId, turns: [] },
-        initialTurnsPage: { data: [], nextCursor: null }
+        initialTurnsPage: {
+          data: active
+            ? [{
+                id: "${activeTurnId}",
+                status: "inProgress",
+                items: [{
+                  id: "active-user-message",
+                  type: "userMessage",
+                  content: [{ type: "text", text: "仍在运行的恢复任务" }]
+                }]
+              }]
+            : [],
+          nextCursor: null
+        }
       }
     });
   } else if (message.method === "turn/start") {
@@ -101,6 +117,23 @@ input.on("line", (line) => {
     events: [],
   };
   await nextControlEvent(controlStream, (event) => event.type === "ready");
+
+  const resumedActiveClient = await connect(
+    `ws://127.0.0.1:${agentPort}/terminal?cwd=.&sessionId=${activeThreadId}&transport=app-server&access=safe&clientId=resumed-active`,
+  );
+  const resumedActive = await resumedActiveClient.next(
+    (message) => message.type === "status" && message.payload.ready,
+  );
+  assert.equal(resumedActive.payload.turnState.active, true);
+  assert.equal(resumedActive.payload.turnState.turnId, activeTurnId);
+  assert.equal(resumedActive.payload.turnState.requirements[0]?.text, "仍在运行的恢复任务");
+  const activeSessionsResponse = await fetch(`http://127.0.0.1:${agentPort}/api/sessions`);
+  const activeSessions = (await activeSessionsResponse.json()).sessions;
+  assert.equal(
+    activeSessions.find((session) => session.id === resumedActive.payload.id)?.turnState.active,
+    true,
+  );
+  resumedActiveClient.ws.close();
 
   const client = await connect(
     `ws://127.0.0.1:${agentPort}/terminal?cwd=.&transport=app-server&access=safe&clientId=idle-page`,
@@ -212,6 +245,17 @@ input.on("line", (line) => {
   const resumedUrl = new URL(desktopPage.url());
   assert.equal(resumedUrl.searchParams.has("preview"), false);
   assert.ok(resumedUrl.searchParams.get("attach"));
+  desktopPage.once("dialog", (dialog) => dialog.accept());
+  await desktopPage.locator("#kill-session").click();
+  await desktopPage.locator("#connection").filter({ hasText: "仅查看" }).waitFor({ timeout: 2_000 });
+  await desktopPage
+    .locator("#upload-status")
+    .filter({ hasText: "Session 已结束；发送消息时会恢复。" })
+    .waitFor({ timeout: 2_000 });
+  const endedUrl = new URL(desktopPage.url());
+  assert.equal(endedUrl.searchParams.get("preview"), "1");
+  assert.equal(endedUrl.searchParams.has("attach"), false);
+  assert.equal(await desktopPage.locator("#prompt").isEnabled(), true);
   viewedClient.ws.close();
 });
 

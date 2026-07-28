@@ -2369,20 +2369,21 @@ async function endSessionFromSwitcher(session) {
       redirectToLogin();
       return;
     }
+    const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const payload = await response.json().catch(() => ({}));
       throw new Error(payload.error || "结束失败");
     }
-    forgetSessionNavigation({
-      host: session.hostId || activeAgentHostId,
-      sessionId: session.sessionId,
-    });
     const isCurrentSession =
       (cleanAgentHostId(session.hostId) || "personal") ===
         (cleanAgentHostId(activeSessionParams.host) || activeAgentHostId) &&
       (webSessionId === activeSessionId || session.sessionId === activeSessionParams.sessionId);
-    if (isCurrentSession) detach(true);
-    else {
+    if (isCurrentSession && payload.session) {
+      enterStoppedSessionPreview(payload.session);
+    } else {
+      forgetSessionNavigation({
+        host: session.hostId || activeAgentHostId,
+        sessionId: session.sessionId,
+      });
       syncPrimaryNavigation("center");
       await refreshLists();
     }
@@ -4750,14 +4751,36 @@ function currentReconnectParams() {
   };
 }
 
-function endSession() {
+async function endSession() {
   closeSessionMenu();
+  const webSessionId = String(activeSessionId || "").trim();
+  if (!webSessionId) return;
   const message = latestTurnState.active
     ? "结束这个 Session？当前任务会停止，Session 会移到最近历史，之后仍可恢复。"
     : "结束这个 Session？它会移到最近历史，之后仍可恢复。";
   if (!window.confirm(message)) return;
-  send({ type: "kill" });
-  detach(true);
+  try {
+    const response = await fetch(
+      agentHostApiUrl(
+        `/api/sessions/${encodeURIComponent(webSessionId)}/end`,
+        activeSessionParams.host || activeAgentHostId,
+      ),
+      { method: "POST" },
+    );
+    if (response.status === 401) {
+      redirectToLogin();
+      return;
+    }
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "结束失败");
+    if (payload.session && activeTransport === "app-server") {
+      enterStoppedSessionPreview(payload.session);
+    } else {
+      setConnectedState("exited");
+    }
+  } catch (error) {
+    window.alert(`结束失败：${error.message}`);
+  }
 }
 
 function send(message, { allowStale = false } = {}) {
@@ -4999,8 +5022,13 @@ function renderStatus(status) {
   ) {
     renderAppTranscript({ follow: isAppTranscriptAtBottom() });
   }
-  if (activeTransport === "app-server" && status.released && status.exited) {
-    enterReleasedSessionPreview(status);
+  if (
+    activeTransport === "app-server" &&
+    status.exited &&
+    status.sessionId &&
+    Number(status.exitCode) === 0
+  ) {
+    enterStoppedSessionPreview(status);
     return;
   }
   if (activeTransport === "app-server" && activeSessionReady && promptInput.value.includes("$")) {
@@ -5010,7 +5038,7 @@ function renderStatus(status) {
   if (!status.exited) flushPendingPreviewSubmission();
 }
 
-function enterReleasedSessionPreview(status) {
+function enterStoppedSessionPreview(status) {
   closeSocket();
   activeSessionPreviewOnly = true;
   activeSessionId = "";
@@ -5027,8 +5055,17 @@ function enterReleasedSessionPreview(status) {
   activeTurnInterruptSupported = false;
   activeSessionCapabilities = {};
   appTranscriptSource = "disk";
+  setUploadStatus(
+    status.released
+      ? "运行时已自动释放；发送消息时会恢复。"
+      : "Session 已结束；发送消息时会恢复。",
+  );
   const banner = appServerTranscript.querySelector(".app-history-banner span");
-  if (banner) banner.textContent = "运行时已自动释放 · 发送消息时恢复";
+  if (banner) {
+    banner.textContent = status.released
+      ? "运行时已自动释放 · 发送消息时恢复"
+      : "Session 已结束 · 发送消息时恢复";
+  }
   rememberSessionNavigation(activeSessionParams);
   syncAppSessionToolbar();
   setConnectedState("preview");

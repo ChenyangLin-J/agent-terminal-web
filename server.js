@@ -1007,7 +1007,7 @@ app.post("/api/sessions/:id/end", (req, res) => {
       activeTurn: Boolean(session.turnState?.active),
     });
     killSessionTerminal(session);
-    res.json({ id, ended: true });
+    res.json({ id, ended: true, session: publicSession(session) });
     return;
   }
 
@@ -2124,6 +2124,7 @@ async function initializeAppServerSession(session, launch) {
       thread = resumed.thread;
       const recentPage = resumed.initialTurnsPage || { data: [], nextCursor: null };
       restoreAppServerTranscript(session, { ...thread, turns: recentPage?.data || [] }, { resumed: true });
+      restoreResumedActiveTurnState(session, recentPage?.data || []);
       session.restoredHistoryCursor = recentPage?.nextCursor || null;
       session.restoredHistoryHasMore = Boolean(recentPage?.nextCursor);
       logAgentEvent("app-server-recent-history", {
@@ -4203,6 +4204,42 @@ function restoreAppServerTranscript(session, thread, { resumed = false } = {}) {
   for (const item of appTranscriptItemsFromTurns(session, turns, { historical: resumed })) {
     upsertAppTranscriptItem(session, item, { notify: false });
   }
+}
+
+function restoreResumedActiveTurnState(session, turns) {
+  const activeTurnId = String(session.appServer?.activeTurnId || "");
+  if (!activeTurnId) return;
+  const activeTurn = (Array.isArray(turns) ? turns : []).find(
+    (turn) => String(turn?.id || "") === activeTurnId && turn?.status === "inProgress",
+  );
+  if (!activeTurn) return;
+
+  const state = session.turnState;
+  state.active = true;
+  state.stopping = false;
+  state.interrupted = false;
+  state.interruptedAt = "";
+  state.turnId = activeTurnId;
+  for (const requirement of state.requirements) {
+    if (requirement.status === "interrupted") requirement.status = "working";
+  }
+
+  const hasWorkingRequirement = state.requirements.some((requirement) => requirement.status === "working");
+  if (!hasWorkingRequirement) {
+    const prompt = [...session.appTranscript]
+      .reverse()
+      .find((item) => item.turnId === activeTurnId && item.type === "user")
+      ?.text?.trim();
+    if (prompt) {
+      state.sequence += 1;
+      state.requirements = [turnRequirement(state, prompt, "original", "working")];
+    }
+  }
+  logAgentEvent("session-active-turn-restored", {
+    webSessionId: session.id,
+    codexSessionId: session.sessionId,
+    turnId: activeTurnId,
+  });
 }
 
 function prependAppServerTranscript(session, turns) {
@@ -6378,6 +6415,7 @@ function killSessionTerminal(session) {
     removePersistedWebSession(session.id);
     closeSideChat(session);
     session.realtime = restoreRealtimeState();
+    session.turnState = interruptedTurnStateAfterProcessLoss(session.turnState);
     session.ready = false;
     session.exited = true;
     session.exitCode = 0;

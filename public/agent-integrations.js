@@ -59,9 +59,12 @@
     for (const field of integration.fields || []) form.append(secretField(field, integration.status));
 
     const metadata = element("div", "integration-meta");
-    metadata.textContent = integration.status?.verifiedAt
-      ? `最近验证：${formatDate(integration.status.verifiedAt)}`
-      : "保存前会先连接服务商验证。";
+    metadata.textContent = integration.status?.message
+      || (integration.status?.verifiedAt
+        ? `最近验证：${formatDate(integration.status.verifiedAt)}`
+        : integration.status?.updatedAt
+          ? `配置更新：${formatDate(integration.status.updatedAt)}`
+          : "保存前会先连接服务商验证。");
 
     const feedback = element("p", "integration-feedback");
     feedback.setAttribute("aria-live", "polite");
@@ -70,6 +73,9 @@
     const save = element("button", "primary");
     save.type = "submit";
     save.textContent = integration.status?.configured ? "替换并验证" : "保存并验证";
+    if (integration.status?.state === "conflict" && !integration.status?.canReplace) {
+      save.disabled = true;
+    }
     actions.append(save);
 
     if (integration.docsUrl) {
@@ -77,7 +83,7 @@
       docs.href = integration.docsUrl;
       docs.target = "_blank";
       docs.rel = "noreferrer";
-      docs.textContent = "申请 Key";
+      docs.textContent = integration.docsLabel || "申请 Key";
       actions.append(docs);
     }
 
@@ -118,6 +124,13 @@
   }
 
   async function saveIntegration(integration, form, card, feedback) {
+    const confirmReplace = integration.status?.state === "conflict" && integration.status?.canReplace;
+    if (
+      confirmReplace &&
+      !global.confirm("Cubox CLI 当前登录的是国际版。确认替换为国内版登录？")
+    ) {
+      return;
+    }
     const values = Object.fromEntries(new FormData(form));
     const controls = [...form.querySelectorAll("input, button")];
     setBusy(controls, true);
@@ -126,7 +139,7 @@
       const response = await fetch(`/api/integrations/${encodeURIComponent(integration.id)}`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ values }),
+        body: JSON.stringify({ values, confirmReplace }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "保存失败");
@@ -162,13 +175,20 @@
   function replaceCard(card, integration) {
     const replacement = integrationCard(integration);
     const feedback = replacement.querySelector(".integration-feedback");
-    setFeedback(feedback, "已保存。新建或重新连接 Codex 会话后生效。", "success");
+    setFeedback(feedback, "已保存。工具下次调用时生效。", "success");
     card.replaceWith(replacement);
   }
 
   function renderStatus(element, status = {}) {
-    element.dataset.state = status.configured ? "ready" : "off";
-    element.textContent = status.configured ? "已配置" : "未配置";
+    const state = status.state || (status.configured ? "ready" : "off");
+    const labels = {
+      ready: "已配置",
+      conflict: "需处理",
+      error: "配置异常",
+      off: "未配置",
+    };
+    element.dataset.state = state;
+    element.textContent = labels[state] || labels.off;
   }
 
   function setBusy(controls, busy) {

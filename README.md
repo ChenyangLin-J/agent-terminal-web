@@ -211,6 +211,11 @@ starts one provider shared by all Agent sessions, and it exits after 60 seconds 
 another call. Replacing or deleting the credential closes the shared provider immediately.
 Provider results and errors are recursively redacted before they return to Codex.
 
+Cubox uses the same write-only browser flow but writes the verified domestic API link into
+Cubox CLI's native config at `~/.config/cubox-cli/config.json` (directory `0700`, file
+`0600`). The API link is validated only against the fixed `cubox.pro` CLI endpoint, is
+never returned to the browser, and becomes available to `cubox-cli` on its next call.
+
 Playwright follows the same shared lifecycle. Tool discovery uses a versioned manifest;
 the first actual browser call starts Browser Hand-off and one Playwright provider shared
 by all Agent sessions. Browser calls are serialized because they mutate one shared browser

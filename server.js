@@ -151,6 +151,14 @@ const AGENT_INTEGRATIONS_DIR = path.resolve(
   process.env.AGENT_INTEGRATIONS_DIR ||
     path.join(process.env.HOME, ".config", "agent-terminal-web", "integrations"),
 );
+const AGENT_CUBOX_CONFIG_DIR = path.resolve(
+  (process.env.NODE_ENV === "test" ? process.env.AGENT_CUBOX_CONFIG_DIR : "") ||
+    path.join(process.env.HOME, ".config", "cubox-cli"),
+);
+const AGENT_CUBOX_ENVIRONMENT = Object.freeze({
+  server: Boolean(process.env.CUBOX_SERVER),
+  token: Boolean(process.env.CUBOX_TOKEN),
+});
 const UPLOADS_ROOT = path.resolve(process.env.UPLOADS_ROOT || path.join(WORKSPACE_ROOT, "uploads"));
 const OBSIDIAN_VAULT_ROOT = path.resolve(
   process.env.OBSIDIAN_VAULT_PATH || path.join(WORKSPACE_ROOT, "obsidian", "MainVault"),
@@ -744,7 +752,13 @@ app.delete("/api/session-shares/:id", async (req, res) => {
 app.get("/api/integrations", async (_req, res) => {
   res.set("Cache-Control", "private, no-store");
   try {
-    res.json({ integrations: await listIntegrations({ root: AGENT_INTEGRATIONS_DIR }) });
+    res.json({
+      integrations: await listIntegrations({
+        root: AGENT_INTEGRATIONS_DIR,
+        cuboxConfigDir: AGENT_CUBOX_CONFIG_DIR,
+        cuboxEnvironment: AGENT_CUBOX_ENVIRONMENT,
+      }),
+    });
   } catch (error) {
     logAgentEvent("integration-status-failed", { message: cleanClientLogValue(error.message, 200) });
     res.status(500).json({ error: "暂时无法读取集成状态。" });
@@ -756,6 +770,9 @@ app.put("/api/integrations/:integrationId", requireSafeIntegrationMutation, asyn
   try {
     const integration = await saveIntegrationCredential(integrationId, req.body?.values, {
       root: AGENT_INTEGRATIONS_DIR,
+      cuboxConfigDir: AGENT_CUBOX_CONFIG_DIR,
+      cuboxEnvironment: AGENT_CUBOX_ENVIRONMENT,
+      confirmReplace: req.body?.confirmReplace === true,
     });
     if (integrationId === "amap") await amapMcpProxy.backend.close("credential-updated");
     logAgentEvent("integration-saved", { integrationId });
@@ -776,6 +793,8 @@ app.delete("/api/integrations/:integrationId", requireSafeIntegrationMutation, a
   try {
     const removed = await deleteIntegrationCredential(integrationId, {
       root: AGENT_INTEGRATIONS_DIR,
+      cuboxConfigDir: AGENT_CUBOX_CONFIG_DIR,
+      cuboxEnvironment: AGENT_CUBOX_ENVIRONMENT,
     });
     if (integrationId === "amap") await amapMcpProxy.backend.close("credential-deleted");
     logAgentEvent("integration-deleted", { integrationId, removed });

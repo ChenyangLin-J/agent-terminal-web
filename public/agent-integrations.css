@@ -115,6 +115,18 @@
   background: #14251e;
 }
 
+.integration-status[data-state="conflict"] {
+  border-color: #765b2f;
+  color: #f3d38f;
+  background: #2d2415;
+}
+
+.integration-status[data-state="error"] {
+  border-color: #743440;
+  color: #ffb4bf;
+  background: #30191e;
+}
+
 .integration-form {
   display: grid;
   gap: 10px;

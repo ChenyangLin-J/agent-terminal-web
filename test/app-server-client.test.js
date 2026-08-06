@@ -5,7 +5,12 @@ import test from "node:test";
 import {
   CodexAppServerClient,
   CodexAppServerConnection,
+  DEFAULT_APP_SERVER_ARGS,
 } from "../lib/codex-app-server-client.js";
+
+test("app-server clients enable realtime conversations by default", () => {
+  assert.deepEqual(DEFAULT_APP_SERVER_ARGS, ["app-server", "--enable", "realtime_conversation"]);
+});
 
 test("app-server client steers the exact active turn and starts queued work after completion", async (t) => {
   const fake = createFakeAppServer();

@@ -27,12 +27,14 @@ test("one app-server connection is shared per execution host", async () => {
 
   assert.equal(spawns.length, 1);
   assert.equal(spawns[0].command, "ssh");
-  assert.deepEqual(spawns[0].args.slice(-5), [
+  assert.deepEqual(spawns[0].args.slice(-7), [
     "company-mac",
     "/Applications/ChatGPT.app/Contents/Resources/codex",
     "-c",
     "notify='[]'",
     "app-server",
+    "--enable",
+    "realtime_conversation",
   ]);
   assert.equal(spawns[0].options.cwd, "/server/workspace");
   assert.equal(first.cwd, "/Users/mac/Documents/workspace/project-a");
@@ -69,6 +71,7 @@ test("personal and company hosts never share an app-server process", async () =>
 
   assert.equal(spawns.length, 2);
   assert.deepEqual(spawns.map((spawn) => spawn.command), ["/usr/bin/codex", "ssh"]);
+  assert.deepEqual(spawns[0].args, ["app-server", "--enable", "realtime_conversation"]);
   pool.close();
 });
 

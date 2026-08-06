@@ -170,6 +170,17 @@ Codex processes launched from Agent Web cannot stop or restart this service them
 
 App Server sessions show a separate task state (`连接中`, `空闲`, `处理中`, `终止中`, or `已中断`). `终止当前` interrupts only the active turn; it keeps the Session available for the next prompt and does not publish the partial response as a completed result.
 
+WebSocket diagnostics are split across the Agent and proxy journals. Agent events distinguish
+`ws-upgrade-received`, `ws-upgrade-complete`, authentication or parameter rejection,
+attachment, browser-side handshake failure, and established connection closure. Caddy access
+logs provide the HTTP status and proxy duration; their Agent-site formatter removes query
+strings, public share tokens, authentication headers, cookies, and client IP fields.
+
+```bash
+journalctl --user -u agent-terminal-web.service --since "10 minutes ago" -o cat | rg 'ws-|client-event'
+journalctl -u caddy.service --since "10 minutes ago" -o cat | rg 'agent.chenyanglin.com|http.log.access'
+```
+
 Private environment values live in:
 
 ```text

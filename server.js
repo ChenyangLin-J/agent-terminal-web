@@ -268,6 +268,11 @@ const AGENT_WEB_DEVELOPER_INSTRUCTIONS = [
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/terminal" });
+server.prependListener("upgrade", (req) => {
+  req.agentWebUpgradeStartedAt = Date.now();
+  req.agentWebUpgradeLogFields = webSocketRequestLogFields(req);
+  logAgentEvent("ws-upgrade-received", req.agentWebUpgradeLogFields);
+});
 const sessions = new Map();
 const controlEventClients = new Set();
 let remoteAgentNotifyRateWindow = { startedAt: Date.now(), requests: 0 };
@@ -1051,13 +1056,17 @@ app.post("/api/client-events", (req, res) => {
       closeCode: Number.isFinite(Number(req.body?.closeCode)) ? Number(req.body.closeCode) : undefined,
       wasClean: typeof req.body?.wasClean === "boolean" ? req.body.wasClean : undefined,
       online: typeof req.body?.online === "boolean" ? req.body.online : undefined,
-      path: cleanClientLogValue(req.body?.path, 300),
+      path: cleanClientEventPath(req.body?.path),
+      hostId: cleanClientLogValue(req.body?.hostId, 40),
       replayMode: cleanClientLogValue(req.body?.replayMode, 20),
       rawChars: optionalNonNegativeInteger(req.body?.rawChars),
       outputRevision: optionalNonNegativeInteger(req.body?.outputRevision),
       expectedRevision: optionalNonNegativeInteger(req.body?.expectedRevision),
       receivedRevision: optionalNonNegativeInteger(req.body?.receivedRevision),
       durationMs: optionalNonNegativeInteger(req.body?.durationMs),
+      reconnect: typeof req.body?.reconnect === "boolean" ? req.body.reconnect : undefined,
+      reconnectAttempt: optionalNonNegativeInteger(req.body?.reconnectAttempt),
+      phase: cleanClientLogValue(req.body?.phase, 30),
     });
   }
   res.json({ ok: true });
@@ -1551,10 +1560,15 @@ app.get("/api/git-status", async (req, res) => {
 });
 
 wss.on("connection", async (ws, req) => {
+  ws.agentWebUpgradeStartedAt = req.agentWebUpgradeStartedAt || Date.now();
+  logAgentEvent("ws-upgrade-complete", {
+    ...(req.agentWebUpgradeLogFields || webSocketRequestLogFields(req)),
+    durationMs: webSocketElapsedMs(ws.agentWebUpgradeStartedAt),
+  });
   registerWebSocketErrorHandler(ws, req);
 
   if (!(await isAuthenticated(req))) {
-    logAgentEvent("ws-reject", { reason: "not-authenticated" });
+    logWebSocketReject(req, "not-authenticated");
     send(ws, "error", { message: "Not authenticated." });
     ws.close();
     return;
@@ -1568,7 +1582,7 @@ wss.on("connection", async (ws, req) => {
   const requestedAgentHost = resolveAgentHost(AGENT_HOSTS, url.searchParams.get("host"));
 
   if (!requestedAgentHost) {
-    logAgentEvent("ws-reject", { reason: "invalid-host" });
+    logWebSocketReject(req, "invalid-host");
     send(ws, "error", { message: "Unknown Agent host." });
     ws.close();
     return;
@@ -1605,8 +1619,7 @@ wss.on("connection", async (ws, req) => {
   }
 
   if (session && session.hostId !== requestedAgentHost.id) {
-    logAgentEvent("ws-reject", {
-      reason: "host-mismatch",
+    logWebSocketReject(req, "host-mismatch", {
       webSessionId: session.id,
       requestedHostId: requestedAgentHost.id,
       sessionHostId: session.hostId,
@@ -1621,14 +1634,14 @@ wss.on("connection", async (ws, req) => {
     const launch = await getLaunchConfig(url.searchParams, requestedAgentHost);
 
     if (!cwd) {
-      logAgentEvent("ws-reject", { reason: "invalid-cwd" });
+      logWebSocketReject(req, "invalid-cwd");
       send(ws, "error", { message: "Invalid cwd outside workspace root." });
       ws.close();
       return;
     }
 
     if (!launch) {
-      logAgentEvent("ws-reject", { reason: "invalid-launch" });
+      logWebSocketReject(req, "invalid-launch");
       send(ws, "error", { message: "Invalid launch mode or session ID." });
       ws.close();
       return;
@@ -1637,6 +1650,7 @@ wss.on("connection", async (ws, req) => {
     launch.agentHost = requestedAgentHost;
     launch.hostId = requestedAgentHost.id;
     if (requestedAgentHost.type === "ssh" && launch.transport !== APP_SERVER_TRANSPORT) {
+      logWebSocketReject(req, "unsupported-remote-transport");
       send(ws, "error", { message: "Remote hosts support App Server sessions only." });
       ws.close();
       return;
@@ -1911,6 +1925,16 @@ function cleanClientEventName(value) {
   return event || "";
 }
 
+function cleanClientEventPath(value) {
+  const raw = cleanClientLogValue(value, 2_000);
+  if (!raw) return "";
+  try {
+    return cleanClientLogValue(new URL(raw, "https://agent.invalid").pathname, 300);
+  } catch {
+    return cleanClientLogValue(raw.split(/[?#]/, 1)[0], 300);
+  }
+}
+
 function codexArgsForWeb(args, personalMemoryContext = "") {
   const notify = JSON.stringify([process.execPath, CODEX_NOTIFY_SCRIPT]);
   const memoryArgs = personalMemoryContext
@@ -2025,6 +2049,38 @@ function cleanClientLogValue(value, maxLength) {
   return String(value || "")
     .replace(/[\r\n\t]/g, " ")
     .slice(0, maxLength);
+}
+
+function webSocketRequestLogFields(req) {
+  let url;
+  try {
+    url = new URL(req.url || "", `http://${req.headers.host || "localhost"}`);
+  } catch {
+    url = new URL("http://localhost/");
+  }
+  const clientId = cleanWebClientId(url.searchParams.get("clientId"));
+  return {
+    path: cleanClientLogValue(url.pathname, 120),
+    webSessionId: cleanClientLogValue(url.searchParams.get("attach"), 100),
+    codexSessionId: cleanClientLogValue(url.searchParams.get("sessionId"), 100),
+    hostId: cleanClientLogValue(url.searchParams.get("host") || PERSONAL_AGENT_HOST.id, 40),
+    clientId: clientId ? shortClientId(clientId) : "",
+    proxied: Boolean(req.headers["x-forwarded-for"] || req.headers["x-forwarded-host"]),
+    forwardedProto: cleanClientLogValue(req.headers["x-forwarded-proto"], 20),
+  };
+}
+
+function webSocketElapsedMs(startedAt) {
+  return Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : undefined;
+}
+
+function logWebSocketReject(req, reason, fields = {}) {
+  logAgentEvent("ws-reject", {
+    ...(req.agentWebUpgradeLogFields || webSocketRequestLogFields(req)),
+    reason,
+    durationMs: webSocketElapsedMs(req.agentWebUpgradeStartedAt),
+    ...fields,
+  });
 }
 
 function cleanWebClientId(value) {
@@ -2653,6 +2709,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
 
   ws.webSessionId = session.id;
   ws.codexSessionId = session.sessionId;
+  ws.agentWebAttachedAt = Date.now();
   const heartbeatTimer = startWebSocketHeartbeat(ws, session);
   ws.clientId = clientId;
   closeDuplicateClient(session, ws);
@@ -2667,6 +2724,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
     codexSessionId: session.sessionId,
     clients: session.clients.size,
     clientId: clientId ? shortClientId(clientId) : "",
+    upgradeDurationMs: webSocketElapsedMs(ws.agentWebUpgradeStartedAt),
   });
   send(ws, "status", publicSession(session));
   if (session.transport === APP_SERVER_TRANSPORT) {
@@ -3147,6 +3205,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
       reason: reason?.toString() || "",
       clients: session.clients.size,
       exited: session.exited,
+      connectedDurationMs: webSocketElapsedMs(ws.agentWebAttachedAt),
     });
     if (session.clients.size === 0) scheduleCleanup(session);
   });
@@ -3160,6 +3219,7 @@ function registerWebSocketErrorHandler(ws, req) {
       code: cleanClientLogValue(error.code, 80),
       message: cleanClientLogValue(error.message, 300),
       remoteAddress: cleanClientLogValue(req.socket.remoteAddress, 80),
+      durationMs: webSocketElapsedMs(ws.agentWebUpgradeStartedAt),
     });
   });
 }

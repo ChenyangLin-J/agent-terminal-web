@@ -28,8 +28,9 @@ test("company Sessions skip personal memory and personal preview persistence", a
   assert.match(server, /hostId: session\.hostId \|\| PERSONAL_AGENT_HOST\.id,[\s\S]*cwd: session\.cwd/);
   assert.match(
     server,
-    /if \(session && session\.hostId !== requestedAgentHost\.id\) \{[\s\S]*reason: "host-mismatch"[\s\S]*This Session belongs to a different Agent host\./,
+    /if \(session && session\.hostId !== requestedAgentHost\.id\) \{[\s\S]*logWebSocketReject\(req, "host-mismatch"[\s\S]*This Session belongs to a different Agent host\./,
   );
+  assert.match(server, /function logWebSocketReject\(req, reason,[\s\S]*reason,[\s\S]*durationMs:/);
   assert.match(
     server,
     /if \(session\.hostId !== PERSONAL_AGENT_HOST\.id\) \{\s*query\.set\("host", session\.hostId\);\s*homeQuery\.set\("host", session\.hostId\);/,

@@ -2889,13 +2889,23 @@ async function openSocket(params, options = {}) {
   if (!shouldReplay) query.set("replay", "0");
   if (shouldReplay && lastOutputRevision > 0) query.set("afterRevision", String(lastOutputRevision));
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const connectionStartedAt = Date.now();
+  const reconnectAttempt = isReconnect ? reconnectAttempts : 0;
+  let connectionOpened = false;
+  const connectionLogFields = () => ({
+    durationMs: Date.now() - connectionStartedAt,
+    reconnect: isReconnect,
+    reconnectAttempt,
+    phase: connectionOpened ? "established" : "handshake",
+  });
   const nextSocket = new WebSocket(`${protocol}//${window.location.host}/terminal?${query.toString()}`);
   socket = nextSocket;
 
   nextSocket.addEventListener("open", () => {
     if (socket !== nextSocket) return;
+    connectionOpened = true;
     markServerSeen();
-    logClientEvent("ws-open");
+    logClientEvent("ws-open", connectionLogFields());
     void reloadAfterAgentUpgrade();
     reconnectAttempts = 0;
     setConnectedState(
@@ -2910,6 +2920,11 @@ async function openSocket(params, options = {}) {
     fitTerminal();
     refreshTerminalDisplay();
     startClientHeartbeat();
+  });
+
+  nextSocket.addEventListener("error", () => {
+    if (socket !== nextSocket) return;
+    logClientEvent("ws-error", connectionLogFields());
   });
 
   nextSocket.addEventListener("message", (event) => {
@@ -3030,7 +3045,11 @@ async function openSocket(params, options = {}) {
       setUploadStatus("连接失败，消息和附件已保留，可以直接重试。");
       return;
     }
-    logClientEvent("ws-close", { closeCode: event.code, wasClean: event.wasClean });
+    logClientEvent("ws-close", {
+      closeCode: event.code,
+      wasClean: event.wasClean,
+      ...connectionLogFields(),
+    });
     if (document.visibilityState !== "visible") {
       setConnectedState("detached");
       return;
@@ -4821,7 +4840,8 @@ function logClientEvent(event, fields = {}, { beacon = false } = {}) {
     visibilityState: document.visibilityState || "",
     socketState: socketReadyStateName(socket?.readyState),
     online: navigator.onLine,
-    path: `${window.location.pathname}${window.location.search}`,
+    path: window.location.pathname,
+    hostId: activeAgentHostId,
     ...fields,
   };
   const body = JSON.stringify(payload);

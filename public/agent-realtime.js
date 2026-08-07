@@ -14,8 +14,11 @@
     errorElement,
     send,
     fallbackToDictation,
+    activateSession,
   }) {
     let enabled = false;
+    let launchable = false;
+    let preparingSession = false;
     let state = { status: "idle", voice: "marin", transcript: [], error: "" };
     let inputContext = null;
     let inputStream = null;
@@ -30,6 +33,10 @@
       open,
       handleMessage,
       setEnabled,
+      setLaunchable,
+      failPreparation,
+      resetPreparation,
+      isPreparing: () => preparingSession,
       isBusy: () => ["starting", "live", "stopping"].includes(state.status),
     };
 
@@ -47,16 +54,55 @@
 
     function open() {
       if (!dialog.open) dialog.showModal();
+      if (!enabled) {
+        if (!launchable || preparingSession) return;
+        clearError();
+        if (state.status === "failed") state.status = "idle";
+        preparingSession = true;
+        renderState();
+        try {
+          if (activateSession?.() === false) {
+            failPreparation("当前 Session 暂时无法启动实时语音。");
+          }
+        } catch (error) {
+          failPreparation(error.message || "无法创建实时语音 Session。");
+        }
+        return;
+      }
       send({ type: "realtime-voices" });
     }
 
     function setEnabled(value) {
-      enabled = Boolean(value);
+      const nextEnabled = Boolean(value);
+      const becameEnabled = nextEnabled && !enabled;
+      enabled = nextEnabled;
+      if (becameEnabled && preparingSession) {
+        preparingSession = false;
+        send({ type: "realtime-voices" });
+      }
       if (!enabled && ["starting", "live", "stopping"].includes(state.status)) {
         state.error = "连接已断开，麦克风已经停止；重连后请结束并重新开始实时对话。";
         void stopMicrophone();
       }
-      launchButton.disabled = !enabled;
+      renderState();
+    }
+
+    function setLaunchable(value) {
+      launchable = Boolean(value);
+      renderState();
+    }
+
+    function failPreparation(message) {
+      if (!preparingSession) return;
+      preparingSession = false;
+      state.status = "failed";
+      state.error = message || "无法创建实时语音 Session。";
+      renderState();
+    }
+
+    function resetPreparation() {
+      if (!preparingSession) return;
+      preparingSession = false;
       renderState();
     }
 
@@ -151,13 +197,14 @@
         stopping: "正在停止…",
         failed: "连接失败",
       };
-      statusElement.textContent = labels[state.status] || state.status;
-      statusElement.dataset.state = state.status;
+      statusElement.textContent = preparingSession ? "正在创建 Session…" : labels[state.status] || state.status;
+      statusElement.dataset.state = preparingSession ? "starting" : state.status;
       const busy = ["starting", "live", "stopping"].includes(state.status);
-      startButton.disabled = !enabled || busy;
+      launchButton.disabled = !enabled && !launchable;
+      startButton.disabled = !enabled || preparingSession || busy;
       stopButton.disabled = !enabled || !busy || state.status === "stopping";
-      voiceSelect.disabled = !enabled || busy;
-      fallbackButton.disabled = !enabled;
+      voiceSelect.disabled = !enabled || preparingSession || busy;
+      fallbackButton.disabled = !enabled || preparingSession;
       errorElement.textContent = state.error || "";
       errorElement.classList.toggle("hidden", !state.error);
       renderTranscript();

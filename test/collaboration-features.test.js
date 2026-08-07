@@ -27,12 +27,24 @@ test("Agent Web exposes dedicated Multi-Agent, thread tree, side chat, and Realt
   ]) {
     assert.match(page, new RegExp(`id="${id}"`));
   }
-  assert.match(page, /agent-realtime\.js\?v=20260726-1[\s\S]*app\.js\?v=20260728-auto-orchestration-1/);
+  assert.match(page, /agent-realtime\.js\?v=20260807-draft-session-1[\s\S]*app\.js\?v=20260807-draft-realtime-1/);
   assert.match(client, /type: "subagent-stop"/);
   assert.match(client, /type: "set-orchestration-mode"/);
   assert.match(client, /type: "session-tree"/);
   assert.match(client, /type: "side-chat-submit"/);
   assert.match(client, /realtimeController\.handleMessage/);
+  assert.match(client, /activateSession: activateRealtimeSession/);
+  assert.match(
+    client,
+    /function activateRealtimeSession\(\)[\s\S]*activeSessionPreviewOnly[\s\S]*startSession\(\{/,
+  );
+  assert.match(
+    client,
+    /realtimeController\.setLaunchable\(activeTransport === "app-server" && activeSessionPreviewOnly\)/,
+  );
+  assert.match(client, /connected &&[\s\S]*activeSessionReady &&[\s\S]*activeSessionCapabilities\.realtimeV3/);
+  assert.match(realtime, /function setLaunchable\(value\)/);
+  assert.match(realtime, /preparingSession \? "正在创建 Session…"/);
   assert.match(realtime, /getUserMedia/);
   assert.match(realtime, /createScriptProcessor\(4096, 1, 1\)/);
   assert.match(realtime, /pcm16Base64/);

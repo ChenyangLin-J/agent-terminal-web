@@ -623,6 +623,7 @@ const realtimeController = window.AgentRealtime.create({
   errorElement: realtimeError,
   send,
   fallbackToDictation: () => voiceInputController.start(),
+  activateSession: activateRealtimeSession,
 });
 realtimeController.install();
 installPageDownLongPress();
@@ -2570,6 +2571,20 @@ function startSession(overrides = {}) {
   openSocket(params);
 }
 
+function activateRealtimeSession() {
+  if (!activeSessionPreviewOnly || activeTransport !== "app-server") return false;
+  setUploadStatus(activeSessionParams.sessionId ? "正在恢复 Session，准备实时语音…" : "正在创建 Session，准备实时语音…");
+  startSession({
+    cwd: activeSessionParams.cwd || ".",
+    mode: activeSessionParams.sessionId ? "resume-id" : "new",
+    sessionId: activeSessionParams.sessionId || "",
+    title: activeSessionParams.title || "",
+    access: activeAccessMode,
+    purpose: activeSessionParams.purpose || "",
+  });
+  return true;
+}
+
 function openNewSessionDraft(overrides = {}) {
   toggleNewSessionPanel(false);
   openSessionInCurrentPage({
@@ -2686,6 +2701,7 @@ function sessionUrl(params) {
 }
 
 function openSessionPreview(params = {}) {
+  realtimeController.resetPreparation();
   saveActiveSessionSnapshot();
   saveAppReadingPosition();
   closeSocket();
@@ -3027,6 +3043,7 @@ async function openSocket(params, options = {}) {
         renderEditForkBanner();
       }
       if (message.payload.goHome) {
+        realtimeController.failPreparation(message.payload.message || "Session 创建失败，请稍后重试。");
         currentSessionExited = true;
         setConnectedState("detached");
         window.setTimeout(showStartScreen, 500);
@@ -3043,6 +3060,13 @@ async function openSocket(params, options = {}) {
       pendingPreviewSubmission = null;
       openSessionPreview(previewParams);
       setUploadStatus("连接失败，消息和附件已保留，可以直接重试。");
+      return;
+    }
+    if (realtimeController.isPreparing() && !activeSessionId) {
+      const previewParams = { ...activeSessionParams, preview: "1" };
+      realtimeController.failPreparation("Session 创建失败，请稍后重试。");
+      openSessionPreview(previewParams);
+      setUploadStatus("Session 创建失败，实时语音尚未启动。");
       return;
     }
     logClientEvent("ws-close", {
@@ -5223,6 +5247,9 @@ function renderStatus(status) {
   document.body.classList.toggle("app-server-session", activeTransport === "app-server");
   updateSessionViewLabels();
   currentSessionExited = Boolean(status.exited);
+  if (status.exited) {
+    realtimeController.failPreparation("Session 创建失败，请稍后重试。");
+  }
   const liveIndex = liveSessionsCache.findIndex(
     (session) =>
       (cleanAgentHostId(session.hostId) || "personal") === activeAgentHostId &&
@@ -5418,8 +5445,12 @@ function setConnectedState(state) {
   appSessionShareButton.disabled = activeTransport !== "app-server" || !activeSessionParams.sessionId;
   appSessionSideChatButton.disabled =
     activeTransport !== "app-server" || !connected || !activeSessionCapabilities.sideChat;
+  realtimeController.setLaunchable(activeTransport === "app-server" && activeSessionPreviewOnly);
   realtimeController.setEnabled(
-    activeTransport === "app-server" && connected && Boolean(activeSessionCapabilities.realtimeV3),
+    activeTransport === "app-server" &&
+      connected &&
+      activeSessionReady &&
+      Boolean(activeSessionCapabilities.realtimeV3),
   );
   searchCurrentSessionButton.disabled = activeTransport !== "app-server" || !connected;
   mobileSearchCurrentSessionButton.disabled = activeTransport !== "app-server" || !connected;

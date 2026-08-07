@@ -19,6 +19,7 @@ test("a draft can launch its Session before Realtime becomes enabled", async () 
   const dialog = fakeElement();
   const startButton = fakeElement();
   const statusElement = fakeElement();
+  const voiceSelect = Object.assign(fakeElement(), { value: "juniper" });
   const sent = [];
   let activations = 0;
   const controller = browser.AgentRealtime.create({
@@ -28,7 +29,7 @@ test("a draft can launch its Session before Realtime becomes enabled", async () 
     startButton,
     stopButton: fakeElement(),
     fallbackButton: fakeElement(),
-    voiceSelect: Object.assign(fakeElement(), { value: "marin" }),
+    voiceSelect,
     statusElement,
     transcriptElement: fakeElement(),
     errorElement: fakeElement(),
@@ -64,6 +65,16 @@ test("a draft can launch its Session before Realtime becomes enabled", async () 
   assert.equal(startButton.disabled, false);
   assert.equal(sent.length, 1);
   assert.equal(sent[0].type, "realtime-voices");
+
+  controller.handleMessage("realtime-voices", {
+    voices: ["marin", "cedar"],
+    defaultVoice: "marin",
+  });
+  assert.equal(voiceSelect.value, "juniper");
+  assert.deepEqual(
+    voiceSelect.children.map((option) => option.value),
+    ["juniper", "maple", "spruce", "ember", "vale", "breeze", "arbor", "sol", "cove"],
+  );
 });
 
 function fakeElement() {

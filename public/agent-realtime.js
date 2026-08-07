@@ -1,5 +1,7 @@
 (function () {
   const TARGET_SAMPLE_RATE = 24_000;
+  const REALTIME_V3_VOICES = ["juniper", "maple", "spruce", "ember", "vale", "breeze", "arbor", "sol", "cove"];
+  const DEFAULT_REALTIME_V3_VOICE = REALTIME_V3_VOICES[0];
 
   function createRealtimeController({
     launchButton,
@@ -19,7 +21,7 @@
     let enabled = false;
     let launchable = false;
     let preparingSession = false;
-    let state = { status: "idle", voice: "marin", transcript: [], error: "" };
+    let state = { status: "idle", voice: DEFAULT_REALTIME_V3_VOICE, transcript: [], error: "" };
     let inputContext = null;
     let inputStream = null;
     let inputSource = null;
@@ -111,7 +113,7 @@
       clearError();
       state = {
         status: "starting",
-        voice: voiceSelect.value || state.voice || "marin",
+        voice: normalizeVoice(voiceSelect.value || state.voice),
         transcript: [],
         error: "",
       };
@@ -167,7 +169,7 @@
       if (type !== "realtime-state") return;
       state = {
         status: String(payload.status || "idle"),
-        voice: String(payload.voice || state.voice || "marin"),
+        voice: normalizeVoice(payload.voice || state.voice),
         transcript: Array.isArray(payload.transcript) ? payload.transcript : [],
         error: String(payload.error || ""),
       };
@@ -176,8 +178,12 @@
     }
 
     function renderVoices(payload) {
-      const voices = Array.isArray(payload.voices) && payload.voices.length ? payload.voices : ["marin"];
-      const selected = state.voice || payload.defaultVoice || voiceSelect.value || "marin";
+      const received = Array.isArray(payload.voices) ? payload.voices.map(String) : [];
+      const supported = received.filter((voice) => REALTIME_V3_VOICES.includes(voice));
+      const voices = supported.length ? supported : REALTIME_V3_VOICES;
+      const selected = [state.voice, payload.defaultVoice, voiceSelect.value, DEFAULT_REALTIME_V3_VOICE]
+        .map(normalizeVoice)
+        .find((voice) => voices.includes(voice)) || voices[0];
       voiceSelect.replaceChildren(
         ...voices.map((voice) => {
           const option = document.createElement("option");
@@ -186,7 +192,13 @@
           return option;
         }),
       );
-      voiceSelect.value = voices.includes(selected) ? selected : payload.defaultVoice || voices[0];
+      voiceSelect.value = selected;
+      state.voice = selected;
+    }
+
+    function normalizeVoice(value) {
+      const voice = String(value || "").trim();
+      return REALTIME_V3_VOICES.includes(voice) ? voice : DEFAULT_REALTIME_V3_VOICE;
     }
 
     function renderState() {

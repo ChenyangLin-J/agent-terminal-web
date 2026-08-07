@@ -184,6 +184,18 @@ const APP_THREAD_TREE_MAX_THREADS = 800;
 const REALTIME_AUDIO_MAX_BASE64_CHARS = 196_608;
 const REALTIME_SAMPLE_RATE_MIN = 8_000;
 const REALTIME_SAMPLE_RATE_MAX = 48_000;
+const REALTIME_V3_VOICES = Object.freeze([
+  "juniper",
+  "maple",
+  "spruce",
+  "ember",
+  "vale",
+  "breeze",
+  "arbor",
+  "sol",
+  "cove",
+]);
+const DEFAULT_REALTIME_V3_VOICE = REALTIME_V3_VOICES[0];
 const MAX_APP_TRANSCRIPT_ITEMS = 4_000;
 const MAX_APP_TRANSCRIPT_TEXT = 200_000;
 const MAX_APP_TRANSCRIPT_DETAIL = 40_000;
@@ -5301,7 +5313,7 @@ function closeSideChat(session) {
 function restoreRealtimeState() {
   return {
     status: "idle",
-    voice: "marin",
+    voice: DEFAULT_REALTIME_V3_VOICE,
     version: "v3",
     transcript: [],
     error: "",
@@ -5314,7 +5326,7 @@ function publicRealtimeState(realtime) {
   const state = realtime || restoreRealtimeState();
   return {
     status: String(state.status || "idle"),
-    voice: String(state.voice || "marin"),
+    voice: normalizeRealtimeVoice(state.voice),
     version: String(state.version || "v3"),
     transcript: (Array.isArray(state.transcript) ? state.transcript : []).slice(-80).map((item) => ({
       id: String(item?.id || ""),
@@ -5333,19 +5345,16 @@ function realtimeBusy(realtime) {
 }
 
 async function sendRealtimeVoices(session, ws) {
-  const result = await session.appServer.listRealtimeVoices();
-  const available = result?.voices || {};
-  const voices = [...new Set([...(available.v2 || []), ...(available.v1 || [])].map(String).filter(Boolean))];
   send(ws, "realtime-voices", {
-    voices,
-    defaultVoice: String(available.defaultV2 || available.defaultV1 || "marin"),
+    voices: REALTIME_V3_VOICES,
+    defaultVoice: DEFAULT_REALTIME_V3_VOICE,
     version: "v3",
   });
 }
 
 function normalizeRealtimeVoice(value) {
   const voice = String(value || "").trim();
-  return /^[a-z][a-z0-9_-]{0,31}$/i.test(voice) ? voice : "marin";
+  return REALTIME_V3_VOICES.includes(voice) ? voice : DEFAULT_REALTIME_V3_VOICE;
 }
 
 async function startRealtimeConversation(session, voice) {

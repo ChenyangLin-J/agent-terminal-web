@@ -254,7 +254,7 @@ test("app-server client exposes Realtime V3 and targeted Agent interruption", as
   const voices = await client.listRealtimeVoices();
   await client.startRealtime({
     version: "v3",
-    voice: "marin",
+    voice: "juniper",
     outputModality: "audio",
     transport: { type: "websocket" },
   });
@@ -275,7 +275,7 @@ test("app-server client exposes Realtime V3 and targeted Agent interruption", as
     {
       threadId: "thread-1",
       version: "v3",
-      voice: "marin",
+      voice: "juniper",
       outputModality: "audio",
       transport: { type: "websocket" },
     },

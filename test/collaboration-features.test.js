@@ -27,7 +27,7 @@ test("Agent Web exposes dedicated Multi-Agent, thread tree, side chat, and Realt
   ]) {
     assert.match(page, new RegExp(`id="${id}"`));
   }
-  assert.match(page, /agent-realtime\.js\?v=20260807-draft-session-1[\s\S]*app\.js\?v=20260807-draft-realtime-1/);
+  assert.match(page, /agent-realtime\.js\?v=20260807-v3-voices-1[\s\S]*app\.js\?v=20260807-draft-realtime-1/);
   assert.match(client, /type: "subagent-stop"/);
   assert.match(client, /type: "set-orchestration-mode"/);
   assert.match(client, /type: "session-tree"/);
@@ -45,6 +45,8 @@ test("Agent Web exposes dedicated Multi-Agent, thread tree, side chat, and Realt
   assert.match(client, /connected &&[\s\S]*activeSessionReady &&[\s\S]*activeSessionCapabilities\.realtimeV3/);
   assert.match(realtime, /function setLaunchable\(value\)/);
   assert.match(realtime, /preparingSession \? "正在创建 Session…"/);
+  assert.match(realtime, /REALTIME_V3_VOICES = \["juniper", "maple", "spruce", "ember", "vale", "breeze", "arbor", "sol", "cove"\]/);
+  assert.doesNotMatch(realtime, /"marin"/);
   assert.match(realtime, /getUserMedia/);
   assert.match(realtime, /createScriptProcessor\(4096, 1, 1\)/);
   assert.match(realtime, /pcm16Base64/);
@@ -56,5 +58,6 @@ test("Agent Web exposes dedicated Multi-Agent, thread tree, side chat, and Realt
   assert.match(server, /sandbox: "read-only"/);
   assert.match(server, /ephemeral: true/);
   assert.match(server, /version: "v3"/);
+  assert.match(server, /REALTIME_V3_VOICES\.includes\(voice\) \? voice : DEFAULT_REALTIME_V3_VOICE/);
   assert.match(server, /outputModality: "audio"/);
 });

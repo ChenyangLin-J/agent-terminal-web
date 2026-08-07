@@ -158,6 +158,7 @@ const realtimeVoice = document.querySelector("#realtime-voice");
 const realtimeStatus = document.querySelector("#realtime-status");
 const realtimeTranscript = document.querySelector("#realtime-transcript");
 const realtimeError = document.querySelector("#realtime-error");
+const realtimeOutput = document.querySelector("#realtime-output");
 const threadSearchDialog = document.querySelector("#thread-search-dialog");
 const threadSearchInput = document.querySelector("#thread-search-input");
 const threadSearchSubmit = document.querySelector("#thread-search-submit");
@@ -621,6 +622,7 @@ const realtimeController = window.AgentRealtime.create({
   statusElement: realtimeStatus,
   transcriptElement: realtimeTranscript,
   errorElement: realtimeError,
+  outputAudio: realtimeOutput,
   send,
   fallbackToDictation: () => voiceInputController.start(),
   activateSession: activateRealtimeSession,

@@ -1,5 +1,5 @@
 (function () {
-  const TARGET_SAMPLE_RATE = 24_000;
+  const FALLBACK_SAMPLE_RATE = 24_000;
   const REALTIME_V3_VOICES = ["juniper", "maple", "spruce", "ember", "vale", "breeze", "arbor", "sol", "cove"];
   const DEFAULT_REALTIME_V3_VOICE = REALTIME_V3_VOICES[0];
 
@@ -14,6 +14,7 @@
     statusElement,
     transcriptElement,
     errorElement,
+    outputAudio,
     send,
     fallbackToDictation,
     activateSession,
@@ -22,13 +23,13 @@
     let launchable = false;
     let preparingSession = false;
     let state = { status: "idle", voice: DEFAULT_REALTIME_V3_VOICE, transcript: [], error: "" };
-    let inputContext = null;
     let inputStream = null;
-    let inputSource = null;
-    let inputProcessor = null;
-    let inputSilencer = null;
+    let peerConnection = null;
+    let eventChannel = null;
     let outputContext = null;
     let nextPlaybackAt = 0;
+    let mediaAttempt = 0;
+    let startSent = false;
 
     return {
       install,
@@ -84,7 +85,7 @@
       }
       if (!enabled && ["starting", "live", "stopping"].includes(state.status)) {
         state.error = "连接已断开，麦克风已经停止；重连后请结束并重新开始实时对话。";
-        void stopMicrophone();
+        void stopMedia();
       }
       renderState();
     }
@@ -118,13 +119,18 @@
         error: "",
       };
       renderState();
+      const attempt = ++mediaAttempt;
+      startSent = false;
       try {
-        await startMicrophone();
-        if (!send({ type: "realtime-start", voice: state.voice })) {
+        const sdp = await startWebRtc(attempt);
+        if (!sdp || attempt !== mediaAttempt || state.status !== "starting" || !enabled) return;
+        if (!send({ type: "realtime-start", voice: state.voice, transport: { type: "webrtc", sdp } })) {
           throw new Error("连接恢复中，请稍后重试。");
         }
+        startSent = true;
       } catch (error) {
-        await stopMicrophone();
+        if (attempt !== mediaAttempt) return;
+        await stopMedia();
         state.status = "failed";
         state.error = error.message || "无法开始实时语音。";
         renderState();
@@ -133,9 +139,16 @@
 
     async function stop() {
       if (!["starting", "live", "stopping"].includes(state.status)) return;
+      const shouldNotifyServer = startSent;
       state.status = "stopping";
       renderState();
-      await stopMicrophone();
+      await stopMedia();
+      startSent = false;
+      if (!shouldNotifyServer) {
+        state.status = "idle";
+        renderState();
+        return;
+      }
       if (!send({ type: "realtime-stop" })) {
         state.status = "failed";
         state.error = "连接恢复中，实时语音没有正常停止。";
@@ -145,8 +158,10 @@
 
     async function useFallback() {
       if (["starting", "live", "stopping"].includes(state.status)) {
-        send({ type: "realtime-stop" });
-        await stopMicrophone();
+        if (startSent) send({ type: "realtime-stop" });
+        await stopMedia();
+        startSent = false;
+        state.status = "idle";
       }
       dialog.close();
       await fallbackToDictation?.();
@@ -161,9 +176,14 @@
         void playAudioChunk(payload).catch((error) => showError(error.message || "语音播放失败。"));
         return;
       }
+      if (type === "realtime-sdp") {
+        void acceptRemoteSdp(payload.sdp);
+        return;
+      }
       if (type === "realtime-error") {
+        startSent = false;
         showError(payload.message || "实时语音失败。");
-        void stopMicrophone();
+        void stopMedia();
         return;
       }
       if (type !== "realtime-state") return;
@@ -173,7 +193,11 @@
         transcript: Array.isArray(payload.transcript) ? payload.transcript : [],
         error: String(payload.error || ""),
       };
-      if (state.status === "idle" || state.status === "failed") void stopMicrophone();
+      if (state.status === "starting" || state.status === "live") startSent = true;
+      if (state.status === "idle" || state.status === "failed") {
+        startSent = false;
+        void stopMedia();
+      }
       renderState();
     }
 
@@ -245,10 +269,12 @@
       if (shouldFollow) transcriptElement.scrollTop = transcriptElement.scrollHeight;
     }
 
-    async function startMicrophone() {
+    async function startWebRtc(attempt) {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前浏览器不支持麦克风输入。");
-      await stopMicrophone();
-      inputStream = await navigator.mediaDevices.getUserMedia({
+      if (!globalThis.RTCPeerConnection) throw new Error("当前浏览器不支持实时语音连接。");
+      await stopMedia({ cancel: false });
+      if (attempt !== mediaAttempt) return "";
+      const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
           echoCancellation: true,
@@ -256,55 +282,87 @@
           autoGainControl: true,
         },
       });
-      const AudioContext = window.AudioContext || window.webkitAudioContext;
-      if (!AudioContext) throw new Error("当前浏览器不支持实时音频。");
-      inputContext = new AudioContext();
-      await inputContext.resume();
-      inputSource = inputContext.createMediaStreamSource(inputStream);
-      inputProcessor = inputContext.createScriptProcessor(4096, 1, 1);
-      inputSilencer = inputContext.createGain();
-      inputSilencer.gain.value = 0;
-      inputProcessor.onaudioprocess = (event) => {
-        if (state.status !== "live") return;
-        const source = event.inputBuffer.getChannelData(0);
-        const sampleRate = Math.min(TARGET_SAMPLE_RATE, inputContext.sampleRate);
-        const samples = downsample(source, inputContext.sampleRate, sampleRate);
-        if (!samples.length) return;
-        send({
-          type: "realtime-audio",
-          audio: {
-            data: pcm16Base64(samples),
-            sampleRate,
-            numChannels: 1,
-            samplesPerChannel: samples.length,
-            itemId: null,
-          },
-        });
+      if (attempt !== mediaAttempt) {
+        for (const track of stream.getTracks()) track.stop();
+        return "";
+      }
+      inputStream = stream;
+      const connection = new RTCPeerConnection();
+      peerConnection = connection;
+      connection.ontrack = (event) => {
+        const stream = event.streams?.[0];
+        if (!stream) return;
+        outputAudio.srcObject = stream;
+        void outputAudio.play?.().catch(() => {});
       };
-      inputSource.connect(inputProcessor);
-      inputProcessor.connect(inputSilencer);
-      inputSilencer.connect(inputContext.destination);
+      connection.onconnectionstatechange = () => {
+        if (peerConnection !== connection || connection.connectionState !== "failed") return;
+        void failRealtimeConnection("实时语音连接失败，请停止后重试。");
+      };
+      for (const track of stream.getAudioTracks()) connection.addTrack(track, stream);
+      eventChannel = connection.createDataChannel("oai-events");
+      const offer = await connection.createOffer();
+      if (attempt !== mediaAttempt || peerConnection !== connection) return "";
+      await connection.setLocalDescription(offer);
+      if (attempt !== mediaAttempt || peerConnection !== connection) return "";
+      await waitForIceGathering(connection);
+      if (attempt !== mediaAttempt || peerConnection !== connection) return "";
+      const sdp = String(connection.localDescription?.sdp || offer.sdp || "");
+      if (!sdp) throw new Error("浏览器没有生成有效的实时语音连接信息。");
+      return sdp;
     }
 
-    async function stopMicrophone() {
-      if (inputProcessor) inputProcessor.onaudioprocess = null;
-      inputSource?.disconnect();
-      inputProcessor?.disconnect();
-      inputSilencer?.disconnect();
+    async function acceptRemoteSdp(sdp) {
+      const connection = peerConnection;
+      const attempt = mediaAttempt;
+      if (!connection || connection.signalingState === "closed") return;
+      if (connection.signalingState !== "have-local-offer") return;
+      try {
+        const answer = String(sdp || "");
+        if (!answer) throw new Error("服务端没有返回有效的实时语音连接信息。");
+        await connection.setRemoteDescription({ type: "answer", sdp: answer });
+      } catch (error) {
+        if (attempt !== mediaAttempt || peerConnection !== connection) return;
+        await failRealtimeConnection(error.message || "实时语音连接协商失败。");
+      }
+    }
+
+    async function failRealtimeConnection(message) {
+      const shouldNotifyServer = startSent;
+      state.status = shouldNotifyServer ? "stopping" : "failed";
+      state.error = message;
+      renderState();
+      if (shouldNotifyServer && send({ type: "realtime-stop" })) {
+        startSent = false;
+      } else if (shouldNotifyServer) {
+        state.status = "failed";
+        renderState();
+      }
+      await stopMedia();
+    }
+
+    async function stopMedia({ cancel = true } = {}) {
+      if (cancel) mediaAttempt += 1;
+      eventChannel?.close?.();
+      peerConnection?.close?.();
       for (const track of inputStream?.getTracks?.() || []) track.stop();
-      const context = inputContext;
-      inputContext = null;
+      const fallbackContext = outputContext;
       inputStream = null;
-      inputSource = null;
-      inputProcessor = null;
-      inputSilencer = null;
-      if (context && context.state !== "closed") await context.close().catch(() => {});
+      peerConnection = null;
+      eventChannel = null;
+      outputContext = null;
+      nextPlaybackAt = 0;
+      if (outputAudio) {
+        outputAudio.pause?.();
+        outputAudio.srcObject = null;
+      }
+      if (fallbackContext && fallbackContext.state !== "closed") await fallbackContext.close().catch(() => {});
     }
 
     async function playAudioChunk(chunk) {
       const bytes = base64Bytes(chunk.data);
       const channels = Math.max(1, Math.min(2, Number(chunk.numChannels) || 1));
-      const sampleRate = Math.max(8_000, Math.min(48_000, Number(chunk.sampleRate) || TARGET_SAMPLE_RATE));
+      const sampleRate = Math.max(8_000, Math.min(48_000, Number(chunk.sampleRate) || FALLBACK_SAMPLE_RATE));
       const sampleCount = Math.floor(bytes.byteLength / 2 / channels);
       if (!sampleCount) return;
       const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -340,31 +398,20 @@
     }
   }
 
-  function downsample(samples, sourceRate, targetRate) {
-    if (targetRate >= sourceRate) return new Float32Array(samples);
-    const ratio = sourceRate / targetRate;
-    const length = Math.max(1, Math.floor(samples.length / ratio));
-    const output = new Float32Array(length);
-    for (let index = 0; index < length; index += 1) {
-      const start = Math.floor(index * ratio);
-      const end = Math.min(samples.length, Math.floor((index + 1) * ratio));
-      let total = 0;
-      for (let cursor = start; cursor < end; cursor += 1) total += samples[cursor];
-      output[index] = total / Math.max(1, end - start);
-    }
-    return output;
-  }
-
-  function pcm16Base64(samples) {
-    const bytes = new Uint8Array(samples.length * 2);
-    const view = new DataView(bytes.buffer);
-    for (let index = 0; index < samples.length; index += 1) {
-      const sample = Math.max(-1, Math.min(1, samples[index]));
-      view.setInt16(index * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
-    }
-    let binary = "";
-    for (let index = 0; index < bytes.length; index += 1) binary += String.fromCharCode(bytes[index]);
-    return btoa(binary);
+  async function waitForIceGathering(connection) {
+    if (connection.iceGatheringState === "complete") return;
+    await new Promise((resolve) => {
+      const timeout = window.setTimeout(done, 3_000);
+      connection.addEventListener("icegatheringstatechange", onStateChange);
+      function onStateChange() {
+        if (connection.iceGatheringState === "complete") done();
+      }
+      function done() {
+        window.clearTimeout(timeout);
+        connection.removeEventListener("icegatheringstatechange", onStateChange);
+        resolve();
+      }
+    });
   }
 
   function base64Bytes(value) {
@@ -374,5 +421,5 @@
     return bytes;
   }
 
-  window.AgentRealtime = { create: createRealtimeController, downsample, pcm16Base64 };
+  window.AgentRealtime = { create: createRealtimeController };
 })();

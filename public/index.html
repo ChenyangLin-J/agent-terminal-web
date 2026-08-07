@@ -586,11 +586,12 @@
           <label>
             <span>声音</span>
             <select id="realtime-voice">
-              <option value="marin">marin</option>
+              <option value="juniper">juniper</option>
             </select>
           </label>
           <strong id="realtime-status" data-state="idle">尚未开始</strong>
         </div>
+        <audio id="realtime-output" autoplay playsinline hidden></audio>
         <div id="realtime-transcript" class="realtime-transcript" aria-live="polite">
           <p class="feature-empty">开始后可直接说话，Codex 会用语音回应。</p>
         </div>
@@ -679,7 +680,7 @@
     <script src="/shared/voice-capture-widget.js?v=20260717-recovery-3"></script>
     <script src="/agent-upload.js?v=20260725-attachment-wait-1"></script>
     <script src="/agent-voice-input.js?v=20260717-recovery-2"></script>
-    <script src="/agent-realtime.js?v=20260807-v3-voices-1"></script>
+    <script src="/agent-realtime.js?v=20260807-webrtc-1"></script>
     <script src="/app.js?v=20260807-draft-realtime-1"></script>
     <script src="/session-focus-mode.js?v=20260716-app-chrome-1"></script>
   </body>

@@ -24,10 +24,11 @@ test("Agent Web exposes dedicated Multi-Agent, thread tree, side chat, and Realt
     "thread-tree-dialog",
     "side-chat-dialog",
     "realtime-dialog",
+    "realtime-output",
   ]) {
     assert.match(page, new RegExp(`id="${id}"`));
   }
-  assert.match(page, /agent-realtime\.js\?v=20260807-v3-voices-1[\s\S]*app\.js\?v=20260807-draft-realtime-1/);
+  assert.match(page, /agent-realtime\.js\?v=20260807-webrtc-1[\s\S]*app\.js\?v=20260807-draft-realtime-1/);
   assert.match(client, /type: "subagent-stop"/);
   assert.match(client, /type: "set-orchestration-mode"/);
   assert.match(client, /type: "session-tree"/);
@@ -48,8 +49,10 @@ test("Agent Web exposes dedicated Multi-Agent, thread tree, side chat, and Realt
   assert.match(realtime, /REALTIME_V3_VOICES = \["juniper", "maple", "spruce", "ember", "vale", "breeze", "arbor", "sol", "cove"\]/);
   assert.doesNotMatch(realtime, /"marin"/);
   assert.match(realtime, /getUserMedia/);
-  assert.match(realtime, /createScriptProcessor\(4096, 1, 1\)/);
-  assert.match(realtime, /pcm16Base64/);
+  assert.match(realtime, /new RTCPeerConnection\(\)/);
+  assert.match(realtime, /createDataChannel\("oai-events"\)/);
+  assert.match(realtime, /type: "realtime-start", voice: state\.voice, transport: \{ type: "webrtc", sdp \}/);
+  assert.match(realtime, /type === "realtime-sdp"/);
   assert.match(styles, /\.agent-card/);
   assert.match(styles, /\.thread-tree-list/);
   assert.match(styles, /\.side-chat-transcript/);
@@ -59,5 +62,7 @@ test("Agent Web exposes dedicated Multi-Agent, thread tree, side chat, and Realt
   assert.match(server, /ephemeral: true/);
   assert.match(server, /version: "v3"/);
   assert.match(server, /REALTIME_V3_VOICES\.includes\(voice\) \? voice : DEFAULT_REALTIME_V3_VOICE/);
+  assert.match(server, /normalizeRealtimeTransport\(transport\)/);
+  assert.match(server, /broadcast\(session, "realtime-sdp", \{ sdp \}\)/);
   assert.match(server, /outputModality: "audio"/);
 });

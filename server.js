@@ -184,6 +184,7 @@ const APP_THREAD_TREE_MAX_THREADS = 800;
 const REALTIME_AUDIO_MAX_BASE64_CHARS = 196_608;
 const REALTIME_SAMPLE_RATE_MIN = 8_000;
 const REALTIME_SAMPLE_RATE_MAX = 48_000;
+const REALTIME_SDP_MAX_CHARS = 262_144;
 const REALTIME_V3_VOICES = Object.freeze([
   "juniper",
   "maple",
@@ -3014,7 +3015,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
 
     if (message.type === "realtime-start" && session.transport === APP_SERVER_TRANSPORT) {
       renewSessionRetention(session);
-      void startRealtimeConversation(session, message.voice)
+      void startRealtimeConversation(session, { voice: message.voice, transport: message.transport })
         .then(() => send(ws, "control-ack", { kind: "realtime-start", receivedAt: Date.now() }))
         .catch((error) => failRealtimeConversation(session, error));
       return;
@@ -5357,7 +5358,19 @@ function normalizeRealtimeVoice(value) {
   return REALTIME_V3_VOICES.includes(voice) ? voice : DEFAULT_REALTIME_V3_VOICE;
 }
 
-async function startRealtimeConversation(session, voice) {
+function normalizeRealtimeTransport(value) {
+  const transport = value && typeof value === "object" ? value : {};
+  if (transport.type !== "webrtc") {
+    throw new Error("Agent Web 实时语音需要使用浏览器 WebRTC 连接。");
+  }
+  const sdp = String(transport.sdp || "");
+  if (!sdp || sdp.length > REALTIME_SDP_MAX_CHARS || !/^v=0(?:\r?\n)/.test(sdp)) {
+    throw new Error("浏览器实时语音连接信息无效。");
+  }
+  return { type: "webrtc", sdp };
+}
+
+async function startRealtimeConversation(session, { voice, transport } = {}) {
   if (!session.ready || session.exited) throw new Error("当前 Session 还没有准备好。");
   if (session.turnState.active || session.appServer.activeTurnId) {
     throw new Error("主 Session 仍在执行任务，请等当前 turn 完成后再开始实时对话。");
@@ -5374,7 +5387,7 @@ async function startRealtimeConversation(session, voice) {
     version: "v3",
     voice: session.realtime.voice,
     outputModality: "audio",
-    transport: { type: "websocket" },
+    transport: normalizeRealtimeTransport(transport),
     includeStartupContext: true,
     flushTranscriptTailOnSessionEnd: true,
     codexResponsesAsItems: true,
@@ -5456,6 +5469,12 @@ function handleRealtimeNotification(session, method, params) {
       failRealtimeConversation(session, error);
     }
     return true;
+  } else if (method === "thread/realtime/sdp") {
+    const sdp = String(params.sdp || "");
+    if (sdp && sdp.length <= REALTIME_SDP_MAX_CHARS) {
+      broadcast(session, "realtime-sdp", { sdp });
+    }
+    return true;
   } else if (method === "thread/realtime/error") {
     state.status = "failed";
     state.error = params.message || "实时对话失败。";
@@ -5464,7 +5483,7 @@ function handleRealtimeNotification(session, method, params) {
     state.status = "idle";
     state.reason = String(params.reason || "");
     resetDetachedCleanupAfterWork(session);
-  } else if (!["thread/realtime/itemAdded", "thread/realtime/sdp"].includes(method)) {
+  } else if (method !== "thread/realtime/itemAdded") {
     return false;
   } else {
     return true;

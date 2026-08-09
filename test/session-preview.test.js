@@ -165,6 +165,61 @@ test("extracts a subagent conversation from task metadata when its rollout has n
   }]);
 });
 
+test("keeps separate disk turns for each subagent NEW_TASK", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "agent-subagent-followup-"));
+  const file = path.join(directory, "rollout-session.jsonl");
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const task = (timestamp, turnId, name, body = "") => ({
+    timestamp,
+    type: "response_item",
+    payload: {
+      type: "agent_message",
+      author: "/root",
+      recipient: "/root/disk-preview",
+      internal_chat_message_metadata_passthrough: { turn_id: turnId },
+      content: [
+        { type: "input_text", text: `Message Type: NEW_TASK\nTask name: ${name}\nSender: /root\nPayload:\n${body}` },
+        { type: "encrypted_content", encrypted_content: "opaque-task-payload" },
+      ],
+    },
+  });
+  const records = [
+    {
+      timestamp: "2026-07-17T00:00:00.000Z",
+      type: "session_meta",
+      payload: { thread_source: "subagent", agent_path: "/root/disk-preview" },
+    },
+    message("developer", "injected developer instructions", "2026-07-17T00:00:01.000Z"),
+    message("user", "injected environment context", "2026-07-17T00:00:02.000Z"),
+    task("2026-07-17T00:00:03.000Z", "first-task", "/root/disk-preview", "Inspect the first task."),
+    message("assistant", "First progress", "2026-07-17T00:00:04.000Z", "commentary", "first-task"),
+    message("assistant", "First result", "2026-07-17T00:00:05.000Z", "final_answer", "first-task"),
+    task("2026-07-17T00:00:06.000Z", "followup-task", "/root/disk-preview", ""),
+    message("assistant", "Follow-up progress", "2026-07-17T00:00:07.000Z", "commentary", "followup-task"),
+    message("assistant", "Follow-up result", "2026-07-17T00:00:08.000Z", "final_answer", "followup-task"),
+  ];
+  await fs.writeFile(file, `${records.map(JSON.stringify).join("\n")}\n`);
+
+  const conversation = await extractSessionConversationFromJsonl(file);
+  assert.deepEqual(conversation.turns.map((turn) => ({
+    id: turn.id,
+    user: turn.user,
+    assistant: turn.assistant.map((item) => item.text),
+  })), [
+    {
+      id: "first-task",
+      user: "Delegated task: /root/disk-preview\n\nInspect the first task.",
+      assistant: ["First progress", "First result"],
+    },
+    {
+      id: "followup-task",
+      user: "Delegated task: /root/disk-preview",
+      assistant: ["Follow-up progress", "Follow-up result"],
+    },
+  ]);
+});
+
 test("reads a remote Session preview through turns without resuming the thread", async () => {
   const calls = [];
   const client = {

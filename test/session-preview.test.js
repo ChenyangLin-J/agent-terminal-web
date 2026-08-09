@@ -116,6 +116,55 @@ test("extracts recent user and assistant conversation turns directly from disk",
   );
 });
 
+test("extracts a subagent conversation from task metadata when its rollout has no user_message event", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "agent-subagent-conversation-"));
+  const file = path.join(directory, "rollout-session.jsonl");
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const records = [
+    {
+      timestamp: "2026-07-17T00:00:00.000Z",
+      type: "session_meta",
+      payload: {
+        thread_source: "subagent",
+        agent_path: "/root/disk-preview",
+        source: { subagent: { thread_spawn: { agent_path: "/root/disk-preview" } } },
+      },
+    },
+    message("developer", "injected developer instructions", "2026-07-17T00:00:01.000Z"),
+    message("user", "injected environment context", "2026-07-17T00:00:02.000Z"),
+    {
+      timestamp: "2026-07-17T00:00:03.000Z",
+      type: "response_item",
+      payload: {
+        type: "agent_message",
+        author: "/root",
+        recipient: "/root/disk-preview",
+        internal_chat_message_metadata_passthrough: { turn_id: "subagent-turn" },
+        content: [{
+          type: "input_text",
+          text: "Message Type: NEW_TASK\nTask name: /root/disk-preview\nSender: /root\nPayload:\nInspect the disk fallback.",
+        }],
+      },
+    },
+    message("assistant", "I will inspect it.", "2026-07-17T00:00:04.000Z", "commentary", "subagent-turn"),
+    message("assistant", "Disk fallback is fixed.", "2026-07-17T00:00:05.000Z", "final_answer", "subagent-turn"),
+  ];
+  await fs.writeFile(file, `${records.map(JSON.stringify).join("\n")}\n`);
+
+  const conversation = await extractSessionConversationFromJsonl(file);
+  assert.equal(conversation.hasEarlier, false);
+  assert.deepEqual(conversation.turns, [{
+    id: "subagent-turn",
+    user: "Delegated task: /root/disk-preview\n\nInspect the disk fallback.",
+    startedAt: "2026-07-17T00:00:03.000Z",
+    assistant: [
+      { text: "I will inspect it.", phase: "commentary", completedAt: "2026-07-17T00:00:04.000Z" },
+      { text: "Disk fallback is fixed.", phase: "final_answer", completedAt: "2026-07-17T00:00:05.000Z" },
+    ],
+  }]);
+});
+
 test("reads a remote Session preview through turns without resuming the thread", async () => {
   const calls = [];
   const client = {

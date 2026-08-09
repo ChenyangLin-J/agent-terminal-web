@@ -58,13 +58,16 @@
     form.autocomplete = "off";
     for (const field of integration.fields || []) form.append(secretField(field, integration.status));
 
+    const verifiesOnUse = integration.verification === "on-use";
     const metadata = element("div", "integration-meta");
     metadata.textContent = integration.status?.message
       || (integration.status?.verifiedAt
         ? `最近验证：${formatDate(integration.status.verifiedAt)}`
         : integration.status?.updatedAt
           ? `配置更新：${formatDate(integration.status.updatedAt)}`
-          : "保存前会先连接服务商验证。");
+          : verifiesOnUse
+            ? "保存时只检查格式；首次获批调用时验证。"
+            : "保存前会先连接服务商验证。");
 
     const feedback = element("p", "integration-feedback");
     feedback.setAttribute("aria-live", "polite");
@@ -72,7 +75,9 @@
     const actions = element("div", "integration-actions");
     const save = element("button", "primary");
     save.type = "submit";
-    save.textContent = integration.status?.configured ? "替换并验证" : "保存并验证";
+    save.textContent = verifiesOnUse
+      ? (integration.status?.configured ? "替换" : "保存")
+      : (integration.status?.configured ? "替换并验证" : "保存并验证");
     if (integration.status?.state === "conflict" && !integration.status?.canReplace) {
       save.disabled = true;
     }
@@ -112,8 +117,8 @@
     input.type = "password";
     input.name = field.id;
     input.required = true;
-    input.minLength = 16;
-    input.maxLength = 128;
+    input.minLength = Number(field.minLength) || 16;
+    input.maxLength = Number(field.maxLength) || 128;
     input.autocomplete = "new-password";
     input.spellcheck = false;
     input.placeholder = status?.configured ? "输入完整的新值以替换" : field.placeholder;
@@ -134,7 +139,10 @@
     const values = Object.fromEntries(new FormData(form));
     const controls = [...form.querySelectorAll("input, button")];
     setBusy(controls, true);
-    setFeedback(feedback, "正在验证并保存…");
+    setFeedback(
+      feedback,
+      integration.verification === "on-use" ? "正在保存…" : "正在验证并保存…",
+    );
     try {
       const response = await fetch(`/api/integrations/${encodeURIComponent(integration.id)}`, {
         method: "PUT",
@@ -175,7 +183,13 @@
   function replaceCard(card, integration) {
     const replacement = integrationCard(integration);
     const feedback = replacement.querySelector(".integration-feedback");
-    setFeedback(feedback, "已保存。工具下次调用时生效。", "success");
+    setFeedback(
+      feedback,
+      integration.verification === "on-use"
+        ? "已保存。首次获批调用时验证。"
+        : "已保存。工具下次调用时生效。",
+      "success",
+    );
     card.replaceWith(replacement);
   }
 

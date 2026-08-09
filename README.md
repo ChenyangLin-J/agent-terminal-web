@@ -193,6 +193,10 @@ The authenticated Agent home includes an `集成` manager for external tool cred
 Credentials are write-only in the browser: a configured value can be replaced or deleted,
 but it is never returned to the page.
 
+The manager currently includes Amap, Cubox, and TikHub. TikHub is stored without making a
+validation request, so adding the key cannot consume API credit; the approved research run
+validates it on first use.
+
 Integration credentials are stored outside the repository:
 
 ```text

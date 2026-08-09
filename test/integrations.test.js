@@ -20,6 +20,7 @@ const firstKey = "11111111111111111111111111111111";
 const secondKey = "22222222222222222222222222222222";
 const cuboxToken = "cubox_test_token_1234567890";
 const cuboxApiLink = `https://cubox.pro/c/api/save/${cuboxToken}`;
+const tikhubKey = `tikhub_test_${"3".repeat(180)}`;
 
 test("Cubox config directory environment overrides are test-only", (t) => {
   const previousNodeEnv = process.env.NODE_ENV;
@@ -59,6 +60,40 @@ test("integration credentials are write-only to the public status response and s
   const listed = await listIntegrations({ root: store });
   assert.equal(listed[0].status.configured, true);
   assert.doesNotMatch(JSON.stringify(listed), new RegExp(firstKey));
+});
+
+test("TikHub is saved write-only without a validation request or API cost", async (t) => {
+  const store = await fs.mkdtemp(path.join(os.tmpdir(), "agent-tikhub-integration-"));
+  t.after(() => fs.rm(store, { recursive: true, force: true }));
+  let fetchCalls = 0;
+
+  const integration = await saveIntegrationCredential("tikhub", { apiKey: tikhubKey }, {
+    root: store,
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("TikHub save must not access the network");
+    },
+  });
+
+  assert.equal(fetchCalls, 0);
+  assert.equal(integration.verification, "on-use");
+  assert.equal(integration.status.configured, true);
+  assert.equal(integration.status.verifiedAt, "");
+  assert.equal(integration.fields[0].maxLength, 2048);
+  assert.doesNotMatch(JSON.stringify(integration), new RegExp(tikhubKey));
+
+  const file = path.join(store, "tikhub.json");
+  assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
+  assert.equal((await readIntegrationCredential("tikhub", { root: store })).apiKey, tikhubKey);
+
+  await fs.chmod(file, 0o644);
+  await assert.rejects(
+    () => readIntegrationCredential("tikhub", { root: store }),
+    /private regular file/,
+  );
+  const status = (await listIntegrations({ root: store })).find((item) => item.id === "tikhub");
+  assert.equal(status.status.state, "error");
+  assert.doesNotMatch(JSON.stringify(status), new RegExp(tikhubKey));
 });
 
 test("replacing a credential atomically removes the old value and deleting clears status", async (t) => {
@@ -537,6 +572,18 @@ test("authenticated integration settings API supports set, status, replacement, 
     token: cuboxToken,
   });
 
+  const tikhubSavedResponse = await fetch(`${origin}/api/integrations/tikhub`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({ values: { apiKey: tikhubKey } }),
+  });
+  const tikhubSaved = await tikhubSavedResponse.json();
+  assert.equal(tikhubSavedResponse.status, 200);
+  assert.equal(tikhubSaved.integration.status.configured, true);
+  assert.equal(tikhubSaved.integration.verification, "on-use");
+  assert.doesNotMatch(JSON.stringify(tikhubSaved), new RegExp(tikhubKey));
+  assert.equal((await fs.stat(path.join(store, "tikhub.json"))).mode & 0o777, 0o600);
+
   const statusResponse = await fetch(`${origin}/api/integrations`, {
     headers: { cookie: "session=ok" },
   });
@@ -545,6 +592,8 @@ test("authenticated integration settings API supports set, status, replacement, 
   assert.doesNotMatch(JSON.stringify(status), new RegExp(firstKey));
   assert.equal(status.integrations.find((item) => item.id === "cubox").status.configured, true);
   assert.doesNotMatch(JSON.stringify(status), new RegExp(cuboxToken));
+  assert.equal(status.integrations.find((item) => item.id === "tikhub").status.configured, true);
+  assert.doesNotMatch(JSON.stringify(status), new RegExp(tikhubKey));
 
   const crossOrigin = await fetch(`${origin}/api/integrations/amap`, {
     method: "PUT",

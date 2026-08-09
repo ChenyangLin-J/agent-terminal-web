@@ -220,6 +220,42 @@ test("keeps separate disk turns for each subagent NEW_TASK", async (t) => {
   ]);
 });
 
+test("reads subagent metadata from the file head when the conversation tail is large", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "agent-subagent-long-tail-"));
+  const file = path.join(directory, "rollout-session.jsonl");
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const records = [
+    {
+      timestamp: "2026-07-17T00:00:00.000Z",
+      type: "session_meta",
+      payload: {
+        thread_source: "subagent",
+        source: { subagent: { thread_spawn: { agent_path: null, agent_nickname: "Helmholtz" } } },
+      },
+    },
+    {
+      timestamp: "2026-07-17T00:00:01.000Z",
+      type: "response_item",
+      payload: { type: "reasoning", encrypted_content: "x".repeat(80 * 1024) },
+    },
+    message("assistant", "Recent progress survives the tail read.", "2026-07-17T00:00:02.000Z", "commentary", "long-turn"),
+    message("assistant", "Recent result survives too.", "2026-07-17T00:00:03.000Z", "final_answer", "long-turn"),
+  ];
+  await fs.writeFile(file, `${records.map(JSON.stringify).join("\n")}\n`);
+
+  const conversation = await extractSessionConversationFromJsonl(file, { maxBytes: 64 * 1024 });
+  assert.deepEqual(conversation.turns, [{
+    id: "long-turn",
+    user: "Delegated task: Helmholtz",
+    startedAt: "",
+    assistant: [
+      { text: "Recent progress survives the tail read.", phase: "commentary", completedAt: "2026-07-17T00:00:02.000Z" },
+      { text: "Recent result survives too.", phase: "final_answer", completedAt: "2026-07-17T00:00:03.000Z" },
+    ],
+  }]);
+});
+
 test("reads a remote Session preview through turns without resuming the thread", async () => {
   const calls = [];
   const client = {

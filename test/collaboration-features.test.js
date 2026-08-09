@@ -41,7 +41,7 @@ test("Agent Web exposes dedicated Multi-Agent, thread tree, side chat, and Realt
   );
   assert.match(
     client,
-    /realtimeController\.setLaunchable\(activeTransport === "app-server" && activeSessionPreviewOnly\)/,
+    /realtimeController\.setLaunchable\([\s\S]{0,180}activeTransport === "app-server" && activeSessionPreviewOnly && !readOnlySubagentPreview/,
   );
   assert.match(client, /connected &&[\s\S]*activeSessionReady &&[\s\S]*activeSessionCapabilities\.realtimeV3/);
   assert.match(realtime, /function setLaunchable\(value\)/);

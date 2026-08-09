@@ -59,6 +59,7 @@ import {
 import { viewedImagePath } from "./lib/session-image.js";
 import { commandDisplayText } from "./lib/command-display.js";
 import {
+  appServerConversationFromTurnPage,
   extractSessionConversationFromJsonl,
   extractSessionPreviewFromJsonl,
   extractSessionTokenUsageFromJsonl,
@@ -1376,17 +1377,45 @@ app.get("/api/session-preview/:id", async (req, res) => {
   }
 
   try {
+    const liveSource = liveSessionPreviewSource(req, agentHost);
+    if (liveSource) {
+      try {
+        const live = await readLiveSessionPreview(liveSource, id);
+        res.set("Cache-Control", "private, no-store");
+        res.json(live);
+        return;
+      } catch (error) {
+        logAgentEvent("live-session-preview-fallback", {
+          webSessionId: liveSource.id,
+          sourceThreadId: liveSource.sessionId,
+          previewThreadId: id,
+          message: cleanClientLogValue(error.message, 300),
+        });
+      }
+    }
+
     if (agentHost.type !== "local") {
       const conversation = await withStandaloneAppServer(agentHost, (client) =>
         readAppServerSessionConversation(client, id, { limit: APP_INITIAL_TURN_LIMIT }),
       );
       const preview = sessionPreviewFromConversation(conversation);
       if (!preview && !conversation.turns.length) {
+        if (liveSource) {
+          res.set("Cache-Control", "private, no-store");
+          res.json({
+            preview: null,
+            conversation: { turns: [], hasEarlier: false },
+            transcript: { restoredTurnCount: 0, hasEarlierTurns: false, items: [] },
+            live: true,
+            active: true,
+          });
+          return;
+        }
         res.status(404).json({ error: "No Session history is available yet." });
         return;
       }
       res.set("Cache-Control", "private, no-store");
-      res.json({ preview, conversation });
+      res.json({ preview, conversation, ...(liveSource ? { live: true, active: true } : {}) });
       return;
     }
 
@@ -1396,6 +1425,17 @@ app.get("/api/session-preview/:id", async (req, res) => {
     const conversationPreview = sessionPreviewFromConversation(conversation);
     const extracted = newerSessionPreview(cached, conversationPreview) || (file ? await extractSessionPreviewFromJsonl(file) : null);
     if (!extracted && !conversation?.turns?.length) {
+      if (liveSource) {
+        res.set("Cache-Control", "private, no-store");
+        res.json({
+          preview: null,
+          conversation: { turns: [], hasEarlier: false },
+          transcript: { restoredTurnCount: 0, hasEarlierTurns: false, items: [] },
+          live: true,
+          active: true,
+        });
+        return;
+      }
       res.status(404).json({ error: "No completed result is available yet." });
       return;
     }
@@ -1404,7 +1444,12 @@ app.get("/api/session-preview/:id", async (req, res) => {
         ? cached
         : saveSessionPreview(CODEX_SESSION_PREVIEWS_FILE, { ...extracted, sessionId: id })
       : null;
-    res.json({ preview, conversation: conversation || { turns: [], hasEarlier: false } });
+    if (liveSource) res.set("Cache-Control", "private, no-store");
+    res.json({
+      preview,
+      conversation: conversation || { turns: [], hasEarlier: false },
+      ...(liveSource ? { live: true, active: true } : {}),
+    });
   } catch (error) {
     console.error(`Failed to read session preview ${id}: ${error.message}`);
     res.status(agentHost.type === "local" ? 500 : 503).json({
@@ -1415,6 +1460,71 @@ app.get("/api/session-preview/:id", async (req, res) => {
     });
   }
 });
+
+function liveSessionPreviewSource(req, agentHost) {
+  const sourceId = String(req.query.sourceSession || "").trim();
+  if (!isValidWebSessionId(sourceId)) return null;
+  const session = sessions.get(sourceId);
+  if (
+    !session ||
+    session.hostId !== agentHost.id ||
+    session.transport !== APP_SERVER_TRANSPORT ||
+    !session.ready ||
+    session.exited ||
+    session.released ||
+    !session.appServer
+  ) {
+    return null;
+  }
+  return session;
+}
+
+async function readLiveSessionPreview(sourceSession, threadId) {
+  const [page, thread] = await Promise.all([
+    sourceSession.appServer.listThreadTurns({
+      threadId,
+      limit: APP_INITIAL_TURN_LIMIT,
+      sortDirection: "desc",
+      itemsView: "full",
+    }),
+    sourceSession.appServer.readThread({ threadId, includeTurns: false }),
+  ]);
+  const turns = Array.isArray(page?.data) ? [...page.data] : [];
+  const orderedTurns = turns.sort((left, right) => Number(left?.startedAt || 0) - Number(right?.startedAt || 0));
+  const previewSession = {
+    ...sourceSession,
+    collabAgentMetadata: new Map(),
+    personalMemoryCitationsByTurn: new Map(),
+    submittedAttachmentMetadata: new Map(),
+  };
+  const transcriptItems = appTranscriptItemsFromTurns(previewSession, orderedTurns, { historical: false })
+    .map(normalizeAppTranscriptItem);
+  const conversation = appServerConversationFromTurnPage(page);
+  return {
+    preview: sessionPreviewFromConversation(conversation),
+    conversation,
+    transcript: {
+      restoredTurnCount: new Set(transcriptItems.map((item) => item.turnId).filter(Boolean)).size,
+      hasEarlierTurns: Boolean(page?.nextCursor),
+      items: transcriptItems,
+    },
+    live: true,
+    active: livePreviewThreadActive(thread, turns),
+  };
+}
+
+function livePreviewThreadActive(thread, turns = []) {
+  const rawStatus = thread?.status?.type || thread?.status || "";
+  const status = String(rawStatus).replace(/[_-]/g, "").toLowerCase();
+  if (["active", "inprogress", "running", "pending"].includes(status)) return true;
+  const hasActiveTurn = turns.some((turn) => {
+    const turnStatus = String(turn?.status?.type || turn?.status || "").replace(/[_-]/g, "").toLowerCase();
+    return ["active", "inprogress", "running", "pending"].includes(turnStatus);
+  });
+  if (hasActiveTurn) return true;
+  if (["idle", "completed", "failed", "interrupted", "cancelled", "canceled"].includes(status)) return false;
+  return false;
+}
 
 function sessionPreviewFromConversation(conversation) {
   for (let turnIndex = (conversation?.turns?.length || 0) - 1; turnIndex >= 0; turnIndex -= 1) {

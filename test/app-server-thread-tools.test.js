@@ -49,7 +49,14 @@ test("Agent Web exposes native search, persistent names, branching, subagent nav
   assert.match(app, /const canBranch = item\.type === "user"/);
   assert.doesNotMatch(app, /const canFork =[\s\S]*item\.type === "assistant"/);
   assert.match(app, /function renderAppSubagents/);
+  assert.match(app, /sessionId: agent\.id,[\s\S]{0,300}sourceSession: activeSessionId/);
+  assert.match(app, /sessionId: item\.agentThreadId,[\s\S]{0,300}sourceSession: activeSessionId/);
+  assert.match(app, /sourceSession\.searchParams|previewPath\.searchParams\.set\("sourceSession"/);
+  assert.match(app, /function normalizeSessionNavigation[\s\S]*sourceSession,[\s\S]*preview: sourceSession \|\| host === "personal"/);
   assert.match(app, /"打开主 Agent"/);
+  assert.match(server, /function readLiveSessionPreview/);
+  assert.match(server, /sourceSession\.appServer\.listThreadTurns/);
+  assert.doesNotMatch(server, /readLiveSessionPreview[\s\S]{0,600}resumeThread/);
   assert.match(styles, /\.thread-search-dialog/);
   assert.match(styles, /\.app-transcript-item-actions/);
   assert.match(styles, /\.app-transcript-item\.has-transcript-actions:hover \.app-transcript-item-actions/);

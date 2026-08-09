@@ -17,7 +17,7 @@ test("saved and released Sessions open from disk before a runtime is attached", 
   );
   assert.match(
     app,
-    /agentHostApiUrl\(\s*`\/api\/session-preview\/\$\{encodeURIComponent\(sessionId\)\}`,\s*activeSessionParams\.host \|\| activeAgentHostId/,
+    /const previewPath = new URL\(`\/api\/session-preview\/\$\{encodeURIComponent\(sessionId\)\}`[\s\S]*agentHostApiUrl\(\s*`\$\{previewPath\.pathname\}\$\{previewPath\.search\}`,\s*activeSessionParams\.host \|\| activeAgentHostId/,
   );
   assert.match(
     app,
@@ -34,7 +34,10 @@ test("saved and released Sessions open from disk before a runtime is attached", 
     /if \(!resumesRenderedPreview && params\.sessionId && activeAgentHostId === "personal"\)/,
   );
   assert.match(app, /function transcriptAnchorAliases\(previousItems, nextItems\)/);
-  assert.match(app, /preview: activeSessionParams\.sessionId \? "仅查看 · 发送时恢复" : "发送第一条消息时创建"/);
+  assert.match(
+    app,
+    /preview: readOnlySubagentPreview[\s\S]{0,200}activeSessionParams\.sessionId[\s\S]{0,100}"仅查看 · 发送时恢复"[\s\S]{0,100}"发送第一条消息时创建"/,
+  );
   assert.doesNotMatch(page, /选择恢复方式|resume-engine-dialog/);
 });
 
@@ -68,7 +71,7 @@ test("the first message activates a previewed Session and keeps permissions loca
   );
   assert.match(
     server,
-    /app\.get\("\/api\/session-preview\/:id"[\s\S]*agentHost\.type !== "local"[\s\S]*readAppServerSessionConversation\(client, id,[\s\S]*res\.json\(\{ preview, conversation \}\)/,
+    /app\.get\("\/api\/session-preview\/:id"[\s\S]*agentHost\.type !== "local"[\s\S]*readAppServerSessionConversation\(client, id,[\s\S]*res\.json\(\{ preview, conversation, \.\.\.\(liveSource/,
   );
   assert.match(
     server,

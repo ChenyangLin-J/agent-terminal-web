@@ -211,6 +211,7 @@ const APP_READING_POSITION_SAVE_MS = 120;
 const LIVE_SESSIONS_FALLBACK_MS = 60_000;
 const SESSION_CATALOG_FALLBACK_MS = 5 * 60_000;
 const CONTROL_EVENT_CATALOG_DEBOUNCE_MS = 500;
+const LIVE_SESSION_PREVIEW_REFRESH_MS = 4_000;
 const REMOTE_AGENT_REQUEST_TIMEOUT_MS = 5_000;
 const REMOTE_AGENT_INITIAL_REQUEST_TIMEOUT_MS = 12_000;
 const REMOTE_HOST_RETRY_BASE_MS = 15_000;
@@ -346,6 +347,8 @@ let appTranscriptSource = "";
 let cachedSessionPreview = null;
 let sessionPreviewLoading = false;
 let sessionPreviewError = "";
+let sessionPreviewLiveActive = false;
+let sessionPreviewRefreshTimer = null;
 let appTranscriptAnchorAliases = new Map();
 let sessionPreviewRequestSequence = 0;
 let terminalPreviewAllowed = false;
@@ -1887,6 +1890,10 @@ function openCurrentSessionNavigation() {
     showSessionScreen();
     if (activeSessionPreviewOnly) {
       syncPreviewSessionUrl();
+      if (activeSessionParams.sourceSession && activeSessionParams.sessionId) {
+        sessionPreviewRequestSequence += 1;
+        void loadSessionPreview(activeSessionParams.sessionId, sessionPreviewRequestSequence);
+      }
       return;
     }
     syncSessionUrl({
@@ -2574,7 +2581,7 @@ function startSession(overrides = {}) {
 }
 
 function activateRealtimeSession() {
-  if (!activeSessionPreviewOnly || activeTransport !== "app-server") return false;
+  if (!activeSessionPreviewOnly || activeTransport !== "app-server" || isReadOnlySubagentPreview()) return false;
   setUploadStatus(activeSessionParams.sessionId ? "正在恢复 Session，准备实时语音…" : "正在创建 Session，准备实时语音…");
   startSession({
     cwd: activeSessionParams.cwd || ".",
@@ -2633,6 +2640,7 @@ async function openInitialSessionFromUrl() {
   const previewOnly = params.get("preview") === "1";
   const access = params.get("access") === "safe" ? "safe" : "full";
   const purpose = params.get("purpose") === "think" ? "think" : "";
+  const sourceSession = params.get("sourceSession") || "";
   const host = cleanAgentHostId(params.get("host")) || activeAgentHostId;
   activeAgentHostId = host;
   syncStartSelectionsFromUrl(params);
@@ -2644,6 +2652,7 @@ async function openInitialSessionFromUrl() {
     transport: DEFAULT_TRANSPORT,
     access,
     purpose,
+    sourceSession,
   };
 
   if (title) setDocumentTitle(title);
@@ -2722,6 +2731,7 @@ function openSessionPreview(params = {}) {
     transport: DEFAULT_TRANSPORT,
     access: activeAccessMode,
     purpose: params.purpose === "think" ? "think" : "",
+    sourceSession: String(params.sourceSession || "").trim(),
     preview: "1",
     new: params.sessionId ? "" : "1",
   };
@@ -2758,6 +2768,7 @@ function openSessionPreview(params = {}) {
   cachedSessionPreview = null;
   sessionPreviewLoading = Boolean(activeSessionParams.sessionId);
   sessionPreviewError = "";
+  sessionPreviewLiveActive = false;
   appSkills = [];
   appSkillsRequested = false;
   sessionPreviewRequestSequence += 1;
@@ -3090,6 +3101,10 @@ async function openSocket(params, options = {}) {
 }
 
 async function submitPrompt(deliveryMode = "auto") {
+  if (isReadOnlySubagentPreview()) {
+    setUploadStatus("子 Agent 预览为只读，不会恢复或发送消息。", { clear: true });
+    return;
+  }
   if (promptSubmissionPending) return;
   promptSubmissionPending = true;
   try {
@@ -3627,6 +3642,7 @@ function createAgentCard(agent) {
       transport: "app-server",
       access: activeAccessMode,
       preview: "1",
+      sourceSession: activeSessionId,
     }),
   );
   actions.append(open);
@@ -4723,9 +4739,11 @@ function closeSocket() {
   window.clearTimeout(reconnectTimer);
   window.clearTimeout(visibleProbeTimer);
   window.clearTimeout(terminalHistoryFlushTimer);
+  window.clearTimeout(sessionPreviewRefreshTimer);
   reconnectTimer = null;
   visibleProbeTimer = null;
   terminalHistoryFlushTimer = null;
+  sessionPreviewRefreshTimer = null;
   stopClientHeartbeat();
   if (socket) {
     socket.intentionalClose = true;
@@ -5399,6 +5417,7 @@ function renderTurnState(value = {}) {
 }
 
 function setConnectedState(state) {
+  const readOnlySubagentPreview = isReadOnlySubagentPreview();
   const connectionStates = {
     connected: "已连接",
     connecting: "连接中",
@@ -5407,7 +5426,11 @@ function setConnectedState(state) {
     loading: "已连接 · 恢复最新记录中",
     detached: "已离开",
     exited: "已停止",
-    preview: activeSessionParams.sessionId ? "仅查看 · 发送时恢复" : "发送第一条消息时创建",
+    preview: readOnlySubagentPreview
+      ? "子 Agent · 只读"
+      : activeSessionParams.sessionId
+        ? "仅查看 · 发送时恢复"
+        : "发送第一条消息时创建",
   };
   const transport = activeTransport === "terminal" ? "Terminal · " : "";
   const access = activeTransport === "terminal" && activeAccessMode ? ` · ${appAccessLabel(activeAccessMode)}` : "";
@@ -5424,7 +5447,12 @@ function setConnectedState(state) {
     ["starting", "loading", "connected"].includes(state) &&
     socket?.readyState === WebSocket.OPEN;
   const connected = ((state === "connected" || terminalCanAcceptInput) && activeSessionReady) || appServerCanQueueStartup;
-  const canCompose = connected || activeSessionPreviewOnly;
+  const canCompose = !readOnlySubagentPreview && (connected || activeSessionPreviewOnly);
+  composer.classList.toggle("hidden", readOnlySubagentPreview);
+  promptInput.disabled = !canCompose;
+  voiceInputButton.disabled = !canCompose;
+  attachFileButton.disabled = !canCompose;
+  fileInput.disabled = !canCompose;
   sendPromptButton.disabled = !canCompose;
   queuePromptButton.disabled = !connected || activeSessionPreviewOnly;
   textTabButton.disabled = !connected;
@@ -5447,7 +5475,9 @@ function setConnectedState(state) {
   appSessionShareButton.disabled = activeTransport !== "app-server" || !activeSessionParams.sessionId;
   appSessionSideChatButton.disabled =
     activeTransport !== "app-server" || !connected || !activeSessionCapabilities.sideChat;
-  realtimeController.setLaunchable(activeTransport === "app-server" && activeSessionPreviewOnly);
+  realtimeController.setLaunchable(
+    activeTransport === "app-server" && activeSessionPreviewOnly && !readOnlySubagentPreview,
+  );
   realtimeController.setEnabled(
     activeTransport === "app-server" &&
       connected &&
@@ -5483,6 +5513,7 @@ function showStartScreen() {
   void markCurrentSessionViewedOnExit();
   saveActiveSessionSnapshot();
   stopAppTranscriptSubmitFollow();
+  stopLiveSessionPreviewRefresh();
   rememberSessionNavigation(activeSessionParams);
   setSessionPageMode(false);
   setDocumentTitle(DEFAULT_DOCUMENT_TITLE);
@@ -5583,6 +5614,7 @@ function syncPreviewSessionUrl() {
   if (activeAccessMode === "full") url.searchParams.set("access", "full");
   else url.searchParams.set("access", "safe");
   if (activeSessionParams.purpose === "think") url.searchParams.set("purpose", "think");
+  if (activeSessionParams.sourceSession) url.searchParams.set("sourceSession", activeSessionParams.sourceSession);
   appendNotificationTarget(url);
   window.history.replaceState(null, "", url.toString());
 }
@@ -6276,13 +6308,23 @@ function renderAppTranscript({ follow = false } = {}) {
     banner.className = "app-history-banner";
     const title = document.createElement("strong");
     title.textContent =
-      appTranscriptSource === "disk"
-        ? `已从磁盘显示最近 ${restoredAppTurnCount} 轮`
-        : `已加载最近 ${restoredAppTurnCount} 轮`;
+      appTranscriptSource === "live-preview"
+        ? `实时显示最近 ${restoredAppTurnCount} 轮`
+        : appTranscriptSource === "disk"
+          ? `已从磁盘显示最近 ${restoredAppTurnCount} 轮`
+          : `已加载最近 ${restoredAppTurnCount} 轮`;
     banner.append(title);
-    if (appTranscriptSource === "disk") {
+    if (appTranscriptSource === "live-preview") {
       const note = document.createElement("span");
-      note.textContent = activeSessionPreviewOnly ? "仅查看 · 发送消息时恢复" : "正在连接 Session";
+      note.textContent = sessionPreviewLiveActive ? "只读 · 子 Agent 运行中 · 自动更新" : "只读 · 子 Agent 已完成";
+      banner.append(note);
+    } else if (appTranscriptSource === "disk") {
+      const note = document.createElement("span");
+      note.textContent = isReadOnlySubagentPreview()
+        ? "只读 · 子 Agent 历史记录"
+        : activeSessionPreviewOnly
+          ? "仅查看 · 发送消息时恢复"
+          : "正在连接 Session";
       banner.append(note);
     } else if (restoredAppHistoryHasMore) {
       const loadEarlier = document.createElement("button");
@@ -6361,7 +6403,12 @@ function renderAppTranscript({ follow = false } = {}) {
     emptyState.className = "app-transcript-empty";
     const title = document.createElement("strong");
     const note = document.createElement("span");
-    if (activeSessionPreviewOnly && activeSessionParams.sessionId && sessionPreviewLoading) {
+    if (
+      activeSessionPreviewOnly &&
+      activeSessionParams.sessionId &&
+      sessionPreviewLoading &&
+      !sessionPreviewLiveActive
+    ) {
       title.textContent = `正在加载${agentHostLabel(activeSessionParams.host || activeAgentHostId)} Session…`;
       note.textContent = "这里只读取会话记录，不会恢复运行；加载完成前仍可返回中控。";
     } else if (activeSessionPreviewOnly && activeSessionParams.sessionId && sessionPreviewError) {
@@ -6376,20 +6423,28 @@ function renderAppTranscript({ follow = false } = {}) {
       });
       emptyState.append(title, note, retry);
     } else {
-      title.textContent = activeSessionPreviewOnly
-        ? activeSessionParams.sessionId
-          ? "还没有可显示的记录"
-          : "新 Session"
-        : activeSessionReady
-          ? "还没有对话"
-          : "正在恢复会话…";
-      note.textContent = activeSessionPreviewOnly
-        ? activeSessionParams.sessionId
-          ? "发送消息时会恢复这个 Session。"
-          : "输入第一条消息后再创建 Session。"
-        : activeSessionReady
-          ? "在下面输入内容，第一条消息会显示在这里。"
-          : "历史内容准备好后会自动显示。";
+      title.textContent = sessionPreviewLiveActive
+        ? "子 Agent 正在启动…"
+        : isReadOnlySubagentPreview()
+          ? "还没有可显示的子 Agent 记录"
+          : activeSessionPreviewOnly
+            ? activeSessionParams.sessionId
+              ? "还没有可显示的记录"
+              : "新 Session"
+            : activeSessionReady
+              ? "还没有对话"
+              : "正在恢复会话…";
+      note.textContent = sessionPreviewLiveActive
+        ? "这里会以只读方式自动更新，不会恢复或打断子 Agent。"
+        : isReadOnlySubagentPreview()
+          ? "这里只读取已有记录，不会恢复或修改子 Agent。"
+          : activeSessionPreviewOnly
+            ? activeSessionParams.sessionId
+              ? "发送消息时会恢复这个 Session。"
+              : "输入第一条消息后再创建 Session。"
+            : activeSessionReady
+              ? "在下面输入内容，第一条消息会显示在这里。"
+              : "历史内容准备好后会自动显示。";
     }
     if (!emptyState.childNodes.length) emptyState.append(title, note);
     fragment.append(emptyState);
@@ -6438,13 +6493,18 @@ async function loadSessionPreview(sessionId, requestSequence) {
   if (requestSequence !== sessionPreviewRequestSequence || activeSessionParams.sessionId !== sessionId) return;
   sessionPreviewLoading = true;
   sessionPreviewError = "";
+  let shouldRefresh = false;
   if (activeSessionPreviewOnly && appTranscriptSource !== "app-server") {
     renderAppTranscript({ follow: false });
   }
   try {
+    const previewPath = new URL(`/api/session-preview/${encodeURIComponent(sessionId)}`, window.location.origin);
+    if (activeSessionParams.sourceSession) {
+      previewPath.searchParams.set("sourceSession", activeSessionParams.sourceSession);
+    }
     const response = await fetch(
       agentHostApiUrl(
-        `/api/session-preview/${encodeURIComponent(sessionId)}`,
+        `${previewPath.pathname}${previewPath.search}`,
         activeSessionParams.host || activeAgentHostId,
       ),
     );
@@ -6453,6 +6513,8 @@ async function loadSessionPreview(sessionId, requestSequence) {
       throw new Error(data.error || "Session 记录暂时无法读取。");
     }
     if (requestSequence !== sessionPreviewRequestSequence || activeSessionParams.sessionId !== sessionId) return;
+    sessionPreviewLiveActive = Boolean(data.live && data.active);
+    shouldRefresh = sessionPreviewLiveActive;
     const preview = data.preview;
     if (preview?.result) {
       cachedSessionPreview = {
@@ -6467,27 +6529,71 @@ async function loadSessionPreview(sessionId, requestSequence) {
     if (activeTransport === "terminal") {
       renderTerminalSessionPreview();
     } else if (appTranscriptSource !== "app-server") {
-      const diskItems = diskConversationItems(data.conversation);
-      if (diskItems.length) {
-        appTranscriptItems = diskItems;
-        appTranscriptSource = "disk";
-        restoredAppTurnCount = Array.isArray(data.conversation?.turns) ? data.conversation.turns.length : 0;
-        restoredAppHistoryHasMore = Boolean(data.conversation?.hasEarlier);
+      if (data.live && data.transcript && Array.isArray(data.transcript.items)) {
+        appTranscriptItems = data.transcript.items.map(normalizeClientTranscriptItem);
+        appTranscriptSource = "live-preview";
+        restoredAppTurnCount = Number(data.transcript.restoredTurnCount || 0);
+        restoredAppHistoryHasMore = Boolean(data.transcript.hasEarlierTurns);
         renderAppTranscript({ follow: false });
-      } else if (!appTranscriptItems.length) {
-        renderAppTranscript({ follow: false });
+      } else {
+        const diskItems = diskConversationItems(data.conversation);
+        if (diskItems.length) {
+          appTranscriptItems = diskItems;
+          appTranscriptSource = data.live ? "live-preview" : "disk";
+          restoredAppTurnCount = Array.isArray(data.conversation?.turns) ? data.conversation.turns.length : 0;
+          restoredAppHistoryHasMore = Boolean(data.conversation?.hasEarlier);
+          renderAppTranscript({ follow: false });
+        } else if (!appTranscriptItems.length) {
+          renderAppTranscript({ follow: false });
+        }
       }
     }
   } catch (error) {
     if (requestSequence !== sessionPreviewRequestSequence || activeSessionParams.sessionId !== sessionId) return;
     sessionPreviewError = String(error?.message || "Session 记录暂时无法读取。");
+    shouldRefresh = Boolean(activeSessionParams.sourceSession);
   } finally {
     if (requestSequence !== sessionPreviewRequestSequence || activeSessionParams.sessionId !== sessionId) return;
     sessionPreviewLoading = false;
     if (activeSessionPreviewOnly && appTranscriptSource !== "app-server") {
       renderAppTranscript({ follow: false });
     }
+    if (shouldRefresh) scheduleLiveSessionPreviewRefresh(sessionId);
+    else stopLiveSessionPreviewRefresh();
   }
+}
+
+function scheduleLiveSessionPreviewRefresh(sessionId) {
+  stopLiveSessionPreviewRefresh();
+  if (
+    !activeSessionPreviewOnly ||
+    !activeSessionParams.sourceSession ||
+    activeSessionParams.sessionId !== sessionId ||
+    sessionScreen.classList.contains("hidden")
+  ) {
+    return;
+  }
+  sessionPreviewRefreshTimer = window.setTimeout(() => {
+    sessionPreviewRefreshTimer = null;
+    if (
+      !activeSessionPreviewOnly ||
+      activeSessionParams.sessionId !== sessionId ||
+      sessionScreen.classList.contains("hidden")
+    ) {
+      return;
+    }
+    if (document.visibilityState !== "visible") {
+      scheduleLiveSessionPreviewRefresh(sessionId);
+      return;
+    }
+    sessionPreviewRequestSequence += 1;
+    void loadSessionPreview(sessionId, sessionPreviewRequestSequence);
+  }, LIVE_SESSION_PREVIEW_REFRESH_MS);
+}
+
+function stopLiveSessionPreviewRefresh() {
+  window.clearTimeout(sessionPreviewRefreshTimer);
+  sessionPreviewRefreshTimer = null;
 }
 
 function diskConversationItems(conversation = {}) {
@@ -6906,6 +7012,7 @@ function createAppTranscriptCard(item) {
         transport: "app-server",
         access: activeAccessMode,
         preview: "1",
+        sourceSession: activeSessionId || activeSessionParams.sourceSession,
       });
     });
     card.append(openAgent);
@@ -6914,7 +7021,7 @@ function createAppTranscriptCard(item) {
 }
 
 function createTranscriptItemActions(item) {
-  if (!item.turnId || item.turnId === "session-preview") return null;
+  if (isReadOnlySubagentPreview() || !item.turnId || item.turnId === "session-preview") return null;
   const canBranch = item.type === "user" && !(latestTurnState.active && latestTurnState.turnId === item.turnId);
   if (!canBranch) return null;
 
@@ -6969,16 +7076,22 @@ function renderEditForkBanner() {
   editForkBanner.classList.toggle("hidden", !pendingEditFork);
   composer.classList.toggle("editing-history", Boolean(pendingEditFork));
   syncEditForkSourceHighlight();
-  sendPromptButton.textContent = activeSessionPreviewOnly
-    ? activeSessionParams.sessionId
-      ? "发送并恢复"
-      : "发送并创建"
-    : pendingEditFork
-      ? "提交编辑"
-      : latestTurnState.active
-        ? "追加当前"
-        : "新任务";
+  sendPromptButton.textContent = isReadOnlySubagentPreview()
+    ? "只读"
+    : activeSessionPreviewOnly
+      ? activeSessionParams.sessionId
+        ? "发送并恢复"
+        : "发送并创建"
+      : pendingEditFork
+        ? "提交编辑"
+        : latestTurnState.active
+          ? "追加当前"
+          : "新任务";
   queuePromptButton.classList.toggle("hidden", Boolean(pendingEditFork) || !latestTurnState.active);
+}
+
+function isReadOnlySubagentPreview() {
+  return activeSessionPreviewOnly && Boolean(String(activeSessionParams.sourceSession || "").trim());
 }
 
 function syncEditForkSourceHighlight() {
@@ -7606,7 +7719,7 @@ function clearSessionUrl() {
   if (!window.location.search) return;
 
   const url = new URL(window.location.href);
-  for (const key of ["attach", "cwd", "sessionId", "title", "purpose", "preview", "new", "transport", "access"]) {
+  for (const key of ["attach", "cwd", "sessionId", "title", "purpose", "preview", "new", "transport", "access", "sourceSession"]) {
     url.searchParams.delete(key);
   }
   if (url.toString() !== window.location.href) {
@@ -7642,6 +7755,8 @@ function forgetSessionNavigation(params = {}) {
 function normalizeSessionNavigation(params = {}) {
   const sessionId = String(params.sessionId || "").trim();
   if (!sessionId || sessionId.length > 120) return null;
+  const rawSourceSession = String(params.sourceSession || "").trim();
+  const sourceSession = /^[a-z0-9-]{8,80}$/i.test(rawSourceSession) ? rawSourceSession : "";
   const host = cleanAgentHostId(params.host) || "personal";
   const title = String(params.title || "Untitled session").replace(/\s+/g, " ").trim().slice(0, 240);
   const cwd = String(params.cwd || ".").trim().slice(0, 1_000) || ".";
@@ -7653,7 +7768,8 @@ function normalizeSessionNavigation(params = {}) {
     transport: "app-server",
     access: params.access === "full" ? "full" : "safe",
     purpose: params.purpose === "think" ? "think" : "",
-    preview: host === "personal" ? "1" : "",
+    sourceSession,
+    preview: sourceSession || host === "personal" ? "1" : "",
   };
 }
 

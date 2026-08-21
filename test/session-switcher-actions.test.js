@@ -3,21 +3,37 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("the desktop and Pad Session switcher collapses and exposes contextual actions", async () => {
-  const [server, page, app, styles] = await Promise.all([
+  const [server, page, app, styles, entry, hostStyles] = await Promise.all([
     readFile(new URL("../server.js", import.meta.url), "utf8"),
     readFile(new URL("../public/index.html", import.meta.url), "utf8"),
     readFile(new URL("../public/app.js", import.meta.url), "utf8"),
     readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
+    readFile(new URL("../src/session-list-entry.jsx", import.meta.url), "utf8"),
+    readFile(new URL("../public/session-list-host.css", import.meta.url), "utf8"),
   ]);
 
-  assert.match(page, /id="session-switcher-toggle"[\s\S]*aria-label="收起快速切换"/);
+  assert.match(page, /id="session-switcher-core"/);
+  assert.match(page, /session-list-core\.css\?v=0\.4\.17/);
+  assert.match(page, /session-list-core\.js\?v=0\.4\.17/);
   assert.match(page, /id="session-switcher-open"[\s\S]*aria-label="展开快速切换"/);
-  assert.match(page, /id="session-switcher-host-tabs"[\s\S]*aria-label="会话账号筛选"/);
+  assert.match(entry, /import \{ SessionList \} from "@agent-workbench\/platform\/ui"/);
+  assert.match(entry, /onFavorite: \(session, favorited\)/);
+  assert.match(entry, /onFullTextSearch: \(query\)/);
+  assert.match(entry, /onOpenHistory:/);
+  assert.match(entry, /onArchive: \(session, archived\)/);
+  assert.match(entry, /onEnd: \(session\)/);
+  assert.match(entry, /className="agent-core-host-filters"/);
   assert.match(app, /const SESSION_SWITCHER_COLLAPSED_STORE_KEY/);
   assert.match(app, /return stored === null \? false : stored !== "0"/);
   assert.match(app, /function setSessionSwitcherCollapsed\(collapsed/);
-  assert.match(app, /function renderSessionSwitcherHostTabs\(\)/);
-  assert.match(app, /sessionSwitcherAccountFilter = filter\.id/);
+  assert.match(app, /window\.AgentSessionList\?\.render\(sessionSwitcherCore/);
+  assert.match(app, /groupMode: "attention"/);
+  assert.match(app, /searchableText: liveSessionCurrentTask\(session\)/);
+  assert.match(app, /sortOrder,/);
+  assert.match(app, /favorited: Boolean\(session\.favorited\)/);
+  assert.match(app, /sessionSwitcherAccountFilter = detail\.hostId \|\| "all"/);
+  assert.match(app, /detail\.type === "full-text-search"/);
+  assert.match(app, /detail\.type === "history"/);
   assert.match(styles, /\.session-screen\.session-switcher-collapsed \{[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
   assert.match(styles, /\.session-screen\.session-switcher-collapsed \.session-switcher \{\s*display: none/);
   assert.match(
@@ -25,13 +41,10 @@ test("the desktop and Pad Session switcher collapses and exposes contextual acti
     /\.session-screen\.session-switcher-collapsed \.session-header \{[\s\S]*column-gap: 12px;[\s\S]*padding-left: 12px;/,
   );
   assert.match(styles, /\.session-screen\.session-switcher-collapsed \.session-switcher-open \{\s*display: grid/);
-  assert.match(app, /row\.className = "session-switcher-row"/);
-  assert.match(app, /actions\.className = "session-switcher-actions"/);
-  assert.match(app, /actions\.open = sessionKey === openSessionSwitcherActionId/);
-  assert.match(app, /openSessionSwitcherActionId = sessionKey/);
-  assert.match(app, /summary\.textContent = "⋮"/);
-  assert.match(app, /archive\.textContent = "归档"/);
-  assert.match(app, /end\.textContent = "结束"/);
+  assert.match(hostStyles, /#session-switcher-core/);
+  assert.match(hostStyles, /--cwu-surface: #0c1016/);
+  assert.doesNotMatch(app, /row\.className = "session-switcher-row"/);
+  assert.doesNotMatch(app, /function renderSessionSwitcherHostTabs\(\)/);
   assert.match(app, /function archiveSessionFromSwitcher\(session\)/);
   assert.match(app, /function endSessionFromSwitcher\(session\)/);
   assert.match(
@@ -59,12 +72,6 @@ test("the desktop and Pad Session switcher collapses and exposes contextual acti
     /function openNewSessionAfterEnd\([\s\S]*applyControlSessionEvent\(endedSession\)[\s\S]*openNewSessionDraft\(\{/,
   );
   assert.match(app, /Session 已结束 · 发送消息时恢复/);
-  assert.match(
-    styles,
-    /\.session-switcher-row:hover \.session-switcher-actions > summary,[\s\S]*opacity: 1;[\s\S]*pointer-events: auto;/,
-  );
-  assert.match(styles, /@media \(hover: none\)[\s\S]*\.session-switcher-actions > summary/);
-  assert.match(styles, /\.session-switcher-host-tabs \{[\s\S]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
   assert.ok(server.includes('app.post("/api/sessions/:id/end"'));
   assert.match(
     server,

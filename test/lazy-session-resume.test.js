@@ -92,15 +92,11 @@ test("the first message activates a previewed Session and keeps permissions loca
 });
 
 test("idle and paused Sessions share the same inactive status colors", async () => {
-  const styles = await readFile(new URL("../public/styles.css", import.meta.url), "utf8");
-  const idleSwitcherColor = styles.match(
-    /\.session-switcher-dot \{[\s\S]*?background: ([^;]+);/,
-  )?.[1];
-  const pausedSwitcherColor = styles.match(
-    /\.session-switcher-item\[data-state="released"\] \.session-switcher-dot \{[\s\S]*?background: ([^;]+);/,
-  )?.[1];
-
-  assert.ok(idleSwitcherColor);
-  assert.equal(pausedSwitcherColor, idleSwitcherColor);
+  const [styles, coreStyles] = await Promise.all([
+    readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
+    readFile(new URL("../node_modules/@agent-workbench/platform/src/ui/styles.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(coreStyles, /\.cwu-browser-row-status\.cwu-status-idle \{ background: var\(--cwu-border\); \}/);
+  assert.doesNotMatch(coreStyles, /\.cwu-browser-row-status\.cwu-status-released/);
   assert.doesNotMatch(styles, /\.app-session-task-control\[data-state="preview"\]\s*\{/);
 });

@@ -99,9 +99,9 @@ test("desktop and Pad retain the compact switcher while phones open it as a draw
     styles,
     /@media \(min-width: 721px\) and \(max-width: 1100px\)[\s\S]*grid-template-columns: 176px minmax\(0, 1fr\)/,
   );
-  assert.match(page, /id="session-switcher-host-tabs"[\s\S]*aria-label="会话账号筛选"/);
-  assert.match(app, /function renderSessionSwitcherHostTabs\(\)/);
-  assert.match(app, /sessionSwitcherAccountFilter = filter\.id/);
+  assert.match(page, /id="session-switcher-core"/);
+  assert.match(app, /window\.AgentSessionList\?\.render\(sessionSwitcherCore/);
+  assert.match(app, /sessionSwitcherAccountFilter = detail\.hostId \|\| "all"/);
   assert.match(
     styles,
     /@media \(max-width: 720px\)[\s\S]*\.app-primary-nav \{[\s\S]*grid-template-columns: repeat\(2, 1fr\)/,

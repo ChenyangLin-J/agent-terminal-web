@@ -13,6 +13,7 @@ coverage/
 test-results/
 playwright-report/
 .playwright/
+public/session-list-core.js
+public/session-list-core.css
 
 .DS_Store
-

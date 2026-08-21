@@ -258,7 +258,7 @@ input.on("line", (line) => {
   assert.equal(endedUrl.searchParams.has("sessionId"), false);
   assert.equal(await desktopPage.locator("#prompt").isEnabled(), true);
   assert.equal(
-    await desktopPage.locator("#session-switcher-list").getByText("Idle preview", { exact: true }).count(),
+    await desktopPage.locator("#session-switcher-core .cwu-browser-groups").getByText("Idle preview", { exact: true }).count(),
     0,
   );
   viewedClient.ws.close();

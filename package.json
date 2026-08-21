@@ -4,15 +4,20 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build:session-ui": "node scripts/build-session-list.mjs",
+    "prestart": "npm run build:session-ui",
+    "pretest": "npm run build:session-ui",
     "start": "node server.js",
     "dev": "node server.js",
     "test": "node --test",
     "update:playwright-tools": "node scripts/update-playwright-mcp-tools.mjs"
   },
   "dependencies": {
+    "@agent-workbench/platform": "https://github.com/ChenyangLin-J/agent-workbench-platform/archive/refs/tags/v0.4.17.tar.gz",
     "@amap/amap-maps-mcp-server": "0.0.8",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@playwright/mcp": "0.0.78",
+    "@openai/codex": "0.147.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "acorn": "^8.17.0",
@@ -20,9 +25,12 @@
     "express": "^5.2.1",
     "markdown-it": "^14.3.0",
     "node-pty": "^1.1.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
     "ws": "^8.18.3"
   },
   "devDependencies": {
+    "esbuild": "^0.25.0",
     "playwright": "^1.61.0"
   },
   "overrides": {

@@ -165,13 +165,8 @@ const threadSearchSubmit = document.querySelector("#thread-search-submit");
 const threadSearchResults = document.querySelector("#thread-search-results");
 const threadSearchClose = document.querySelector("#thread-search-close");
 const sessionSwitcher = document.querySelector("#session-switcher");
-const sessionSwitcherToggle = document.querySelector("#session-switcher-toggle");
 const sessionSwitcherOpenButton = document.querySelector("#session-switcher-open");
-const sessionSwitcherNewButton = document.querySelector("#session-switcher-new");
-const sessionSwitcherSearch = document.querySelector("#session-switcher-search");
-const sessionSwitcherHostTabs = document.querySelector("#session-switcher-host-tabs");
-const sessionSwitcherList = document.querySelector("#session-switcher-list");
-const sessionSwitcherCount = document.querySelector("#session-switcher-count");
+const sessionSwitcherCore = document.querySelector("#session-switcher-core");
 
 if ("scrollRestoration" in history) history.scrollRestoration = "manual";
 
@@ -288,7 +283,7 @@ let liveSessionsByCodexId = new Map();
 let liveSessionsCache = [];
 let savedSessionsCache = [];
 let archivedSessionsCache = [];
-let openSessionSwitcherActionId = "";
+let sessionSwitcherSessionsByKey = new Map();
 let agentHosts = [];
 let activeAgentHostId = cleanAgentHostId(new URLSearchParams(window.location.search).get("host")) || "personal";
 let activeAccountFilter = "all";
@@ -437,12 +432,9 @@ sessionSearchInput.addEventListener("input", () => {
   syncControlCenterFilterReset();
 });
 backButton.addEventListener("click", showStartScreen);
-sessionSwitcherNewButton.addEventListener("click", () => openNewSessionDraft());
-sessionSwitcherToggle.addEventListener("click", () => {
-  setSessionSwitcherCollapsed(true);
-});
 sessionSwitcherOpenButton.addEventListener("click", () => setSessionSwitcherCollapsed(false));
-sessionSwitcherSearch.addEventListener("input", renderSessionSwitcher);
+window.addEventListener("agent-session-list-action", handleSharedSessionListAction);
+window.addEventListener("agent-session-list-ready", renderSessionSwitcher);
 searchCurrentSessionButton.addEventListener("click", openThreadSearch);
 disconnectButton.addEventListener("click", detach);
 mobileSearchCurrentSessionButton.addEventListener("click", () => {
@@ -515,12 +507,6 @@ sessionTitleInput.addEventListener("blur", () => {
 document.addEventListener("click", (event) => {
   if (sessionMenu.open && !sessionMenu.contains(event.target)) closeSessionMenu();
   if (appSessionMore.open && !appSessionMore.contains(event.target)) closeAppSessionMoreMenu();
-  for (const menu of sessionSwitcherList.querySelectorAll(".session-switcher-actions[open]")) {
-    if (!menu.contains(event.target)) {
-      menu.removeAttribute("open");
-      if (menu.dataset.sessionKey === openSessionSwitcherActionId) openSessionSwitcherActionId = "";
-    }
-  }
   if (window.matchMedia("(hover: none)").matches) {
     for (const visible of appServerTranscript.querySelectorAll(".app-transcript-item.actions-visible")) {
       if (!visible.contains(event.target)) visible.classList.remove("actions-visible");
@@ -1689,149 +1675,104 @@ function syncControlCenterFilterReset() {
 }
 
 function renderSessionSwitcher() {
-  const query = sessionSwitcherSearch.value.trim().toLocaleLowerCase();
-  sessionSwitcherList.replaceChildren();
-  renderSessionSwitcherHostTabs();
   const accountSessions = liveSessionsCache.filter((session) =>
     accountMatches(session, sessionSwitcherAccountFilter),
   );
-  sessionSwitcherCount.textContent = `${accountSessions.length} 个当前`;
-  const visible = accountSessions.filter((session) => {
-    if (!query) return true;
-    return [session.title, session.project, liveSessionCurrentTask(session)]
-      .filter(Boolean)
-      .join(" ")
-      .toLocaleLowerCase()
-      .includes(query);
+  const groupRank = { attention: 0, unread: 0, error: 0, running: 1, ready: 2, released: 2 };
+  const orderedSessions = [...accountSessions].sort((left, right) => {
+    const leftKind = liveSessionPresentation(left).kind;
+    const rightKind = liveSessionPresentation(right).kind;
+    const rankDelta = (groupRank[leftKind] ?? 3) - (groupRank[rightKind] ?? 3);
+    if (rankDelta) return rankDelta;
+    return leftKind === "ready" || leftKind === "released"
+      ? compareIdleSessionOrder(left, right)
+      : compareLiveSessionOrder(left, right);
   });
-
-  if (!visible.length) {
-    openSessionSwitcherActionId = "";
-    sessionSwitcherList.append(empty(query ? "没有匹配的 Session。" : "当前没有 Session。"));
-    return;
-  }
-
-  const groups = [
-    { kind: "pending", label: "待处理", presentationKinds: ["attention", "unread"] },
-    { kind: "running", label: "进行中", presentationKinds: ["running"] },
-    { kind: "ready", label: "空闲", presentationKinds: ["ready", "released"] },
-  ];
-  for (const group of groups) {
-    const groupSessions = visible.filter((session) =>
-      group.presentationKinds.includes(liveSessionPresentation(session).kind),
-    );
-    if (group.kind === "ready") groupSessions.sort(compareIdleSessionOrder);
-    if (!groupSessions.length) continue;
-    const heading = document.createElement("div");
-    heading.className = "session-switcher-heading";
-    heading.innerHTML = `<span>${group.label}</span><small>${groupSessions.length}</small>`;
-    sessionSwitcherList.append(heading);
-
-    for (const session of groupSessions) {
-      const presentation = liveSessionPresentation(session);
-      const row = document.createElement("div");
-      row.className = "session-switcher-row";
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "session-switcher-item";
-      button.dataset.state = presentation.state;
-      button.classList.toggle(
-        "active",
-        (cleanAgentHostId(session.hostId) || "personal") ===
-          (cleanAgentHostId(activeSessionParams.host) || activeAgentHostId) &&
-          (session.id === activeSessionId ||
-            (session.sessionId && session.sessionId === activeSessionParams.sessionId)),
-      );
-      const dot = document.createElement("i");
-      dot.className = "session-switcher-dot";
-      const copy = document.createElement("span");
-      const title = document.createElement("strong");
-      title.textContent = session.title || "New Codex session";
-      const status = document.createElement("small");
-      status.textContent = `${agentHostLabel(session.hostId)} · ${displayProject(session.project)}`;
-      copy.append(title, status);
-      button.append(dot, copy);
-      button.addEventListener("click", () => {
-        openSessionSwitcherActionId = "";
-        if (window.matchMedia("(max-width: 720px)").matches) {
-          setSessionSwitcherCollapsed(true, { persist: false });
-        }
-        openSessionInCurrentPage(liveSessionOpenParams(session));
-      });
-
-      const actions = document.createElement("details");
-      actions.className = "session-switcher-actions";
-      const sessionKey = hostSessionKey(session.hostId, session.id || session.sessionId);
-      actions.dataset.sessionKey = sessionKey;
-      actions.open = sessionKey === openSessionSwitcherActionId;
-      actions.addEventListener("toggle", () => {
-        if (!actions.open) {
-          if (openSessionSwitcherActionId === sessionKey) openSessionSwitcherActionId = "";
-          return;
-        }
-        openSessionSwitcherActionId = sessionKey;
-        for (const other of sessionSwitcherList.querySelectorAll(".session-switcher-actions[open]")) {
-          if (other !== actions) other.removeAttribute("open");
-        }
-      });
-      const summary = document.createElement("summary");
-      summary.textContent = "⋮";
-      summary.setAttribute("aria-label", `管理 ${title.textContent}`);
-      summary.title = "归档或结束";
-      const menu = document.createElement("div");
-      menu.className = "session-switcher-action-menu";
-      menu.setAttribute("role", "menu");
-      const archive = document.createElement("button");
-      archive.type = "button";
-      archive.textContent = "归档";
-      archive.disabled = !session.sessionId;
-      archive.title = session.sessionId ? "结束运行并移入归档" : "Session 建立后才能归档";
-      archive.addEventListener("click", (event) => {
-        event.stopPropagation();
-        openSessionSwitcherActionId = "";
-        actions.removeAttribute("open");
-        void archiveSessionFromSwitcher(session);
-      });
-      const end = document.createElement("button");
-      end.type = "button";
-      end.className = "danger";
-      end.textContent = "结束";
-      end.title = "结束运行并移到最近历史";
-      end.addEventListener("click", (event) => {
-        event.stopPropagation();
-        openSessionSwitcherActionId = "";
-        actions.removeAttribute("open");
-        void endSessionFromSwitcher(session);
-      });
-      menu.append(archive, end);
-      actions.append(summary, menu);
-      row.append(button, actions);
-      sessionSwitcherList.append(row);
-    }
-  }
+  const selectedHost = cleanAgentHostId(activeSessionParams.host) || activeAgentHostId;
+  const selectedSession = accountSessions.find((session) =>
+    (cleanAgentHostId(session.hostId) || "personal") === selectedHost &&
+    (session.id === activeSessionId ||
+      (session.sessionId && session.sessionId === activeSessionParams.sessionId)),
+  );
+  sessionSwitcherSessionsByKey = new Map();
+  const sessions = orderedSessions.map((session, sortOrder) => {
+    const id = hostSessionKey(session.hostId, session.id || session.sessionId);
+    const presentation = liveSessionPresentation(session);
+    sessionSwitcherSessionsByKey.set(id, session);
+    return {
+      id,
+      title: session.title || "New Codex session",
+      contextId: cleanAgentHostId(session.hostId) || "personal",
+      contextLabel: agentHostLabel(session.hostId),
+      secondaryLabel: `${agentHostLabel(session.hostId)} · ${displayProject(session.project)}`,
+      searchableText: liveSessionCurrentTask(session),
+      updatedAt: session.lastActivityAt || session.updatedAt || session.startedAt || session.createdAt || 0,
+      sortOrder,
+      status: presentation.state,
+      statusLabel: presentation.label,
+      groupKind: presentation.kind,
+      favorited: Boolean(session.favorited),
+      canFavorite: Boolean(session.sessionId),
+      canArchive: Boolean(session.sessionId),
+      canEnd: true,
+    };
+  });
+  const selectedSessionId = selectedSession
+    ? hostSessionKey(selectedSession.hostId, selectedSession.id || selectedSession.sessionId)
+    : null;
+  window.AgentSessionList?.render(sessionSwitcherCore, {
+    browser: {
+      sessions,
+      selectedSessionId,
+      groupMode: "attention",
+      groupOptions: [{ id: "attention", label: "按状态" }],
+      showCreateTargetSelect: false,
+      createTargets: [{ id: "new", label: "新建 Session" }],
+    },
+    hosts: [
+      { id: "all", label: "全部" },
+      ...agentHosts.map((host) => ({ id: host.id, label: host.label || host.id })),
+    ],
+    selectedHostId: sessionSwitcherAccountFilter,
+  });
 }
 
-function renderSessionSwitcherHostTabs() {
-  sessionSwitcherHostTabs.replaceChildren();
-  const filters = [
-    { id: "all", label: "全部" },
-    ...agentHosts.map((host) => ({ id: host.id, label: host.label || host.id })),
-  ];
-  for (const filter of filters) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.dataset.hostFilter = filter.id;
-    button.textContent = filter.label;
-    button.classList.toggle("active", filter.id === sessionSwitcherAccountFilter);
-    button.setAttribute("aria-pressed", String(filter.id === sessionSwitcherAccountFilter));
-    button.addEventListener("click", () => {
-      sessionSwitcherAccountFilter = filter.id;
-      openSessionSwitcherActionId = "";
+async function handleSharedSessionListAction(event) {
+  const detail = event.detail || {};
+  const session = detail.id ? sessionSwitcherSessionsByKey.get(detail.id) : null;
+  try {
+    if (detail.type === "select" && session) {
+      if (window.matchMedia("(max-width: 720px)").matches) {
+        setSessionSwitcherCollapsed(true, { persist: false });
+      }
+      openSessionInCurrentPage(liveSessionOpenParams(session));
+    } else if (detail.type === "favorite" && session?.sessionId) {
+      await setCodexSessionFavorite(session.sessionId, detail.favorited, session.hostId);
+    } else if (detail.type === "archive" && session) {
+      await archiveSessionFromSwitcher(session);
+    } else if (detail.type === "end" && session) {
+      await endSessionFromSwitcher(session);
+    } else if (detail.type === "host-filter") {
+      sessionSwitcherAccountFilter = detail.hostId || "all";
       renderSessionSwitcher();
-    });
-    sessionSwitcherHostTabs.append(button);
+    } else if (detail.type === "collapse") {
+      setSessionSwitcherCollapsed(true);
+    } else if (detail.type === "create") {
+      openNewSessionDraft();
+    } else if (detail.type === "history") {
+      showStartScreen();
+      requestAnimationFrame(() => document.querySelector(".control-center-history")?.scrollIntoView({ block: "start" }));
+    } else if (detail.type === "full-text-search") {
+      sessionSearchInput.value = String(detail.query || "");
+      showStartScreen();
+      await searchSavedSessions();
+    } else if (detail.type === "refresh") {
+      await refreshLists();
+    }
+    detail.resolve?.();
+  } catch (error) {
+    detail.reject?.(error);
   }
-  sessionSwitcherHostTabs.classList.toggle("hidden", agentHosts.length < 2);
 }
 
 function readSessionSwitcherCollapsed() {
@@ -1847,15 +1788,7 @@ function setSessionSwitcherCollapsed(collapsed, { persist = true } = {}) {
   const next = Boolean(collapsed);
   sessionSwitcher.classList.toggle("collapsed", next);
   sessionScreen.classList.toggle("session-switcher-collapsed", next);
-  sessionSwitcherToggle.setAttribute("aria-expanded", String(!next));
   sessionSwitcherOpenButton.setAttribute("aria-expanded", String(!next));
-
-  if (next) {
-    openSessionSwitcherActionId = "";
-    for (const menu of sessionSwitcherList.querySelectorAll(".session-switcher-actions[open]")) {
-      menu.removeAttribute("open");
-    }
-  }
   if (persist) {
     try {
       localStorage.setItem(SESSION_SWITCHER_COLLAPSED_STORE_KEY, next ? "1" : "0");
@@ -1863,6 +1796,7 @@ function setSessionSwitcherCollapsed(collapsed, { persist = true } = {}) {
       // The switcher still works for this page when storage is unavailable.
     }
   }
+  if (!next) renderSessionSwitcher();
   fitTerminal({ delay: 120 });
 }
 
@@ -2344,14 +2278,13 @@ async function archiveCurrentSession() {
   closeSessionMenu();
   const sessionId = String(activeSessionParams.sessionId || "").trim();
   if (!sessionId) {
-    window.alert("Session 尚未建立完成，暂时无法归档。");
-    return;
+    throw new Error("Session 尚未建立完成，暂时无法归档。");
   }
 
   const message = latestTurnState.active
     ? "归档这个 Session？当前任务会停止，历史记录会移入归档，之后仍可恢复。"
     : "归档这个 Session？历史记录会移入归档，之后仍可恢复。";
-  if (!window.confirm(message)) return;
+  if (!window.confirm(message)) throw new DOMException("Archive cancelled", "AbortError");
 
   setArchiveSessionDisabled(true);
   try {
@@ -2437,18 +2370,20 @@ async function archiveSessionFromSwitcher(session) {
       await Promise.all([loadLiveSessions(), loadArchivedCodexSessions()]);
     }
   } catch (error) {
+    if (error?.name === "AbortError") throw error;
     window.alert(`归档失败：${error.message}`);
+    throw error;
   }
 }
 
 async function endSessionFromSwitcher(session) {
   const webSessionId = String(session?.id || "").trim();
-  if (!webSessionId) return;
+  if (!webSessionId) throw new Error("Session 尚未建立完成，暂时无法结束。");
   const active = Boolean(session?.turnState?.active);
   const message = active
     ? "结束这个 Session？当前任务会停止，Session 会移到最近历史，之后仍可恢复。"
     : "结束这个 Session？它会移到最近历史，之后仍可恢复。";
-  if (!window.confirm(message)) return;
+  if (!window.confirm(message)) throw new DOMException("End cancelled", "AbortError");
 
   try {
     const response = await fetch(
@@ -2486,7 +2421,9 @@ async function endSessionFromSwitcher(session) {
       await refreshLists();
     }
   } catch (error) {
+    if (error?.name === "AbortError") throw error;
     window.alert(`结束失败：${error.message}`);
+    throw error;
   }
 }
 

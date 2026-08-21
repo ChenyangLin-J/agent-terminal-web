@@ -33,6 +33,7 @@ The production route is reverse proxied by Caddy. Authentication is delegated to
 - Codex 使用 `--no-alt-screen` 启动，方便保留手机滚动输出。
 - 浏览器断开后，后端 session 默认保留 1 小时，可从选择页重连。
 - 可以启动新会话，也可以从网页上的 saved sessions 列表点选恢复旧会话。
+- 当前 Session 的快速切换列表复用 `@agent-workbench/platform`：状态分组、置顶、搜索、归档/结束入口与 Personal Workbench 共用一套组件；账号筛选与控制中心仍由 Agent Web 提供。
 - 默认工作区限制在当前 workspace 下。
 - 顶部有 `Terminal` / `Text` tab；`Text` 会把终端 buffer 转成手机上容易选择的普通文本。
 - Terminal 模式下，`Codex /status`、`/permissions` 等按钮会直接把对应 slash command 发给 Codex CLI。
@@ -151,6 +152,7 @@ The shell command is installed as a symlink, so edits to the project script take
 
 - 默认只监听 `127.0.0.1`，不要直接暴露公网。
 - Terminal 模式优先保留 Codex CLI 手感；App Server 模式只呈现当前工作流所需的结构化事件。
+- `npm start` 和 `npm test` 会先构建共享 Session 列表 bundle；`public/session-list-core.js` 与 `public/session-list-core.css` 是生成物，不提交到仓库。
 - 如需改端口：
 
 ```bash

@@ -10,7 +10,7 @@ import {
   gardenLinkForLocalMarkdown,
   workspaceFileForLocalHref,
 } from "../lib/local-file-link.js";
-import { localFilePresentation } from "../lib/local-file-view.js";
+import { localFilePresentation, renderMarkdownFilePage } from "../lib/local-file-view.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -43,8 +43,47 @@ test("workspace links preserve line numbers and select safe presentations", () =
   assert.equal(localFilePresentation("report.pdf", 100, { maxTextBytes: 200, maxPreviewBytes: 500 }).kind, "inline");
   assert.equal(localFilePresentation("page.html", 100, { maxTextBytes: 200, maxPreviewBytes: 500 }).kind, "sandbox");
   assert.equal(localFilePresentation("app.js", 100, { maxTextBytes: 200, maxPreviewBytes: 500 }).kind, "text");
+  assert.equal(localFilePresentation("README.md", 100, { maxTextBytes: 200, maxPreviewBytes: 500 }).kind, "markdown");
   assert.equal(localFilePresentation("Dockerfile", 100, { maxTextBytes: 200, maxPreviewBytes: 500 }).kind, "text");
   assert.equal(localFilePresentation("large.js", 600, { maxTextBytes: 200, maxPreviewBytes: 500 }).kind, "download");
+});
+
+test("Markdown files render as safe reading pages with working local links", () => {
+  const workspaceRoot = "/home/ubuntu/workspace";
+  const filePath = `${workspaceRoot}/project/README.md`;
+  const page = renderMarkdownFilePage({
+    name: "README.md",
+    relativePath: "project/README.md",
+    filePath,
+    workspaceRoot,
+    text: [
+      "# 使用说明",
+      "",
+      "[相对文件](./docs/guide.md#开始)",
+      "[代码行](./app.js:12)",
+      "[页内位置](#使用说明)",
+      "[站外链接](https://example.com)",
+      "",
+      "![本地图片](./image.png)",
+      "",
+      "<script>alert(1)</script>",
+    ].join("\n"),
+    downloadHref: "/download",
+    sourceHref: "/source",
+  });
+
+  assert.match(page, /<article class="markdown-body">/);
+  assert.match(page, /<h1 id="使用说明">使用说明<\/h1>/);
+  assert.match(
+    page,
+    /href="\/open\/local\?path=%2Fhome%2Fubuntu%2Fworkspace%2Fproject%2Fdocs%2Fguide\.md%23%E5%BC%80%E5%A7%8B#%E5%BC%80%E5%A7%8B"/,
+  );
+  assert.match(page, /href="\/open\/local\?path=%2Fhome%2Fubuntu%2Fworkspace%2Fproject%2Fapp\.js%3A12#L12"/);
+  assert.match(page, /href="#%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E"/);
+  assert.match(page, /href="https:\/\/example\.com" target="_blank" rel="noopener noreferrer"/);
+  assert.match(page, /src="\/open\/local\?path=%2Fhome%2Fubuntu%2Fworkspace%2Fproject%2Fimage\.png"/);
+  assert.match(page, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.doesNotMatch(page, /<script>/);
 });
 
 test("the authenticated local-link route safely opens workspace files", async (t) => {
@@ -55,6 +94,7 @@ test("the authenticated local-link route safely opens workspace files", async (t
   const taskFile = path.join(vaultRoot, "Work", "Tasks.md");
   const projectRoot = path.join(workspaceRoot, "project");
   const textFile = path.join(projectRoot, "app.js");
+  const markdownFile = path.join(projectRoot, "README.md");
   const htmlFile = path.join(projectRoot, "preview.html");
   const imageFile = path.join(projectRoot, "image.png");
   const binaryFile = path.join(projectRoot, "archive.bin");
@@ -64,6 +104,7 @@ test("the authenticated local-link route safely opens workspace files", async (t
   await fs.mkdir(codexHome, { recursive: true });
   await fs.writeFile(taskFile, "# Tasks\n");
   await fs.writeFile(textFile, 'const safe = true;\n<script>alert("x")</script>\nreturn safe;\n');
+  await fs.writeFile(markdownFile, "# Read me\n\n[App](./app.js:2)\n");
   await fs.writeFile(htmlFile, '<h1>Preview</h1><script>globalThis.bad = true</script>\n');
   await fs.writeFile(imageFile, Buffer.from("89504e470d0a1a0a", "hex"));
   await fs.writeFile(binaryFile, Buffer.from([0, 1, 2, 3]));
@@ -113,6 +154,22 @@ test("the authenticated local-link route safely opens workspace files", async (t
   assert.match(textPreview.headers.get("content-security-policy"), /default-src 'none'/);
   assert.match(textPage, /<li id="L2" class="highlight">/);
   assert.match(textPage, /&lt;script&gt;alert\("x"\)&lt;\/script&gt;/);
+
+  const markdownPreview = await fetch(
+    `http://127.0.0.1:${agentPort}/open/local?path=${encodeURIComponent(markdownFile)}`,
+  );
+  const markdownPage = await markdownPreview.text();
+  assert.equal(markdownPreview.status, 200);
+  assert.match(markdownPreview.headers.get("content-security-policy"), /img-src 'self' data: https:/);
+  assert.match(markdownPage, /<article class="markdown-body">/);
+  assert.match(markdownPage, /<h1 id="read-me">Read me<\/h1>/);
+  assert.match(markdownPage, /href="\/open\/local\?path=.*app\.js%3A2#L2"/);
+  assert.match(markdownPage, />源码<\/a>/);
+
+  const markdownSource = await fetch(
+    `http://127.0.0.1:${agentPort}/open/local?path=${encodeURIComponent(markdownFile)}&raw=1`,
+  );
+  assert.match(await markdownSource.text(), /<main class="text-view">/);
 
   const htmlPreview = await fetch(
     `http://127.0.0.1:${agentPort}/open/local?path=${encodeURIComponent(htmlFile)}`,

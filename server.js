@@ -44,6 +44,7 @@ import {
 } from "./lib/local-file-link.js";
 import {
   localFilePresentation,
+  renderMarkdownFilePage,
   renderSandboxFilePage,
   renderTextFilePage,
 } from "./lib/local-file-view.js";
@@ -628,11 +629,25 @@ app.get("/open/local", async (req, res) => {
     const source = await fs.readFile(realFilePath, "utf8");
     const relativePath = path.relative(realWorkspaceRoot, realFilePath);
     const downloadHref = `/open/local?path=${encodeURIComponent(requested.filePath)}&download=1`;
+    const sourceHref = `/open/local?path=${encodeURIComponent(requested.filePath)}&raw=1`;
     const page =
       presentation.kind === "sandbox"
         ? renderSandboxFilePage({ name, relativePath, source, downloadHref })
+        : presentation.kind === "markdown" && req.query.raw !== "1" && !requested.line
+          ? renderMarkdownFilePage({
+              name,
+              relativePath,
+              filePath: realFilePath,
+              workspaceRoot: realWorkspaceRoot,
+              text: source,
+              downloadHref,
+              sourceHref,
+            })
         : renderTextFilePage({ name, relativePath, text: source, line: requested.line, downloadHref });
-    res.set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-src 'self'; base-uri 'none'");
+    res.set(
+      "Content-Security-Policy",
+      "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data: https:; frame-src 'self'; base-uri 'none'",
+    );
     res.type("html").send(page);
   } catch {
     res.status(404).send("This local file no longer exists.");

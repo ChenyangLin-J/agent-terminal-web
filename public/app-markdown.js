@@ -8,9 +8,10 @@
       if (isWorkspaceLocalHref(href)) {
         tokens[index].attrSet("href", localOpenHref(href));
         tokens[index].attrSet("title", "打开文件");
+      } else {
+        tokens[index].attrSet("target", "_blank");
+        tokens[index].attrSet("rel", "noopener noreferrer");
       }
-      tokens[index].attrSet("target", "_blank");
-      tokens[index].attrSet("rel", "noopener noreferrer");
       return defaultLinkOpen
         ? defaultLinkOpen(tokens, index, options, environment, self)
         : self.renderToken(tokens, index, options);
@@ -30,7 +31,9 @@
   function localOpenHref(href) {
     const decoded = decodeLocalHref(href);
     const line = decoded.match(/:(\d+)(?::\d+)?(?:#.*)?$/)?.[1];
-    return `/open/local?path=${encodeURIComponent(href)}${line ? `#L${line}` : ""}`;
+    const fragment = decoded.includes("#") ? decoded.slice(decoded.indexOf("#") + 1) : "";
+    const target = line ? `L${line}` : fragment;
+    return `/open/local?path=${encodeURIComponent(href)}${target ? `#${encodeURIComponent(target)}` : ""}`;
   }
 
   function decodeLocalHref(href) {

@@ -7,11 +7,17 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  createCustomIntegrationCredential,
   cuboxConfigRoot,
+  deleteCustomIntegrationCredential,
   deleteIntegrationCredential,
   IntegrationError,
+  listCustomIntegrations,
   listIntegrations,
+  readCustomIntegrationCredential,
+  readCustomIntegrationCredentialById,
   readIntegrationCredential,
+  replaceCustomIntegrationCredential,
   saveIntegrationCredential,
 } from "../lib/integrations.js";
 
@@ -21,6 +27,8 @@ const secondKey = "22222222222222222222222222222222";
 const cuboxToken = "cubox_test_token_1234567890";
 const cuboxApiLink = `https://cubox.pro/c/api/save/${cuboxToken}`;
 const tikhubKey = `tikhub_test_${"3".repeat(180)}`;
+const customKey = `custom_test_${"4".repeat(80)}`;
+const replacementCustomKey = `custom_replacement_${"5".repeat(80)}`;
 
 test("Cubox config directory environment overrides are test-only", (t) => {
   const previousNodeEnv = process.env.NODE_ENV;
@@ -94,6 +102,140 @@ test("TikHub is saved write-only without a validation request or API cost", asyn
   const status = (await listIntegrations({ root: store })).find((item) => item.id === "tikhub");
   assert.equal(status.status.state, "error");
   assert.doesNotMatch(JSON.stringify(status), new RegExp(tikhubKey));
+});
+
+test("custom integrations store only a name and write-only key for projects to use", async (t) => {
+  const store = await fs.mkdtemp(path.join(os.tmpdir(), "agent-custom-integration-"));
+  t.after(() => fs.rm(store, { recursive: true, force: true }));
+
+  const created = await createCustomIntegrationCredential("Jina Reader", customKey, { root: store });
+  assert.equal(created.custom, true);
+  assert.equal(created.name, "Jina Reader");
+  assert.equal(created.verification, "stored-only");
+  assert.doesNotMatch(JSON.stringify(created), new RegExp(customKey));
+
+  const directory = path.join(store, "custom");
+  const file = path.join(directory, `${created.id}.json`);
+  assert.equal((await fs.stat(directory)).mode & 0o777, 0o700);
+  assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
+  assert.deepEqual(await readCustomIntegrationCredential("jina reader", { root: store }), {
+    kind: "custom",
+    id: created.id,
+    name: "Jina Reader",
+    key: customKey,
+    updatedAt: created.status.updatedAt,
+  });
+
+  const listed = await listCustomIntegrations({ root: store });
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].name, "Jina Reader");
+  assert.doesNotMatch(JSON.stringify(listed), new RegExp(customKey));
+
+  const replaced = await replaceCustomIntegrationCredential(created.id, replacementCustomKey, {
+    root: store,
+  });
+  assert.equal(replaced.status.configured, true);
+  const source = await fs.readFile(file, "utf8");
+  assert.doesNotMatch(source, new RegExp(customKey));
+  assert.match(source, new RegExp(replacementCustomKey));
+
+  await assert.rejects(
+    () => createCustomIntegrationCredential("  JINA   READER ", customKey, { root: store }),
+    (error) =>
+      error instanceof IntegrationError &&
+      error.status === 409 &&
+      error.code === "integration_name_conflict",
+  );
+  assert.equal(await deleteCustomIntegrationCredential(created.id, { root: store }), true);
+  assert.equal(await readCustomIntegrationCredentialById(created.id, { root: store }), null);
+});
+
+test("bad custom records are isolated and remain removable without exposing keys", async (t) => {
+  const store = await fs.mkdtemp(path.join(os.tmpdir(), "agent-custom-integration-unsafe-"));
+  t.after(() => fs.rm(store, { recursive: true, force: true }));
+  const created = await createCustomIntegrationCredential("Unsafe test", customKey, { root: store });
+  const healthy = await createCustomIntegrationCredential("Healthy test", replacementCustomKey, {
+    root: store,
+  });
+  const file = path.join(store, "custom", `${created.id}.json`);
+  await fs.chmod(file, 0o644);
+
+  await assert.rejects(
+    () => readCustomIntegrationCredentialById(created.id, { root: store }),
+    /private regular file/,
+  );
+  assert.equal(
+    (await readCustomIntegrationCredential("Healthy test", { root: store })).key,
+    replacementCustomKey,
+  );
+  const listed = await listCustomIntegrations({ root: store });
+  assert.equal(listed.length, 2);
+  assert.equal(listed.find((item) => item.id === created.id).status.state, "error");
+  assert.equal(listed.find((item) => item.id === healthy.id).status.state, "ready");
+  assert.doesNotMatch(JSON.stringify(listed), new RegExp(customKey));
+  assert.doesNotMatch(JSON.stringify(listed), new RegExp(replacementCustomKey));
+  await assert.rejects(
+    () => createCustomIntegrationCredential("Third test", customKey, { root: store }),
+    (error) =>
+      error instanceof IntegrationError &&
+      error.status === 409 &&
+      error.code === "integration_repair_required",
+  );
+  assert.equal(await deleteCustomIntegrationCredential(created.id, { root: store }), true);
+  assert.equal(
+    (await createCustomIntegrationCredential("Third test", customKey, { root: store })).name,
+    "Third test",
+  );
+});
+
+test("custom integration directory errors are isolated and adding repairs broad permissions", async (t) => {
+  const store = await fs.mkdtemp(path.join(os.tmpdir(), "agent-custom-integration-directory-"));
+  t.after(() => fs.rm(store, { recursive: true, force: true }));
+  await createCustomIntegrationCredential("First custom", customKey, { root: store });
+  const directory = path.join(store, "custom");
+  await fs.chmod(directory, 0o755);
+
+  const listed = await listCustomIntegrations({ root: store });
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].status.state, "error");
+  assert.equal(listed[0].deletable, false);
+
+  await createCustomIntegrationCredential("Second custom", replacementCustomKey, { root: store });
+  assert.equal((await fs.stat(directory)).mode & 0o777, 0o700);
+  assert.equal((await listCustomIntegrations({ root: store })).length, 2);
+});
+
+test("UUID-shaped custom names are read explicitly as names", async (t) => {
+  const store = await fs.mkdtemp(path.join(os.tmpdir(), "agent-custom-integration-uuid-name-"));
+  t.after(() => fs.rm(store, { recursive: true, force: true }));
+  const name = "00000000-0000-4000-8000-000000000000";
+  const created = await createCustomIntegrationCredential(name, customKey, { root: store });
+  assert.equal((await readCustomIntegrationCredential(name, { root: store })).key, customKey);
+  assert.equal((await readCustomIntegrationCredentialById(created.id, { root: store })).name, name);
+});
+
+test("UUID-named symlinks appear as broken custom entries and can be safely removed", async (t) => {
+  const store = await fs.mkdtemp(path.join(os.tmpdir(), "agent-custom-integration-symlink-"));
+  t.after(() => fs.rm(store, { recursive: true, force: true }));
+  await createCustomIntegrationCredential("Seed", customKey, { root: store });
+  const id = "00000000-0000-4000-8000-000000000000";
+  const file = path.join(store, "custom", `${id}.json`);
+  await fs.symlink("/etc/passwd", file);
+
+  const listed = await listCustomIntegrations({ root: store });
+  const broken = listed.find((item) => item.id === id);
+  assert.equal(broken.status.state, "error");
+  assert.equal(broken.deletable, true);
+  assert.equal(await deleteCustomIntegrationCredential(id, { root: store }), true);
+  assert.equal(await fs.readFile("/etc/passwd", "utf8").then((value) => value.length > 0), true);
+
+  const directoryId = "00000000-0000-4000-8000-000000000001";
+  await fs.mkdir(path.join(store, "custom", `${directoryId}.json`));
+  const directoryEntry = (await listCustomIntegrations({ root: store })).find(
+    (item) => item.id === directoryId,
+  );
+  assert.equal(directoryEntry.status.state, "error");
+  assert.equal(directoryEntry.deletable, false);
 });
 
 test("replacing a credential atomically removes the old value and deleting clears status", async (t) => {
@@ -584,6 +726,17 @@ test("authenticated integration settings API supports set, status, replacement, 
   assert.doesNotMatch(JSON.stringify(tikhubSaved), new RegExp(tikhubKey));
   assert.equal((await fs.stat(path.join(store, "tikhub.json"))).mode & 0o777, 0o600);
 
+  const customSavedResponse = await fetch(`${origin}/api/integrations/custom`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ name: "Jina Reader", key: customKey }),
+  });
+  const customSaved = await customSavedResponse.json();
+  assert.equal(customSavedResponse.status, 201);
+  assert.equal(customSaved.integration.name, "Jina Reader");
+  assert.equal(customSaved.integration.custom, true);
+  assert.doesNotMatch(JSON.stringify(customSaved), new RegExp(customKey));
+
   const statusResponse = await fetch(`${origin}/api/integrations`, {
     headers: { cookie: "session=ok" },
   });
@@ -594,6 +747,39 @@ test("authenticated integration settings API supports set, status, replacement, 
   assert.doesNotMatch(JSON.stringify(status), new RegExp(cuboxToken));
   assert.equal(status.integrations.find((item) => item.id === "tikhub").status.configured, true);
   assert.doesNotMatch(JSON.stringify(status), new RegExp(tikhubKey));
+  assert.equal(status.customIntegrations.length, 1);
+  assert.equal(status.customIntegrations[0].name, "Jina Reader");
+  assert.doesNotMatch(JSON.stringify(status), new RegExp(customKey));
+
+  const customDirectory = path.join(store, "custom");
+  await fs.chmod(customDirectory, 0o755);
+  const degradedStatusResponse = await fetch(`${origin}/api/integrations`, {
+    headers: { cookie: "session=ok" },
+  });
+  const degradedStatus = await degradedStatusResponse.json();
+  assert.equal(degradedStatusResponse.status, 200);
+  assert.equal(degradedStatus.integrations.length, 3);
+  assert.equal(degradedStatus.customIntegrations[0].status.state, "error");
+
+  const secondCustomSavedResponse = await fetch(`${origin}/api/integrations/custom`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ name: "Second custom", key: customKey }),
+  });
+  const secondCustomSaved = await secondCustomSavedResponse.json();
+  assert.equal(secondCustomSavedResponse.status, 201);
+  assert.equal((await fs.stat(customDirectory)).mode & 0o777, 0o700);
+
+  const customReplacedResponse = await fetch(
+    `${origin}/api/integrations/custom/${customSaved.integration.id}`,
+    {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ values: { key: replacementCustomKey } }),
+    },
+  );
+  assert.equal(customReplacedResponse.status, 200);
+  assert.doesNotMatch(await customReplacedResponse.text(), new RegExp(replacementCustomKey));
 
   const crossOrigin = await fetch(`${origin}/api/integrations/amap`, {
     method: "PUT",
@@ -618,7 +804,29 @@ test("authenticated integration settings API supports set, status, replacement, 
   assert.equal(cuboxDeleted.status, 200);
   assert.equal((await cuboxDeleted.json()).removed, true);
   await assert.rejects(() => fs.stat(path.join(cuboxConfigDir, "config.json")), { code: "ENOENT" });
+
+  const customDeleted = await fetch(
+    `${origin}/api/integrations/custom/${customSaved.integration.id}`,
+    {
+      method: "DELETE",
+      headers,
+      body: JSON.stringify({ confirm: true }),
+    },
+  );
+  assert.equal(customDeleted.status, 200);
+  assert.equal((await customDeleted.json()).removed, true);
+  const secondCustomDeleted = await fetch(
+    `${origin}/api/integrations/custom/${secondCustomSaved.integration.id}`,
+    {
+      method: "DELETE",
+      headers,
+      body: JSON.stringify({ confirm: true }),
+    },
+  );
+  assert.equal(secondCustomDeleted.status, 200);
   assert.doesNotMatch(output, new RegExp(cuboxToken));
+  assert.doesNotMatch(output, new RegExp(customKey));
+  assert.doesNotMatch(output, new RegExp(replacementCustomKey));
 });
 
 test("the Agent home exposes a generic write-only integrations interface", async () => {
@@ -635,10 +843,13 @@ test("the Agent home exposes a generic write-only integrations interface", async
   assert.match(script, /autocomplete = "new-password"/);
   assert.match(script, /integration\.docsLabel/);
   assert.match(script, /confirmReplace/);
+  assert.match(script, /添加自定义 Key/);
+  assert.match(script, /\/api\/integrations\/custom/);
   assert.doesNotMatch(script, /localStorage/);
   assert.match(styles, /\.integration-status\[data-state="ready"\]/);
   assert.match(server, /app\.use\("\/api", requireAuth\)/);
   assert.match(server, /app\.put\("\/api\/integrations\/:integrationId", requireSafeIntegrationMutation/);
+  assert.match(server, /app\.post\("\/api\/integrations\/custom", requireSafeIntegrationMutation/);
 });
 
 async function successfulAmapFetch() {

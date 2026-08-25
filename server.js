@@ -79,9 +79,13 @@ import {
   SessionShareStore,
 } from "./lib/session-shares.js";
 import {
+  createCustomIntegrationCredential,
+  deleteCustomIntegrationCredential,
   deleteIntegrationCredential,
   IntegrationError,
+  listCustomIntegrations,
   listIntegrations,
+  replaceCustomIntegrationCredential,
   saveIntegrationCredential,
 } from "./lib/integrations.js";
 import { createAmapMcpProxy } from "./lib/amap-mcp-proxy.js";
@@ -786,18 +790,78 @@ app.delete("/api/session-shares/:id", async (req, res) => {
 app.get("/api/integrations", async (_req, res) => {
   res.set("Cache-Control", "private, no-store");
   try {
-    res.json({
-      integrations: await listIntegrations({
+    const [integrations, customIntegrations] = await Promise.all([
+      listIntegrations({
         root: AGENT_INTEGRATIONS_DIR,
         cuboxConfigDir: AGENT_CUBOX_CONFIG_DIR,
         cuboxEnvironment: AGENT_CUBOX_ENVIRONMENT,
       }),
+      listCustomIntegrations({ root: AGENT_INTEGRATIONS_DIR }),
+    ]);
+    res.json({
+      integrations,
+      customIntegrations,
     });
   } catch (error) {
     logAgentEvent("integration-status-failed", { message: cleanClientLogValue(error.message, 200) });
     res.status(500).json({ error: "暂时无法读取集成状态。" });
   }
 });
+
+app.post("/api/integrations/custom", requireSafeIntegrationMutation, async (req, res) => {
+  try {
+    const integration = await createCustomIntegrationCredential(req.body?.name, req.body?.key, {
+      root: AGENT_INTEGRATIONS_DIR,
+    });
+    logAgentEvent("custom-integration-created", { integrationId: integration.id });
+    res.set("Cache-Control", "private, no-store");
+    res.status(201).json({ integration });
+  } catch (error) {
+    sendIntegrationError(res, error, "暂时无法保存这个 Key。");
+  }
+});
+
+app.put(
+  "/api/integrations/custom/:customIntegrationId",
+  requireSafeIntegrationMutation,
+  async (req, res) => {
+    const integrationId = String(req.params.customIntegrationId || "");
+    try {
+      const integration = await replaceCustomIntegrationCredential(
+        integrationId,
+        req.body?.values?.key,
+        { root: AGENT_INTEGRATIONS_DIR },
+      );
+      logAgentEvent("custom-integration-updated", { integrationId });
+      res.set("Cache-Control", "private, no-store");
+      res.json({ integration });
+    } catch (error) {
+      sendIntegrationError(res, error, "暂时无法替换这个 Key。");
+    }
+  },
+);
+
+app.delete(
+  "/api/integrations/custom/:customIntegrationId",
+  requireSafeIntegrationMutation,
+  async (req, res) => {
+    const integrationId = String(req.params.customIntegrationId || "");
+    if (req.body?.confirm !== true) {
+      res.status(400).json({ error: "删除 Key 需要明确确认。" });
+      return;
+    }
+    try {
+      const removed = await deleteCustomIntegrationCredential(integrationId, {
+        root: AGENT_INTEGRATIONS_DIR,
+      });
+      logAgentEvent("custom-integration-deleted", { integrationId, removed });
+      res.set("Cache-Control", "private, no-store");
+      res.json({ ok: true, removed });
+    } catch (error) {
+      sendIntegrationError(res, error, "暂时无法删除这个 Key。");
+    }
+  },
+);
 
 app.put("/api/integrations/:integrationId", requireSafeIntegrationMutation, async (req, res) => {
   const integrationId = String(req.params.integrationId || "");

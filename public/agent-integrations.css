@@ -73,6 +73,12 @@
   background: #151b25;
 }
 
+.integration-custom-add {
+  border-style: dashed;
+  border-color: #465778;
+  background: #141b28;
+}
+
 .integration-card-header {
   display: flex;
   align-items: flex-start;
@@ -243,6 +249,10 @@
 
   .integration-actions > * {
     justify-content: center;
+  }
+
+  .integration-custom-add .integration-actions {
+    grid-template-columns: 1fr;
   }
 
   .integration-actions .integration-delete {

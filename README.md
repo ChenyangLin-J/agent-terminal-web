@@ -193,9 +193,11 @@ The authenticated Agent home includes an `集成` manager for external tool cred
 Credentials are write-only in the browser: a configured value can be replaced or deleted,
 but it is never returned to the page.
 
-The manager currently includes Amap, Cubox, and TikHub. TikHub is stored without making a
-validation request, so adding the key cannot consume API credit; the approved research run
-validates it on first use.
+The manager includes Amap, Cubox, and TikHub, plus user-created entries containing only a
+name and Key. Custom entries are storage-only: Agent Web does not validate, call, or inject
+them into every Session. The project that needs one decides how to use it. TikHub is stored
+without making a validation request, so adding the key cannot consume API credit; the
+approved research run validates it on first use.
 
 Integration credentials are stored outside the repository:
 
@@ -206,6 +208,23 @@ Integration credentials are stored outside the repository:
 The directory is mode `0700` and each credential file is mode `0600`. Codex does not
 receive the integration key in its parent environment. Agent Web exposes local providers
 to Codex App Servers through loopback-only Streamable HTTP MCP endpoints:
+
+Custom entries use a stable file contract under
+`~/.config/agent-terminal-web/integrations/custom/<id>.json`:
+
+```json
+{
+  "kind": "custom",
+  "id": "00000000-0000-4000-8000-000000000000",
+  "name": "Jina Reader",
+  "key": "write-only-secret",
+  "updatedAt": "ISO-8601 timestamp"
+}
+```
+
+A project running as the same Linux user may scan those private files and match `name`.
+There is deliberately no browser API for reading the Key and no per-project credential
+isolation; a project must read only the credential it was explicitly configured to use.
 
 ```toml
 [mcp_servers.amap]

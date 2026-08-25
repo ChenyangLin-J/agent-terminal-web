@@ -10,7 +10,12 @@ import {
   gardenLinkForLocalMarkdown,
   workspaceFileForLocalHref,
 } from "../lib/local-file-link.js";
-import { localFilePresentation, renderMarkdownFilePage } from "../lib/local-file-view.js";
+import { localMarkdownVersion } from "../lib/local-markdown-file.js";
+import {
+  localFilePresentation,
+  renderMarkdownEditorPage,
+  renderMarkdownFilePage,
+} from "../lib/local-file-view.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -70,6 +75,7 @@ test("Markdown files render as safe reading pages with working local links", () 
     ].join("\n"),
     downloadHref: "/download",
     sourceHref: "/source",
+    editHref: "/edit",
   });
 
   assert.match(page, /<article class="markdown-body">/);
@@ -82,8 +88,25 @@ test("Markdown files render as safe reading pages with working local links", () 
   assert.match(page, /href="#%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E"/);
   assert.match(page, /href="https:\/\/example\.com" target="_blank" rel="noopener noreferrer"/);
   assert.match(page, /src="\/open\/local\?path=%2Fhome%2Fubuntu%2Fworkspace%2Fproject%2Fimage\.png"/);
+  assert.match(page, /href="\/edit">编辑<\/a>/);
   assert.match(page, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
   assert.doesNotMatch(page, /<script>/);
+});
+
+test("Markdown editor pages safely embed source and version metadata", () => {
+  const page = renderMarkdownEditorPage({
+    name: "README.md",
+    relativePath: "project/README.md",
+    text: "# Draft\n\n</textarea><script>alert(1)</script>",
+    version: "a".repeat(64),
+    saveHref: "/api/local-markdown?path=README.md",
+    viewHref: "/open/local?path=README.md",
+  });
+  assert.match(page, /data-markdown-editor/);
+  assert.match(page, /data-version="a{64}"/);
+  assert.match(page, /<textarea id="markdown-source"[^>]*># Draft[\s\S]*&lt;\/textarea&gt;&lt;script&gt;/);
+  assert.match(page, /src="\/local-markdown-editor\.js\?v=20260825-1"/);
+  assert.doesNotMatch(page, /<script>alert\(1\)<\/script>/);
 });
 
 test("the authenticated local-link route safely opens workspace files", async (t) => {
@@ -99,6 +122,7 @@ test("the authenticated local-link route safely opens workspace files", async (t
   const imageFile = path.join(projectRoot, "image.png");
   const binaryFile = path.join(projectRoot, "archive.bin");
   const escapedLink = path.join(projectRoot, "outside.txt");
+  const escapedMarkdownLink = path.join(projectRoot, "outside.md");
   await fs.mkdir(path.dirname(taskFile), { recursive: true });
   await fs.mkdir(projectRoot, { recursive: true });
   await fs.mkdir(codexHome, { recursive: true });
@@ -109,6 +133,7 @@ test("the authenticated local-link route safely opens workspace files", async (t
   await fs.writeFile(imageFile, Buffer.from("89504e470d0a1a0a", "hex"));
   await fs.writeFile(binaryFile, Buffer.from([0, 1, 2, 3]));
   await fs.symlink("/etc/passwd", escapedLink);
+  await fs.symlink("/etc/hosts", escapedMarkdownLink);
 
   let authenticated = true;
   const authServer = http.createServer((_req, res) => {
@@ -164,7 +189,98 @@ test("the authenticated local-link route safely opens workspace files", async (t
   assert.match(markdownPage, /<article class="markdown-body">/);
   assert.match(markdownPage, /<h1 id="read-me">Read me<\/h1>/);
   assert.match(markdownPage, /href="\/open\/local\?path=.*app\.js%3A2#L2"/);
+  assert.match(markdownPage, />编辑<\/a>/);
   assert.match(markdownPage, />源码<\/a>/);
+
+  const initialMarkdown = await fs.readFile(markdownFile, "utf8");
+  const initialVersion = localMarkdownVersion(initialMarkdown);
+  const markdownEditor = await fetch(
+    `http://127.0.0.1:${agentPort}/open/local?path=${encodeURIComponent(markdownFile)}&edit=1`,
+  );
+  const editorPage = await markdownEditor.text();
+  assert.equal(markdownEditor.status, 200);
+  assert.match(markdownEditor.headers.get("content-security-policy"), /script-src 'self'/);
+  assert.match(editorPage, /id="markdown-source"/);
+  assert.match(editorPage, new RegExp(`data-version="${initialVersion}"`));
+  assert.match(editorPage, /data-save-href="\/api\/local-markdown\?path=/);
+
+  const origin = `http://127.0.0.1:${agentPort}`;
+  const saveHref = `${origin}/api/local-markdown?path=${encodeURIComponent(markdownFile)}`;
+  const missingVersion = await fetch(saveHref, {
+    method: "PUT",
+    headers: { origin, "content-type": "text/plain" },
+    body: "# Missing version\n",
+  });
+  assert.equal(missingVersion.status, 428);
+  assert.equal(await fs.readFile(markdownFile, "utf8"), initialMarkdown);
+
+  const wrongContentType = await fetch(saveHref, {
+    method: "PUT",
+    headers: { origin, "content-type": "application/json", "if-match": `"${initialVersion}"` },
+    body: JSON.stringify({ text: "# Wrong content type\n" }),
+  });
+  assert.equal(wrongContentType.status, 415);
+  assert.equal(await fs.readFile(markdownFile, "utf8"), initialMarkdown);
+
+  const crossOriginSave = await fetch(saveHref, {
+    method: "PUT",
+    headers: {
+      origin: "https://example.com",
+      "content-type": "text/plain",
+      "if-match": `"${initialVersion}"`,
+    },
+    body: "# Cross origin\n",
+  });
+  assert.equal(crossOriginSave.status, 403);
+
+  const updatedMarkdown = "# Updated on mobile\n\nThe edit was saved.\n";
+  const savedResponse = await fetch(saveHref, {
+    method: "PUT",
+    headers: {
+      origin,
+      "content-type": "text/plain; charset=utf-8",
+      "if-match": `"${initialVersion}"`,
+    },
+    body: updatedMarkdown,
+  });
+  const saved = await savedResponse.json();
+  assert.equal(savedResponse.status, 200);
+  assert.equal(saved.version, localMarkdownVersion(updatedMarkdown));
+  assert.doesNotMatch(JSON.stringify(saved), /The edit was saved/);
+  assert.equal(await fs.readFile(markdownFile, "utf8"), updatedMarkdown);
+
+  const staleSave = await fetch(saveHref, {
+    method: "PUT",
+    headers: {
+      origin,
+      "content-type": "text/plain",
+      "if-match": `"${initialVersion}"`,
+    },
+    body: "# Stale overwrite\n",
+  });
+  assert.equal(staleSave.status, 409);
+  assert.equal((await staleSave.json()).code, "local_markdown_conflict");
+  assert.equal(await fs.readFile(markdownFile, "utf8"), updatedMarkdown);
+
+  const nonMarkdownSave = await fetch(
+    `${origin}/api/local-markdown?path=${encodeURIComponent(textFile)}`,
+    {
+      method: "PUT",
+      headers: { origin, "content-type": "text/plain", "if-match": `"${initialVersion}"` },
+      body: "not Markdown",
+    },
+  );
+  assert.equal(nonMarkdownSave.status, 404);
+
+  const escapedMarkdownSave = await fetch(
+    `${origin}/api/local-markdown?path=${encodeURIComponent(escapedMarkdownLink)}`,
+    {
+      method: "PUT",
+      headers: { origin, "content-type": "text/plain", "if-match": `"${initialVersion}"` },
+      body: "outside workspace",
+    },
+  );
+  assert.equal(escapedMarkdownSave.status, 404);
 
   const markdownSource = await fetch(
     `http://127.0.0.1:${agentPort}/open/local?path=${encodeURIComponent(markdownFile)}&raw=1`,
@@ -210,6 +326,13 @@ test("the authenticated local-link route safely opens workspace files", async (t
   );
   assert.equal(loginRedirect.status, 302);
   assert.match(loginRedirect.headers.get("location"), /^https:\/\/auth\.chenyanglin\.com\/login\?/);
+
+  const unauthenticatedSave = await fetch(saveHref, {
+    method: "PUT",
+    headers: { origin, "content-type": "text/plain", "if-match": `"${saved.version}"` },
+    body: "# Not authenticated\n",
+  });
+  assert.equal(unauthenticatedSave.status, 401);
 });
 
 async function reservePort() {

@@ -34,6 +34,7 @@ The production route is reverse proxied by Caddy. Authentication is delegated to
 - 浏览器断开后，后端 session 默认保留 1 小时，可从选择页重连。
 - 可以启动新会话，也可以从网页上的 saved sessions 列表点选恢复旧会话。
 - 默认工作区限制在当前 workspace 下。
+- 回答中的 workspace Markdown 文件可直接在手机阅读页中打开、编辑并安全保存；文件已被其他程序更新时不会静默覆盖。
 - 顶部有 `Terminal` / `Text` tab；`Text` 会把终端 buffer 转成手机上容易选择的普通文本。
 - Terminal 模式下，`Codex /status`、`/permissions` 等按钮会直接把对应 slash command 发给 Codex CLI。
 - App Server 模式下，命令或文件操作需要确认时会显示允许一次、本次会话允许、拒绝三个快捷操作。

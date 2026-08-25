@@ -44,10 +44,16 @@ import {
 } from "./lib/local-file-link.js";
 import {
   localFilePresentation,
+  renderMarkdownEditorPage,
   renderMarkdownFilePage,
   renderSandboxFilePage,
   renderTextFilePage,
 } from "./lib/local-file-view.js";
+import {
+  LocalMarkdownError,
+  localMarkdownVersion,
+  saveLocalMarkdownFile,
+} from "./lib/local-markdown-file.js";
 import {
   latestPersistedSessionsByCodexId,
   normalizeAccessMode,
@@ -611,7 +617,7 @@ app.get("/open/local", async (req, res) => {
       vaultRoot: OBSIDIAN_VAULT_ROOT,
       gardenBaseUrl: GARDEN_BASE_URL,
     });
-    if (gardenLink) {
+    if (gardenLink && req.query.edit !== "1") {
       res.redirect(gardenLink.href);
       return;
     }
@@ -634,9 +640,21 @@ app.get("/open/local", async (req, res) => {
     const relativePath = path.relative(realWorkspaceRoot, realFilePath);
     const downloadHref = `/open/local?path=${encodeURIComponent(requested.filePath)}&download=1`;
     const sourceHref = `/open/local?path=${encodeURIComponent(requested.filePath)}&raw=1`;
+    const editHref = `/open/local?path=${encodeURIComponent(requested.filePath)}&edit=1`;
+    const viewHref = `/open/local?path=${encodeURIComponent(requested.filePath)}`;
+    const editingMarkdown = presentation.kind === "markdown" && req.query.edit === "1";
     const page =
       presentation.kind === "sandbox"
         ? renderSandboxFilePage({ name, relativePath, source, downloadHref })
+        : editingMarkdown
+          ? renderMarkdownEditorPage({
+              name,
+              relativePath,
+              text: source,
+              version: localMarkdownVersion(source),
+              saveHref: `/api/local-markdown?path=${encodeURIComponent(requested.filePath)}`,
+              viewHref,
+            })
         : presentation.kind === "markdown" && req.query.raw !== "1" && !requested.line
           ? renderMarkdownFilePage({
               name,
@@ -646,12 +664,15 @@ app.get("/open/local", async (req, res) => {
               text: source,
               downloadHref,
               sourceHref,
+              editHref,
             })
         : renderTextFilePage({ name, relativePath, text: source, line: requested.line, downloadHref });
     res.set(
       "Content-Security-Policy",
-      "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data: https:; frame-src 'self'; base-uri 'none'",
+      `default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data: https:; frame-src 'self'; ${editingMarkdown ? "script-src 'self'; " : ""}base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
     );
+    res.set("Cache-Control", "private, no-store");
+    res.set("X-Frame-Options", "DENY");
     res.type("html").send(page);
   } catch {
     res.status(404).send("This local file no longer exists.");
@@ -659,6 +680,56 @@ app.get("/open/local", async (req, res) => {
 });
 
 app.use("/api", requireAuth);
+
+app.put(
+  "/api/local-markdown",
+  requireSameOriginMutation,
+  express.text({ type: "text/plain", limit: MAX_LOCAL_TEXT_BYTES }),
+  async (req, res) => {
+    res.set("Cache-Control", "private, no-store");
+    const requested = workspaceFileForLocalHref(req.query.path, WORKSPACE_ROOT);
+    if (!requested || path.extname(requested.filePath).toLowerCase() !== ".md") {
+      res.status(404).json({ error: "这个 Markdown 文件不能在 Agent 中编辑。" });
+      return;
+    }
+    if (!req.is("text/plain") || typeof req.body !== "string") {
+      res.status(415).json({ error: "保存内容必须是 Markdown 纯文本。" });
+      return;
+    }
+
+    try {
+      const [realWorkspaceRoot, realFilePath] = await Promise.all([
+        fs.realpath(WORKSPACE_ROOT),
+        fs.realpath(requested.filePath),
+      ]);
+      if (!isPathInside(realWorkspaceRoot, realFilePath)) throw new Error("File is outside the workspace");
+      const result = await saveLocalMarkdownFile({
+        filePath: realFilePath,
+        text: req.body,
+        expectedVersion: req.get("if-match"),
+        maxBytes: MAX_LOCAL_TEXT_BYTES,
+      });
+      logAgentEvent("local-markdown-saved", {
+        path: path.relative(realWorkspaceRoot, realFilePath),
+      });
+      res.json({
+        ok: true,
+        version: result.version,
+        href: `/open/local?path=${encodeURIComponent(requested.filePath)}`,
+      });
+    } catch (error) {
+      if (error instanceof LocalMarkdownError) {
+        res.status(error.status).json({ error: error.message, code: error.code });
+        return;
+      }
+      logAgentEvent("local-markdown-save-failed", {
+        path: cleanClientLogValue(requested.relativePath, 200),
+        message: cleanClientLogValue(error?.message, 200),
+      });
+      res.status(404).json({ error: "这个 Markdown 文件已经不存在或无法安全编辑。" });
+    }
+  },
+);
 
 app.get("/api/control-events", (req, res) => {
   res.set({
@@ -2028,6 +2099,23 @@ async function pruneExpiredSessionShares() {
 }
 
 function requireSafeIntegrationMutation(req, res, next) {
+  requireSameOriginMutation(req, res, () => {
+    const key = String(req.socket.remoteAddress || "unknown");
+    const now = Date.now();
+    const recent = (integrationMutationAttempts.get(key) || []).filter(
+      (timestamp) => now - timestamp < 10 * 60 * 1000,
+    );
+    if (recent.length >= 10) {
+      res.status(429).json({ error: "集成设置操作过于频繁，请稍后重试。" });
+      return;
+    }
+    recent.push(now);
+    integrationMutationAttempts.set(key, recent);
+    next();
+  });
+}
+
+function requireSameOriginMutation(req, res, next) {
   const origin = String(req.get("origin") || "");
   const sameOrigin = origin
     ? origin === getOrigin(req)
@@ -2036,18 +2124,6 @@ function requireSafeIntegrationMutation(req, res, next) {
     res.status(403).json({ error: "无法确认请求来自当前 Agent 页面。" });
     return;
   }
-
-  const key = String(req.socket.remoteAddress || "unknown");
-  const now = Date.now();
-  const recent = (integrationMutationAttempts.get(key) || []).filter(
-    (timestamp) => now - timestamp < 10 * 60 * 1000,
-  );
-  if (recent.length >= 10) {
-    res.status(429).json({ error: "集成设置操作过于频繁，请稍后重试。" });
-    return;
-  }
-  recent.push(now);
-  integrationMutationAttempts.set(key, recent);
   next();
 }
 

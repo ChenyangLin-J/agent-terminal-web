@@ -28,7 +28,7 @@ test("Agent Web exposes dedicated Multi-Agent, thread tree, side chat, and Realt
   ]) {
     assert.match(page, new RegExp(`id="${id}"`));
   }
-  assert.match(page, /agent-realtime\.js\?v=20260807-webrtc-1[\s\S]*app\.js\?v=20260807-draft-realtime-1/);
+  assert.match(page, /agent-realtime\.js\?v=20260807-webrtc-1[\s\S]*app\.js\?v=20260828-workspace-canary-1/);
   assert.match(client, /type: "subagent-stop"/);
   assert.match(client, /type: "set-orchestration-mode"/);
   assert.match(client, /type: "session-tree"/);

@@ -1,5 +1,6 @@
 import { build } from "esbuild";
 import { createRequire } from "node:module";
+import { readFile } from "node:fs/promises";
 
 const require = createRequire(import.meta.url);
 
@@ -15,15 +16,14 @@ const singleReactInstancePlugin = {
   },
 };
 
-const sessionListStylesPlugin = {
-  name: "session-list-styles",
+const compactKatexStylesPlugin = {
+  name: "compact-katex-styles",
   setup(buildContext) {
-    buildContext.onResolve({ filter: /^katex\/dist\/katex\.min\.css$/ }, () => ({
-      path: "katex-list-unused.css",
-      namespace: "session-list-empty-style",
-    }));
-    buildContext.onLoad({ filter: /.*/, namespace: "session-list-empty-style" }, () => ({
-      contents: "",
+    buildContext.onLoad({ filter: /katex\.min\.css$/ }, async ({ path }) => ({
+      contents: (await readFile(path, "utf8")).replace(
+        /,url\(fonts\/[^)]+\.woff\) format\("woff"\),url\(fonts\/[^)]+\.ttf\) format\("truetype"\)/g,
+        "",
+      ),
       loader: "css",
     }));
   },
@@ -38,10 +38,10 @@ await build({
   sourcemap: false,
   target: ["es2022"],
   loader: {
-    ".ttf": "file",
-    ".woff": "file",
-    ".woff2": "file",
+    ".ttf": "dataurl",
+    ".woff": "dataurl",
+    ".woff2": "dataurl",
   },
-  plugins: [singleReactInstancePlugin, sessionListStylesPlugin],
+  plugins: [singleReactInstancePlugin, compactKatexStylesPlugin],
   logLevel: "info",
 });

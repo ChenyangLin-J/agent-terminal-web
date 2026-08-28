@@ -13,17 +13,25 @@ test("the desktop and Pad Session switcher collapses and exposes contextual acti
   ]);
 
   assert.match(page, /id="session-switcher-core"/);
-  assert.match(page, /session-list-core\.css\?v=0\.4\.17/);
-  assert.match(page, /session-list-core\.js\?v=0\.4\.17/);
+  assert.match(page, /id="session-workspace-core"/);
+  assert.match(page, /session-list-core\.css\?v=0\.6\.12/);
+  assert.match(page, /session-list-core\.js\?v=0\.6\.12/);
   assert.match(page, /id="session-switcher-open"[\s\S]*aria-label="展开快速切换"/);
-  assert.match(entry, /import \{ SessionList \} from "@agent-workbench\/platform\/ui"/);
+  assert.match(entry, /import \{ SessionList, SessionWorkspace \} from "@agent-workbench\/platform\/ui"/);
   assert.match(entry, /onFavorite: \(session, favorited\)/);
   assert.match(entry, /onFullTextSearch: \(query\)/);
   assert.match(entry, /onOpenHistory:/);
   assert.match(entry, /onArchive: \(session, archived\)/);
   assert.match(entry, /onEnd: \(session\)/);
   assert.match(entry, /className="agent-core-host-filters"/);
+  assert.match(entry, /<SessionWorkspace/);
+  assert.match(entry, /window\.AgentSessionWorkspace = \{ render: renderWorkspace, unmount \}/);
+  assert.match(entry, /onUploadAttachments: \(files\)/);
   assert.match(app, /const SESSION_SWITCHER_COLLAPSED_STORE_KEY/);
+  assert.match(app, /const PLATFORM_SESSION_CANARY_STORE_KEY/);
+  assert.match(app, /function platformSessionWorkspaceSnapshot\(\)/);
+  assert.match(app, /function uploadPlatformSessionAttachments\(files\)/);
+  assert.match(app, /function openPlatformLocalFile\(filePath, attachment = null\)/);
   assert.match(app, /return stored === null \? false : stored !== "0"/);
   assert.match(app, /function setSessionSwitcherCollapsed\(collapsed/);
   assert.match(app, /window\.AgentSessionList\?\.render\(sessionSwitcherCore/);
@@ -42,6 +50,8 @@ test("the desktop and Pad Session switcher collapses and exposes contextual acti
   );
   assert.match(styles, /\.session-screen\.session-switcher-collapsed \.session-switcher-open \{\s*display: grid/);
   assert.match(hostStyles, /#session-switcher-core/);
+  assert.match(hostStyles, /\.session-workspace-core/);
+  assert.match(hostStyles, /\.session-screen:not\(\.session-switcher-collapsed\) \.session-workspace-core/);
   assert.match(hostStyles, /--cwu-surface: #0c1016/);
   assert.doesNotMatch(app, /row\.className = "session-switcher-row"/);
   assert.doesNotMatch(app, /function renderSessionSwitcherHostTabs\(\)/);

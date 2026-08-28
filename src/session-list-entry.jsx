@@ -1,6 +1,6 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import { SessionList } from "@agent-workbench/platform/ui";
+import { SessionList, SessionWorkspace } from "@agent-workbench/platform/ui";
 import "@agent-workbench/platform/styles.css";
 
 const roots = new Map();
@@ -8,6 +8,14 @@ const roots = new Map();
 function requestAction(type, payload = {}) {
   return new Promise((resolve, reject) => {
     window.dispatchEvent(new CustomEvent("agent-session-list-action", {
+      detail: { type, ...payload, resolve, reject },
+    }));
+  });
+}
+
+function requestWorkspaceAction(type, payload = {}) {
+  return new Promise((resolve, reject) => {
+    window.dispatchEvent(new CustomEvent("agent-session-workspace-action", {
       detail: { type, ...payload, resolve, reject },
     }));
   });
@@ -73,6 +81,61 @@ function SharedSessionList({ snapshot }) {
   );
 }
 
+function WorkspaceHeaderActions() {
+  return (
+    <>
+      <button className="cwu-button" onClick={() => requestWorkspaceAction("open-list")} type="button">列表</button>
+      <button className="cwu-button" onClick={() => requestWorkspaceAction("open-agents")} type="button">Agents</button>
+      <button className="cwu-button" onClick={() => requestWorkspaceAction("open-side-chat")} type="button">侧问</button>
+      <details className="agent-platform-canary-tools">
+        <summary className="cwu-button">工具</summary>
+        <div>
+          <button onClick={() => requestWorkspaceAction("open-memories")} type="button">记忆</button>
+          <button onClick={() => requestWorkspaceAction("open-tree")} type="button">关系</button>
+          <button onClick={() => requestWorkspaceAction("open-share")} type="button">分享</button>
+          <button onClick={() => requestWorkspaceAction("open-realtime")} type="button">语音</button>
+        </div>
+      </details>
+      <button
+        className="cwu-button agent-platform-canary-exit"
+        onClick={() => requestWorkspaceAction("disable-canary")}
+        title="恢复 Agent Terminal 原界面"
+        type="button"
+      >退出新版</button>
+    </>
+  );
+}
+
+function SharedSessionWorkspace({ snapshot }) {
+  return (
+    <SessionWorkspace
+      actions={{
+        onBack: () => requestWorkspaceAction("back"),
+        onCloseDocument: () => requestWorkspaceAction("close-document"),
+        onDraftChange: (draft) => requestWorkspaceAction("draft-change", { draft }),
+        onEditMessage: (payload) => requestWorkspaceAction("edit-message", payload),
+        onForkMessage: (payload) => requestWorkspaceAction("fork-message", payload),
+        onInterrupt: snapshot.actionAvailability?.interrupt
+          ? () => requestWorkspaceAction("interrupt")
+          : undefined,
+        onLoadEarlier: () => requestWorkspaceAction("load-earlier"),
+        onOpenAttachment: (attachment, message) => requestWorkspaceAction("open-attachment", { attachment, message }),
+        onOpenDocumentExternal: (file) => requestWorkspaceAction("open-document-external", { file }),
+        onOpenLink: (href) => requestWorkspaceAction("open-link", { href }),
+        onRespondToRequest: (response) => requestWorkspaceAction("respond-request", { response }),
+        onSubmit: (submission) => requestWorkspaceAction("submit", { submission }),
+        onUploadAttachments: (files) => requestWorkspaceAction("upload-attachments", { files }),
+      }}
+      attachmentPolicy={snapshot.attachmentPolicy}
+      documentPreview={snapshot.documentPreview}
+      extensions={{ renderHeaderActions: () => <WorkspaceHeaderActions /> }}
+      features={snapshot.features}
+      labels={snapshot.labels}
+      session={snapshot.session}
+    />
+  );
+}
+
 function render(container, snapshot) {
   if (!container) return false;
   let root = roots.get(container);
@@ -81,6 +144,17 @@ function render(container, snapshot) {
     roots.set(container, root);
   }
   root.render(<SharedSessionList snapshot={snapshot} />);
+  return true;
+}
+
+function renderWorkspace(container, snapshot) {
+  if (!container) return false;
+  let root = roots.get(container);
+  if (!root) {
+    root = createRoot(container);
+    roots.set(container, root);
+  }
+  root.render(<SharedSessionWorkspace snapshot={snapshot} />);
   return true;
 }
 
@@ -95,4 +169,6 @@ function unmount(container = null) {
 }
 
 window.AgentSessionList = { render, unmount };
+window.AgentSessionWorkspace = { render: renderWorkspace, unmount };
 window.dispatchEvent(new Event("agent-session-list-ready"));
+window.dispatchEvent(new Event("agent-session-workspace-ready"));

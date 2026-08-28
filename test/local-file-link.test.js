@@ -10,7 +10,7 @@ import {
   gardenLinkForLocalMarkdown,
   workspaceFileForLocalHref,
 } from "../lib/local-file-link.js";
-import { localFilePresentation } from "../lib/local-file-view.js";
+import { localFilePresentation, localFilePreviewPayload } from "../lib/local-file-view.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -45,6 +45,27 @@ test("workspace links preserve line numbers and select safe presentations", () =
   assert.equal(localFilePresentation("app.js", 100, { maxTextBytes: 200, maxPreviewBytes: 500 }).kind, "text");
   assert.equal(localFilePresentation("Dockerfile", 100, { maxTextBytes: 200, maxPreviewBytes: 500 }).kind, "text");
   assert.equal(localFilePresentation("large.js", 600, { maxTextBytes: 200, maxPreviewBytes: 500 }).kind, "download");
+
+  assert.deepEqual(localFilePreviewPayload({
+    filePath: "/home/ubuntu/workspace/project/app.js",
+    workspaceRoot: "/home/ubuntu/workspace",
+    size: 42,
+    presentation: { kind: "text", mime: "text/plain" },
+    line: 7,
+    content: "const ready = true;",
+  }), {
+    name: "app.js",
+    path: "/home/ubuntu/workspace/project/app.js",
+    relativePath: "project/app.js",
+    line: 7,
+    size: 42,
+    mimeType: "text/plain",
+    openUrl: "/open/local?path=%2Fhome%2Fubuntu%2Fworkspace%2Fproject%2Fapp.js",
+    downloadUrl: "/open/local?path=%2Fhome%2Fubuntu%2Fworkspace%2Fproject%2Fapp.js&download=1",
+    previewable: true,
+    format: "code",
+    content: "const ready = true;",
+  });
 });
 
 test("the authenticated local-link route safely opens workspace files", async (t) => {
@@ -127,6 +148,24 @@ test("the authenticated local-link route safely opens workspace files", async (t
   );
   assert.equal(imagePreview.status, 200);
   assert.equal(imagePreview.headers.get("content-type"), "image/png");
+
+  const codePreview = await fetch(
+    `http://127.0.0.1:${agentPort}/api/local-file-preview?path=${encodeURIComponent(`${textFile}:2`)}`,
+  );
+  const codePayload = await codePreview.json();
+  assert.equal(codePreview.status, 200);
+  assert.equal(codePayload.format, "code");
+  assert.equal(codePayload.line, 2);
+  assert.equal(codePayload.previewable, true);
+  assert.match(codePayload.content, /const safe = true/);
+
+  const imageDocumentPreview = await fetch(
+    `http://127.0.0.1:${agentPort}/api/local-file-preview?path=${encodeURIComponent(imageFile)}`,
+  );
+  const imagePayload = await imageDocumentPreview.json();
+  assert.equal(imageDocumentPreview.status, 200);
+  assert.equal(imagePayload.format, "image");
+  assert.equal(imagePayload.src, `/open/local?path=${encodeURIComponent(imageFile)}`);
 
   const download = await fetch(
     `http://127.0.0.1:${agentPort}/open/local?path=${encodeURIComponent(binaryFile)}`,

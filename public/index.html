@@ -41,8 +41,8 @@
     <link rel="stylesheet" href="/thinking-session.css?v=20260716-1" />
     <link rel="stylesheet" href="/agent-memories.css?v=20260723-pending-merge-1" />
     <link rel="stylesheet" href="/agent-integrations.css?v=20260802-cubox-1" />
-    <link rel="stylesheet" href="/session-list-core.css?v=0.4.17" />
-    <link rel="stylesheet" href="/session-list-host.css?v=20260821-1" />
+    <link rel="stylesheet" href="/session-list-core.css?v=0.6.12" />
+    <link rel="stylesheet" href="/session-list-host.css?v=20260828-workspace-canary-1" />
   </head>
   <body>
     <main class="app">
@@ -206,6 +206,12 @@
         <aside id="session-switcher" class="session-switcher collapsed" aria-label="快速切换 Session">
           <div id="session-switcher-core"></div>
         </aside>
+
+        <section
+          id="session-workspace-core"
+          class="session-workspace-core hidden"
+          aria-label="Platform Session canary"
+        ></section>
 
         <header class="session-header">
           <button id="back" type="button" title="返回 Agent 中控">中控</button>
@@ -657,8 +663,8 @@
     <script src="/agent-upload.js?v=20260725-attachment-wait-1"></script>
     <script src="/agent-voice-input.js?v=20260717-recovery-2"></script>
     <script src="/agent-realtime.js?v=20260807-webrtc-1"></script>
-    <script src="/session-list-core.js?v=0.4.17"></script>
-    <script src="/app.js?v=20260807-draft-realtime-1"></script>
+    <script src="/session-list-core.js?v=0.6.12"></script>
+    <script src="/app.js?v=20260828-workspace-canary-1"></script>
     <script src="/session-focus-mode.js?v=20260716-app-chrome-1"></script>
   </body>
 </html>

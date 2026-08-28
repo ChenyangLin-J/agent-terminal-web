@@ -44,6 +44,7 @@ import {
 } from "./lib/local-file-link.js";
 import {
   localFilePresentation,
+  localFilePreviewPayload,
   renderSandboxFilePage,
   renderTextFilePage,
 } from "./lib/local-file-view.js";
@@ -821,6 +822,44 @@ app.delete("/api/integrations/:integrationId", requireSafeIntegrationMutation, a
     res.json({ ok: true, removed });
   } catch (error) {
     sendIntegrationError(res, error, "暂时无法删除这个集成。");
+  }
+});
+
+app.get("/api/local-file-preview", async (req, res) => {
+  const requested = workspaceFileForLocalHref(req.query.path, WORKSPACE_ROOT);
+  if (!requested) {
+    res.status(404).json({ error: "This local file cannot be opened in Agent." });
+    return;
+  }
+
+  try {
+    const [realWorkspaceRoot, realFilePath] = await Promise.all([
+      fs.realpath(WORKSPACE_ROOT),
+      fs.realpath(requested.filePath),
+    ]);
+    if (!isPathInside(realWorkspaceRoot, realFilePath)) throw new Error("File is outside the workspace");
+    const stat = await fs.stat(realFilePath);
+    if (!stat.isFile()) throw new Error("Not a file");
+
+    const presentation = localFilePresentation(realFilePath, stat.size, {
+      maxTextBytes: MAX_LOCAL_TEXT_BYTES,
+      maxPreviewBytes: MAX_LOCAL_PREVIEW_BYTES,
+    });
+    const preview = localFilePreviewPayload({
+      filePath: requested.filePath,
+      realFilePath,
+      workspaceRoot: realWorkspaceRoot,
+      size: stat.size,
+      presentation,
+      line: requested.line,
+      content: presentation.kind !== "inline" && presentation.kind !== "download"
+        ? await fs.readFile(realFilePath, "utf8")
+        : "",
+    });
+    res.set("Cache-Control", "private, no-store");
+    res.json(preview);
+  } catch {
+    res.status(404).json({ error: "This local file no longer exists." });
   }
 });
 

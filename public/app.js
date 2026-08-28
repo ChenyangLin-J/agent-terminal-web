@@ -167,6 +167,7 @@ const threadSearchClose = document.querySelector("#thread-search-close");
 const sessionSwitcher = document.querySelector("#session-switcher");
 const sessionSwitcherOpenButton = document.querySelector("#session-switcher-open");
 const sessionSwitcherCore = document.querySelector("#session-switcher-core");
+const sessionWorkspaceCore = document.querySelector("#session-workspace-core");
 
 if ("scrollRestoration" in history) history.scrollRestoration = "manual";
 
@@ -193,6 +194,7 @@ const SESSION_SNAPSHOT_STORE_KEY = "agent_terminal_session_snapshots";
 const APP_READING_POSITION_STORE_KEY = "agent_terminal_app_reading_positions";
 const LAST_SESSION_NAVIGATION_STORE_KEY = "agent_terminal_last_session_navigation";
 const SESSION_SWITCHER_COLLAPSED_STORE_KEY = "agent_terminal_session_switcher_collapsed";
+const PLATFORM_SESSION_CANARY_STORE_KEY = "agent_terminal_platform_session_canary";
 const SESSION_SHARE_LINKS_STORE_KEY = "agent_terminal_session_share_links";
 const SESSION_SNAPSHOT_LIMIT = 8;
 const SESSION_SNAPSHOT_MAX_CHARS = 200_000;
@@ -213,6 +215,7 @@ const REMOTE_HOST_RETRY_BASE_MS = 15_000;
 const REMOTE_HOST_RETRY_MAX_MS = 2 * 60_000;
 const DEFAULT_TRANSPORT = "app-server";
 const DEFAULT_ACCESS_MODE = "full";
+let platformSessionCanaryEnabled = readPlatformSessionCanary();
 const APP_COMMANDS = [
   { name: "/status", description: "完整 Session 状态、上下文与额度" },
   { name: "/usage", description: "查看一周额度、重置时间与 Token 活动" },
@@ -321,6 +324,8 @@ let activeForkedFromTitle = "";
 let activeParentThreadId = "";
 let activeParentThreadTitle = "";
 let pendingAgentRequest = null;
+let platformSessionDocumentPreview = null;
+let platformSessionRenderFrame = null;
 let lastSubmittedPrompt = "";
 let lastSubmittedAttachments = [];
 let activeSessionPreviewOnly = false;
@@ -435,6 +440,8 @@ backButton.addEventListener("click", showStartScreen);
 sessionSwitcherOpenButton.addEventListener("click", () => setSessionSwitcherCollapsed(false));
 window.addEventListener("agent-session-list-action", handleSharedSessionListAction);
 window.addEventListener("agent-session-list-ready", renderSessionSwitcher);
+window.addEventListener("agent-session-workspace-action", handleSharedSessionWorkspaceAction);
+window.addEventListener("agent-session-workspace-ready", schedulePlatformSessionWorkspaceRender);
 searchCurrentSessionButton.addEventListener("click", openThreadSearch);
 disconnectButton.addEventListener("click", detach);
 mobileSearchCurrentSessionButton.addEventListener("click", () => {
@@ -1775,6 +1782,393 @@ async function handleSharedSessionListAction(event) {
   }
 }
 
+function readPlatformSessionCanary() {
+  const requested = new URLSearchParams(window.location.search).get("platformSession");
+  try {
+    if (requested === "1") localStorage.setItem(PLATFORM_SESSION_CANARY_STORE_KEY, "1");
+    if (requested === "0") localStorage.removeItem(PLATFORM_SESSION_CANARY_STORE_KEY);
+    return requested === "1" || (requested !== "0" && localStorage.getItem(PLATFORM_SESSION_CANARY_STORE_KEY) === "1");
+  } catch {
+    return requested === "1";
+  }
+}
+
+function setPlatformSessionCanary(enabled) {
+  platformSessionCanaryEnabled = Boolean(enabled);
+  try {
+    if (platformSessionCanaryEnabled) localStorage.setItem(PLATFORM_SESSION_CANARY_STORE_KEY, "1");
+    else localStorage.removeItem(PLATFORM_SESSION_CANARY_STORE_KEY);
+  } catch {
+    // The current page still switches even when persistent storage is unavailable.
+  }
+  const url = new URL(window.location.href);
+  url.searchParams.delete("platformSession");
+  window.history.replaceState(null, "", url.toString());
+  platformSessionDocumentPreview = null;
+  schedulePlatformSessionWorkspaceRender();
+}
+
+function schedulePlatformSessionWorkspaceRender() {
+  if (platformSessionRenderFrame) return;
+  platformSessionRenderFrame = window.requestAnimationFrame(() => {
+    platformSessionRenderFrame = null;
+    renderPlatformSessionWorkspace();
+  });
+}
+
+function renderPlatformSessionWorkspace() {
+  if (!sessionWorkspaceCore) return;
+  const visible = platformSessionCanaryEnabled
+    && activeTransport === "app-server"
+    && !sessionScreen.classList.contains("hidden");
+  sessionScreen.classList.toggle("platform-session-canary", visible);
+  sessionWorkspaceCore.classList.toggle("hidden", !visible);
+  if (!visible) {
+    window.AgentSessionWorkspace?.unmount(sessionWorkspaceCore);
+    return;
+  }
+  window.AgentSessionWorkspace?.render(sessionWorkspaceCore, platformSessionWorkspaceSnapshot());
+}
+
+function platformSessionWorkspaceSnapshot() {
+  const taskState = appSessionTaskStateValue();
+  const status = sessionPreviewError
+    ? "error"
+    : pendingAgentRequest || latestTurnState.interrupted
+      ? "waiting"
+      : latestTurnState.active || latestTurnState.stopping
+        ? "running"
+        : !activeSessionReady && !activeSessionPreviewOnly
+          ? "connecting"
+          : "idle";
+  const sessionIdentity = activeSessionId
+    || activeSessionParams.sessionId
+    || `draft:${activeSessionParams.cwd || "."}:${activeSessionParams.title || "new"}`;
+  const messages = platformTranscriptMessages();
+  const processItems = appTranscriptItems.filter(isProcessTranscriptItem);
+  return {
+    actionAvailability: {
+      interrupt: activeTurnInterruptSupported,
+    },
+    attachmentPolicy: {
+      accept: "image/*,audio/*,.txt,.md,.pdf,.csv,.json,.jsonl,.sql,.sqlx,.js,.jsx,.ts,.tsx,.py,.html,.css,.yaml,.yml,.toml",
+      maxBytes: 20 * 1024 * 1024,
+      maxCount: 5,
+    },
+    documentPreview: platformSessionDocumentPreview,
+    features: {
+      attachments: "visible",
+      externalLink: "hidden",
+      realtime: "hidden",
+      sideChats: "hidden",
+      steer: true,
+      subagents: "hidden",
+      technicalDetails: true,
+    },
+    labels: {
+      back: "中控",
+      composerPlaceholder: isReadOnlySubagentPreview()
+        ? "子 Agent 预览为只读"
+        : "补充需求、反馈问题，或者继续修改…",
+      emptyBody: "输入需求后，这个 Session 会保留完整过程。",
+      emptyTitle: activeSessionParams.sessionId ? "正在恢复 Session" : "开始一个新 Session",
+      historyStart: "已到最早记录",
+      loadEarlier: `加载更早 ${APP_INITIAL_TURN_LIMIT} 轮`,
+      newMessages: "有新内容",
+      queuedTitle: "下一轮待发送",
+      revealFile: "在新页面打开文件",
+    },
+    session: {
+      sessionId: sessionIdentity,
+      isDraft: !activeSessionId && !activeSessionParams.sessionId,
+      draft: promptInput.value,
+      composerDisabled: isReadOnlySubagentPreview() || promptSubmissionPending,
+      title: activeSessionParams.title || statusEls.project.textContent || "New Codex session",
+      contextLabel: `${agentHostLabel(activeAgentHostId)} · ${displayProject(activeSessionParams.cwd || ".")}`,
+      status,
+      statusLabel: sessionPreviewError || taskState.label,
+      messages,
+      plan: latestTurnState.requirements.map((item, index) => ({
+        id: String(item.id || `requirement-${index}`),
+        text: String(item.text || ""),
+        status: item.status === "working" ? "inProgress" : String(item.status || "pending"),
+      })),
+      technicalItems: processItems.map((item, index) => ({
+        id: item.id || `technical-${index}`,
+        title: item.label || item.text || "执行步骤",
+        status: item.status === "working" ? "inProgress" : item.status,
+        detail: [item.text, item.detail, item.output].filter(Boolean).join("\n\n"),
+        turnId: item.turnId || null,
+      })),
+      pendingRequests: platformPendingRequests(),
+      subagents: [],
+      executionProfile: {
+        accessMode: activeAccessMode === "full" ? "full" : "restricted",
+        label: `${appAccessLabel(activeAccessMode)} · Agent Terminal Runtime`,
+      },
+      models: [],
+      queuedTurns: latestTurnState.queuedTurns.map((item, index) => ({
+        id: String(item.id || `queued-${index}`),
+        prompt: String(item.text || item.prompt || ""),
+        attachments: Array.isArray(item.attachments) ? item.attachments : [],
+        createdAt: item.createdAt || null,
+      })),
+      hasEarlierTurns: restoredAppHistoryHasMore,
+      historyLoading: restoredAppHistoryLoading,
+      loadedTurnCount: restoredAppTurnCount || null,
+    },
+  };
+}
+
+function platformTranscriptMessages() {
+  if (!appTranscriptItems.length && cachedSessionPreview?.result) {
+    return [
+      ...(cachedSessionPreview.prompt ? [{
+        id: "session-preview-user",
+        role: "user",
+        content: cachedSessionPreview.prompt,
+        turnId: "session-preview",
+      }] : []),
+      {
+        id: "session-preview-assistant",
+        role: "assistant",
+        phase: "answer",
+        content: cachedSessionPreview.result,
+        turnId: "session-preview",
+      },
+    ];
+  }
+  return appTranscriptItems.filter((item) => !isProcessTranscriptItem(item)).map((item) => {
+    const user = item.type === "user";
+    const attachments = (item.attachments || []).map(platformAttachmentPresentation);
+    return {
+      id: item.id,
+      role: user ? "user" : "assistant",
+      phase: user || !item.phase || ["answer", "final_answer"].includes(item.phase) ? "answer" : "commentary",
+      label: item.label || (user ? "你" : "Codex"),
+      content: item.text || item.output || item.detail || "",
+      turnId: item.turnId || null,
+      turnStatus: item.turnStatus || item.status || null,
+      canEdit: user && Boolean(item.turnId) && !latestTurnState.active && !isReadOnlySubagentPreview(),
+      canFork: user && Boolean(item.turnId) && Boolean(activeSessionId) && !latestTurnState.active && !isReadOnlySubagentPreview(),
+      attachments,
+      media: attachments.filter((attachment) => attachment.kind === "image").map((attachment) => ({
+        id: `media:${attachment.id}`,
+        kind: "image",
+        src: attachment.previewUrl,
+        alt: attachment.name,
+        name: attachment.name,
+        attachmentId: attachment.id,
+        mimeType: attachment.mimeType,
+        size: attachment.size,
+      })),
+    };
+  });
+}
+
+function platformAttachmentPresentation(attachment = {}) {
+  const filePath = String(attachment.path || attachment.id || "");
+  const mimeType = String(attachment.mime || attachment.mimeType || "application/octet-stream").toLowerCase();
+  return {
+    id: filePath,
+    name: String(attachment.originalName || attachment.storedName || attachment.name || "附件"),
+    kind: mimeType.startsWith("image/") ? "image" : mimeType.startsWith("audio/") ? "audio" : "file",
+    mimeType,
+    size: Number(attachment.size || 0),
+    sourceKind: "file",
+    previewUrl: mimeType.startsWith("image/") && filePath
+      ? `/open/local?path=${encodeURIComponent(filePath)}`
+      : "",
+  };
+}
+
+function platformPendingRequests() {
+  if (!pendingAgentRequest?.requestId) return [];
+  return [{
+    token: pendingAgentRequest.requestId,
+    title: pendingAgentRequest.title || "Codex 需要确认",
+    detail: pendingAgentRequest.detail || pendingAgentRequest.method || "",
+    kind: pendingAgentRequest.kind === "question"
+      ? "item/tool/requestUserInput"
+      : pendingAgentRequest.kind || "approval",
+    questions: (pendingAgentRequest.questions || []).map((question, index) => ({
+      id: String(question.id || `question-${index}`),
+      header: String(question.header || ""),
+      question: String(question.question || ""),
+      isSecret: Boolean(question.isSecret),
+      options: Array.isArray(question.options) ? question.options : [],
+    })),
+  }];
+}
+
+async function handleSharedSessionWorkspaceAction(event) {
+  const detail = event.detail || {};
+  try {
+    if (detail.type === "back") {
+      showStartScreen();
+    } else if (detail.type === "open-list") {
+      setSessionSwitcherCollapsed(false);
+    } else if (detail.type === "open-agents") {
+      openSubagentList();
+    } else if (detail.type === "open-side-chat") {
+      appSessionSideChatButton.click();
+    } else if (detail.type === "open-memories") {
+      openMemoryManager();
+    } else if (detail.type === "open-tree") {
+      appSessionTreeButton.click();
+    } else if (detail.type === "open-share") {
+      appSessionShareButton.click();
+    } else if (detail.type === "open-realtime") {
+      appSessionRealtimeButton.click();
+    } else if (detail.type === "disable-canary") {
+      setPlatformSessionCanary(false);
+    } else if (detail.type === "draft-change") {
+      promptInput.value = String(detail.draft || "");
+    } else if (detail.type === "interrupt") {
+      interruptCurrentTurn();
+    } else if (detail.type === "submit") {
+      await submitPlatformSessionPrompt(detail.submission || {});
+    } else if (detail.type === "upload-attachments") {
+      detail.resolve?.(await uploadPlatformSessionAttachments(detail.files || []));
+      return;
+    } else if (detail.type === "load-earlier") {
+      await loadEarlierPlatformSessionTurns();
+    } else if (detail.type === "edit-message") {
+      await editPlatformSessionMessage(detail);
+    } else if (detail.type === "fork-message") {
+      const item = appTranscriptItems.find((entry) => entry.id === detail.messageId);
+      if (!item) throw new Error("找不到这条历史消息。");
+      await forkFromTurn(item);
+    } else if (detail.type === "open-attachment") {
+      await openPlatformLocalFile(detail.attachment?.id, detail.attachment);
+    } else if (detail.type === "open-link") {
+      await openPlatformSessionLink(detail.href);
+    } else if (detail.type === "close-document") {
+      platformSessionDocumentPreview = null;
+      schedulePlatformSessionWorkspaceRender();
+    } else if (detail.type === "open-document-external") {
+      window.open(detail.file?.openUrl || detail.file?.downloadUrl || "", "_blank", "noopener");
+    } else if (detail.type === "respond-request") {
+      respondToPlatformSessionRequest(detail.response || {});
+    }
+    detail.resolve?.();
+  } catch (error) {
+    detail.reject?.(error);
+  }
+}
+
+async function submitPlatformSessionPrompt(submission = {}) {
+  const selectedPaths = new Set((submission.attachments || []).map((attachment) => attachment.id));
+  const selectedAttachments = uploadController.getAttachments().filter((attachment) => selectedPaths.has(attachment.path));
+  uploadController.clearAttachments();
+  uploadController.restoreAttachments(selectedAttachments);
+  promptInput.value = String(submission.prompt || "");
+  const deliveryMode = submission.mode === "queue" ? "queue" : submission.mode === "steer" ? "steer" : "auto";
+  await submitPrompt(deliveryMode);
+  if (!pendingPreviewSubmission && (promptInput.value.trim() || uploadController.getAttachments().length)) {
+    throw new Error(uploadStatus.textContent || "消息未发送，请重试。");
+  }
+}
+
+async function uploadPlatformSessionAttachments(files) {
+  if (activeAgentHostId !== "personal") throw new Error("公司 Session 暂不支持从 Agent Web 传附件。");
+  const existingPaths = new Set(uploadController.getAttachments().map((attachment) => attachment.path));
+  const uploaded = await uploadController.uploadFiles(files);
+  if (!uploaded) throw new Error(uploadStatus.textContent || "附件上传失败。");
+  return uploadController.getAttachments()
+    .filter((attachment) => !existingPaths.has(attachment.path))
+    .map(platformAttachmentPresentation);
+}
+
+async function loadEarlierPlatformSessionTurns() {
+  if (!restoredAppHistoryHasMore || restoredAppHistoryLoading) return;
+  const previousCount = appTranscriptItems.length;
+  restoredAppHistoryLoading = true;
+  schedulePlatformSessionWorkspaceRender();
+  if (!send({ type: "load-app-history" })) {
+    restoredAppHistoryLoading = false;
+    schedulePlatformSessionWorkspaceRender();
+    throw new Error("连接恢复中，暂时无法加载更早记录。");
+  }
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline && restoredAppHistoryLoading && appTranscriptItems.length === previousCount) {
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+  }
+}
+
+async function editPlatformSessionMessage(detail) {
+  const item = appTranscriptItems.find((entry) => entry.id === detail.messageId);
+  if (!item) throw new Error("找不到这条历史消息。");
+  beginEditAndFork(item);
+  promptInput.value = String(detail.prompt || item.text || "");
+  await submitPrompt("auto");
+  if (!pendingPreviewSubmission && promptInput.value.trim()) {
+    throw new Error(uploadStatus.textContent || "编辑分支尚未创建，请重试。");
+  }
+}
+
+function respondToPlatformSessionRequest(response = {}) {
+  if (!pendingAgentRequest || response.token !== pendingAgentRequest.requestId) return;
+  const answers = Object.fromEntries(Object.entries(response.answers || {}).map(([questionId, value]) => [
+    questionId,
+    Array.isArray(value?.answers) ? value.answers : [String(value || "")],
+  ]));
+  const sent = send({
+    type: "agent-response",
+    requestId: pendingAgentRequest.requestId,
+    decision: response.decision || "accept",
+    answers,
+  });
+  if (!sent) throw new Error("连接恢复中，确认尚未提交。");
+}
+
+async function openPlatformSessionLink(href) {
+  const value = String(href || "").trim();
+  if (!value) return;
+  if (/^https?:\/\//i.test(value)) {
+    window.open(value, "_blank", "noopener");
+    return;
+  }
+  let localPath = value;
+  if (/^\.\.?\//.test(value) && String(activeSessionParams.cwd || "").startsWith("/")) {
+    localPath = decodeURIComponent(new URL(value, `file://${String(activeSessionParams.cwd).replace(/\/$/, "")}/`).pathname);
+  }
+  await openPlatformLocalFile(localPath);
+}
+
+async function openPlatformLocalFile(filePath, attachment = null) {
+  const value = String(filePath || "").trim();
+  if (!value) return;
+  const attachmentMime = String(attachment?.mimeType || "").toLowerCase();
+  if (attachmentMime.startsWith("image/") || attachmentMime === "application/pdf") {
+    const openUrl = `/open/local?path=${encodeURIComponent(value)}`;
+    platformSessionDocumentPreview = {
+      name: attachment?.name || value.split("/").at(-1) || "附件",
+      path: value,
+      format: attachmentMime === "application/pdf" ? "pdf" : "image",
+      mimeType: attachmentMime,
+      src: openUrl,
+      openUrl,
+      downloadUrl: `${openUrl}&download=1`,
+      attachmentId: attachment?.id || "",
+    };
+    schedulePlatformSessionWorkspaceRender();
+    return;
+  }
+  const response = await fetch(`/api/local-file-preview?path=${encodeURIComponent(value)}`);
+  const preview = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(preview.error || "这个文件暂时无法打开。");
+  if (!preview.previewable) {
+    window.open(preview.openUrl, "_blank", "noopener");
+    return;
+  }
+  platformSessionDocumentPreview = {
+    ...preview,
+    attachmentId: attachment?.id || "",
+  };
+  schedulePlatformSessionWorkspaceRender();
+}
+
 function readSessionSwitcherCollapsed() {
   try {
     const stored = localStorage.getItem(SESSION_SWITCHER_COLLAPSED_STORE_KEY);
@@ -1802,6 +2196,7 @@ function setSessionSwitcherCollapsed(collapsed, { persist = true } = {}) {
 
 function openSessionInCurrentPage(params) {
   void markCurrentSessionViewedOnExit();
+  platformSessionDocumentPreview = null;
   const scopedParams = { host: params.host || activeAgentHostId, ...params };
   activeSessionUnreadTurnId = String(scopedParams.unreadTurnId || "").trim();
   delete scopedParams.unreadTurnId;
@@ -3217,6 +3612,7 @@ function activeSkillAckText(skills) {
 
 function renderAgentRequest(payload = {}) {
   pendingAgentRequest = payload;
+  schedulePlatformSessionWorkspaceRender();
   agentRequestTitle.textContent = payload.title || "Codex 需要确认";
   agentRequestDetail.textContent = payload.detail || payload.method || "";
   const isQuestion = payload.kind === "question";
@@ -3254,6 +3650,7 @@ function respondToAgentRequest(decision) {
 
 function clearAgentRequest() {
   pendingAgentRequest = null;
+  schedulePlatformSessionWorkspaceRender();
   agentRequest.classList.add("hidden");
   agentRequestAnswer.value = "";
 }
@@ -4480,6 +4877,7 @@ function appAccessLabel(access) {
 }
 
 function syncAppSessionToolbar() {
+  schedulePlatformSessionWorkspaceRender();
   appSessionPermissionsButton.dataset.access = activeAccessMode;
   appSessionPermissionsValue.textContent = appAccessLabel(activeAccessMode);
   appSessionPermissionsButton.setAttribute("aria-label", `权限：${appAccessLabel(activeAccessMode)}`);
@@ -5316,6 +5714,7 @@ function renderTurnState(value = {}) {
     requirements: Array.isArray(value.requirements) ? value.requirements : [],
     queuedTurns: Array.isArray(value.queuedTurns) ? value.queuedTurns : [],
   };
+  schedulePlatformSessionWorkspaceRender();
   if (!latestTurnState.active || !latestTurnState.stopping) interruptRequestPending = false;
   if (!latestTurnState.interrupted || latestTurnState.active) resumeInterruptedPending = false;
   const items = [...latestTurnState.requirements, ...latestTurnState.queuedTurns];
@@ -5354,6 +5753,7 @@ function renderTurnState(value = {}) {
 }
 
 function setConnectedState(state) {
+  schedulePlatformSessionWorkspaceRender();
   const readOnlySubagentPreview = isReadOnlySubagentPreview();
   const connectionStates = {
     connected: "已连接",
@@ -5457,6 +5857,7 @@ function showStartScreen() {
   clearSessionUrl();
   startScreen.classList.remove("hidden");
   sessionScreen.classList.add("hidden");
+  schedulePlatformSessionWorkspaceRender();
   document.body.classList.remove("app-server-session");
   syncPrimaryNavigation("center");
   window.clearInterval(sessionsTimer);
@@ -5476,6 +5877,7 @@ function scrollStartScreenToTop() {
 function showSessionScreen() {
   startScreen.classList.add("hidden");
   sessionScreen.classList.remove("hidden");
+  schedulePlatformSessionWorkspaceRender();
   setSessionPageMode(true);
   document.body.classList.toggle("app-server-session", activeTransport === "app-server");
   syncPrimaryNavigation("session");
@@ -5943,6 +6345,7 @@ function updateSessionViewLabels() {
 }
 
 function syncPrimarySessionView() {
+  schedulePlatformSessionWorkspaceRender();
   if (!textView.classList.contains("hidden")) return;
   terminalView.classList.toggle("hidden", activeTransport === "app-server");
   appServerView.classList.toggle("hidden", activeTransport !== "app-server");
@@ -6008,6 +6411,7 @@ function transcriptReconciliationKey(item = {}) {
 function upsertAppTranscript(payload = {}) {
   const item = normalizeClientTranscriptItem(payload);
   if (!item.id) return;
+  schedulePlatformSessionWorkspaceRender();
   const index = appTranscriptItems.findIndex((entry) => entry.id === item.id);
   const wasAtBottom = isAppTranscriptAtBottom();
   const shouldFollow = appTranscriptSubmitFollowActive || wasAtBottom;
@@ -6030,6 +6434,7 @@ function upsertAppTranscript(payload = {}) {
 
 function appendAppTranscriptDelta(payload = {}) {
   if (!payload.id || !["text", "detail", "output"].includes(payload.field) || !payload.delta) return;
+  schedulePlatformSessionWorkspaceRender();
   const item = appTranscriptItems.find((entry) => entry.id === payload.id);
   if (!item) return;
   const wasAtBottom = isAppTranscriptAtBottom();
@@ -6173,6 +6578,7 @@ function processGroupDescriptor(itemId) {
 }
 
 function renderAppTranscript({ follow = false } = {}) {
+  schedulePlatformSessionWorkspaceRender();
   if (!appServerTranscript) return;
   const hasRenderedAnchors = Boolean(appServerTranscript.querySelector("[data-scroll-anchor]"));
   const wasAtBottom = hasRenderedAnchors && isAppTranscriptAtBottom();

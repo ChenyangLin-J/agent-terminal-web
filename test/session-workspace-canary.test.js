@@ -22,8 +22,12 @@ test("the Platform SessionWorkspace canary renders and emits host actions", asyn
         type: detail.type,
         submission: detail.submission,
         href: detail.href,
+        sourceFile: detail.sourceFile,
+        change: detail.change,
       });
-      detail.resolve?.([]);
+      detail.resolve?.(detail.type === "save-document"
+        ? { file: { ...detail.change.file, content: detail.change.content, version: "sha256:next" } }
+        : []);
     });
     window.__workspaceSnapshot = {
       attachmentPolicy: { maxCount: 5, maxBytes: 1024 * 1024 },
@@ -77,6 +81,35 @@ test("the Platform SessionWorkspace canary renders and emits host actions", asyn
   assert.equal(await page.locator(".cwu-document-code-line.is-highlighted").textContent(), "2const highlighted = true;");
   await page.getByRole("button", { name: "关闭文件预览" }).click();
   await page.waitForFunction(() => window.__workspaceActions.some((action) => action.type === "close-document"));
+
+  await page.evaluate(() => {
+    window.__workspaceSnapshot.documentPreview = {
+      name: "guide.md",
+      path: "/workspace/docs/guide.md",
+      format: "markdown",
+      content: "# Guide\n\n![Chart](./images/chart.png)\n\n[Notes](./notes.md)\n",
+      version: "sha256:initial",
+    };
+    window.AgentSessionWorkspace.render(document.querySelector("#session-workspace-core"), window.__workspaceSnapshot);
+  });
+  await page.getByRole("dialog", { name: "文件预览：guide.md" }).waitFor();
+  assert.equal(
+    await page.getByRole("img", { name: "Chart" }).getAttribute("src"),
+    "/open/local?path=%2Fworkspace%2Fdocs%2Fimages%2Fchart.png",
+  );
+  await page.getByRole("link", { name: "Notes" }).click();
+  await page.waitForFunction(() => window.__workspaceActions.some((action) => action.type === "open-link"));
+  await page.getByRole("button", { name: "编辑" }).click();
+  await page.getByRole("textbox", { name: "编辑 guide.md" }).fill("# Updated\n");
+  await page.getByRole("button", { name: "保存" }).click();
+  await page.waitForFunction(() => window.__workspaceActions.some((action) => action.type === "save-document"));
+  const documentActions = await page.evaluate(() => window.__workspaceActions);
+  assert.ok(documentActions.some((action) => action.type === "open-link"
+    && action.href === "./notes.md"
+    && action.sourceFile?.path === "/workspace/docs/guide.md"));
+  assert.ok(documentActions.some((action) => action.type === "save-document"
+    && action.change?.version === "sha256:initial"
+    && action.change?.content === "# Updated\n"));
 
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);

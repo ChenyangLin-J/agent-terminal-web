@@ -48,6 +48,7 @@ import {
   renderSandboxFilePage,
   renderTextFilePage,
 } from "./lib/local-file-view.js";
+import { localMarkdownVersion, saveLocalMarkdown } from "./lib/local-markdown.js";
 import {
   latestPersistedSessionsByCodexId,
   normalizeAccessMode,
@@ -845,6 +846,9 @@ app.get("/api/local-file-preview", async (req, res) => {
       maxTextBytes: MAX_LOCAL_TEXT_BYTES,
       maxPreviewBytes: MAX_LOCAL_PREVIEW_BYTES,
     });
+    const content = presentation.kind !== "inline" && presentation.kind !== "download"
+      ? await fs.readFile(realFilePath, "utf8")
+      : "";
     const preview = localFilePreviewPayload({
       filePath: requested.filePath,
       realFilePath,
@@ -852,14 +856,51 @@ app.get("/api/local-file-preview", async (req, res) => {
       size: stat.size,
       presentation,
       line: requested.line,
-      content: presentation.kind !== "inline" && presentation.kind !== "download"
-        ? await fs.readFile(realFilePath, "utf8")
-        : "",
+      content,
     });
+    if (preview.format === "markdown") preview.version = localMarkdownVersion(content);
     res.set("Cache-Control", "private, no-store");
     res.json(preview);
   } catch {
     res.status(404).json({ error: "This local file no longer exists." });
+  }
+});
+
+app.post("/api/local-markdown", async (req, res) => {
+  const requested = workspaceFileForLocalHref(req.body?.path, WORKSPACE_ROOT);
+  if (!requested) {
+    res.status(404).json({ error: "This Markdown file cannot be edited in Agent." });
+    return;
+  }
+
+  try {
+    const [realWorkspaceRoot, realFilePath] = await Promise.all([
+      fs.realpath(WORKSPACE_ROOT),
+      fs.realpath(requested.filePath),
+    ]);
+    if (!isPathInside(realWorkspaceRoot, realFilePath)) throw new Error("File is outside the workspace");
+    const saved = await saveLocalMarkdown(realFilePath, {
+      content: req.body?.content,
+      version: String(req.body?.version || ""),
+      maxBytes: MAX_LOCAL_TEXT_BYTES,
+    });
+    const preview = localFilePreviewPayload({
+      filePath: requested.filePath,
+      realFilePath,
+      workspaceRoot: realWorkspaceRoot,
+      size: saved.size,
+      presentation: { kind: "text", mime: "text/plain" },
+      content: saved.content,
+    });
+    preview.version = saved.version;
+    res.set("Cache-Control", "private, no-store");
+    res.json(preview);
+  } catch (error) {
+    const status = error.statusCode || 404;
+    res.status(status).json({
+      error: status === 404 ? "This local Markdown file no longer exists." : error.message,
+      code: error.code || null,
+    });
   }
 });
 

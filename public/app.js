@@ -2042,12 +2042,15 @@ async function handleSharedSessionWorkspaceAction(event) {
     } else if (detail.type === "open-attachment") {
       await openPlatformLocalFile(detail.attachment?.id, detail.attachment);
     } else if (detail.type === "open-link") {
-      await openPlatformSessionLink(detail.href);
+      await openPlatformSessionLink(detail.href, detail.sourceFile);
     } else if (detail.type === "close-document") {
       platformSessionDocumentPreview = null;
       schedulePlatformSessionWorkspaceRender();
     } else if (detail.type === "open-document-external") {
       window.open(detail.file?.openUrl || detail.file?.downloadUrl || "", "_blank", "noopener");
+    } else if (detail.type === "save-document") {
+      detail.resolve?.(await savePlatformMarkdownDocument(detail.change));
+      return;
     } else if (detail.type === "respond-request") {
       respondToPlatformSessionRequest(detail.response || {});
     }
@@ -2122,7 +2125,7 @@ function respondToPlatformSessionRequest(response = {}) {
   if (!sent) throw new Error("连接恢复中，确认尚未提交。");
 }
 
-async function openPlatformSessionLink(href) {
+async function openPlatformSessionLink(href, sourceFile = null) {
   const value = String(href || "").trim();
   if (!value) return;
   if (/^https?:\/\//i.test(value)) {
@@ -2130,10 +2133,39 @@ async function openPlatformSessionLink(href) {
     return;
   }
   let localPath = value;
-  if (/^\.\.?\//.test(value) && String(activeSessionParams.cwd || "").startsWith("/")) {
+  const sourcePath = String(sourceFile?.path || "");
+  if (!pathLikeAbsoluteUrl(value) && sourcePath.startsWith("/")) {
+    localPath = decodeURIComponent(new URL(value, `file://${sourcePath}`).pathname);
+  } else if (/^\.\.?\//.test(value) && String(activeSessionParams.cwd || "").startsWith("/")) {
     localPath = decodeURIComponent(new URL(value, `file://${String(activeSessionParams.cwd).replace(/\/$/, "")}/`).pathname);
   }
   await openPlatformLocalFile(localPath);
+}
+
+function pathLikeAbsoluteUrl(value) {
+  return String(value || "").startsWith("/") || /^[a-z][a-z\d+.-]*:/i.test(String(value || ""));
+}
+
+async function savePlatformMarkdownDocument(change = {}) {
+  const file = change.file || {};
+  const response = await fetch("/api/local-markdown", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      path: file.path,
+      content: String(change.content ?? ""),
+      version: change.version || file.version || "",
+    }),
+  });
+  const preview = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(preview.error || "Markdown could not be saved.");
+    error.code = preview.code || null;
+    throw error;
+  }
+  platformSessionDocumentPreview = preview;
+  schedulePlatformSessionWorkspaceRender();
+  return { file: preview };
 }
 
 async function openPlatformLocalFile(filePath, attachment = null) {

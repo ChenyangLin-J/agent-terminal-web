@@ -27,11 +27,15 @@ test("the desktop and Pad Session switcher collapses and exposes contextual acti
   assert.match(entry, /<SessionWorkspace/);
   assert.match(entry, /window\.AgentSessionWorkspace = \{ render: renderWorkspace, unmount \}/);
   assert.match(entry, /onUploadAttachments: \(files\)/);
+  assert.match(entry, /documentResourceUrl: agentDocumentResourceUrl/);
+  assert.match(entry, /onSaveDocument: \(change\)/);
   assert.match(app, /const SESSION_SWITCHER_COLLAPSED_STORE_KEY/);
   assert.match(app, /const PLATFORM_SESSION_CANARY_STORE_KEY/);
   assert.match(app, /function platformSessionWorkspaceSnapshot\(\)/);
   assert.match(app, /function uploadPlatformSessionAttachments\(files\)/);
   assert.match(app, /function openPlatformLocalFile\(filePath, attachment = null\)/);
+  assert.match(app, /function savePlatformMarkdownDocument\(change = \{\}\)/);
+  assert.match(server, /app\.post\("\/api\/local-markdown"/);
   assert.match(app, /return stored === null \? false : stored !== "0"/);
   assert.match(app, /function setSessionSwitcherCollapsed\(collapsed/);
   assert.match(app, /window\.AgentSessionList\?\.render\(sessionSwitcherCore/);

@@ -76,6 +76,7 @@ test("the authenticated local-link route safely opens workspace files", async (t
   const taskFile = path.join(vaultRoot, "Work", "Tasks.md");
   const projectRoot = path.join(workspaceRoot, "project");
   const textFile = path.join(projectRoot, "app.js");
+  const markdownFile = path.join(projectRoot, "notes.md");
   const htmlFile = path.join(projectRoot, "preview.html");
   const imageFile = path.join(projectRoot, "image.png");
   const binaryFile = path.join(projectRoot, "archive.bin");
@@ -85,6 +86,7 @@ test("the authenticated local-link route safely opens workspace files", async (t
   await fs.mkdir(codexHome, { recursive: true });
   await fs.writeFile(taskFile, "# Tasks\n");
   await fs.writeFile(textFile, 'const safe = true;\n<script>alert("x")</script>\nreturn safe;\n');
+  await fs.writeFile(markdownFile, "# Initial\n");
   await fs.writeFile(htmlFile, '<h1>Preview</h1><script>globalThis.bad = true</script>\n');
   await fs.writeFile(imageFile, Buffer.from("89504e470d0a1a0a", "hex"));
   await fs.writeFile(binaryFile, Buffer.from([0, 1, 2, 3]));
@@ -158,6 +160,29 @@ test("the authenticated local-link route safely opens workspace files", async (t
   assert.equal(codePayload.line, 2);
   assert.equal(codePayload.previewable, true);
   assert.match(codePayload.content, /const safe = true/);
+
+  const markdownPreview = await fetch(
+    `http://127.0.0.1:${agentPort}/api/local-file-preview?path=${encodeURIComponent(markdownFile)}`,
+  ).then((response) => response.json());
+  assert.equal(markdownPreview.format, "markdown");
+  assert.match(markdownPreview.version, /^sha256:/);
+  const markdownSaveResponse = await fetch(`http://127.0.0.1:${agentPort}/api/local-markdown`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path: markdownFile, version: markdownPreview.version, content: "# Saved\n" }),
+  });
+  const markdownSave = await markdownSaveResponse.json();
+  assert.equal(markdownSaveResponse.status, 200);
+  assert.equal(markdownSave.content, "# Saved\n");
+  assert.notEqual(markdownSave.version, markdownPreview.version);
+  const markdownConflictResponse = await fetch(`http://127.0.0.1:${agentPort}/api/local-markdown`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path: markdownFile, version: markdownPreview.version, content: "# Overwrite\n" }),
+  });
+  assert.equal(markdownConflictResponse.status, 409);
+  assert.equal((await markdownConflictResponse.json()).code, "DOCUMENT_VERSION_CONFLICT");
+  assert.equal(await fs.readFile(markdownFile, "utf8"), "# Saved\n");
 
   const imageDocumentPreview = await fetch(
     `http://127.0.0.1:${agentPort}/api/local-file-preview?path=${encodeURIComponent(imageFile)}`,

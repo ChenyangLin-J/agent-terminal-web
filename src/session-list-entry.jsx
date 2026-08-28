@@ -21,6 +21,18 @@ function requestWorkspaceAction(type, payload = {}) {
   });
 }
 
+function agentDocumentResourceUrl({ file = {}, href = "" } = {}) {
+  const reference = String(href || "").trim();
+  const sourcePath = String(file.path || "").trim();
+  if (!reference || !sourcePath || reference.startsWith("#") || /^(?:https?:|data:|blob:)/i.test(reference)) return reference;
+  try {
+    const resolved = new URL(reference, `file://${sourcePath}`).pathname;
+    return `/open/local?path=${encodeURIComponent(decodeURIComponent(resolved))}`;
+  } catch {
+    return reference;
+  }
+}
+
 function HostFilters({ hosts = [], selectedId = "all" }) {
   if (hosts.length < 2) return null;
   return (
@@ -110,6 +122,7 @@ function SharedSessionWorkspace({ snapshot }) {
   return (
     <SessionWorkspace
       actions={{
+        documentResourceUrl: agentDocumentResourceUrl,
         onBack: () => requestWorkspaceAction("back"),
         onCloseDocument: () => requestWorkspaceAction("close-document"),
         onDraftChange: (draft) => requestWorkspaceAction("draft-change", { draft }),
@@ -121,8 +134,9 @@ function SharedSessionWorkspace({ snapshot }) {
         onLoadEarlier: () => requestWorkspaceAction("load-earlier"),
         onOpenAttachment: (attachment, message) => requestWorkspaceAction("open-attachment", { attachment, message }),
         onOpenDocumentExternal: (file) => requestWorkspaceAction("open-document-external", { file }),
-        onOpenLink: (href) => requestWorkspaceAction("open-link", { href }),
+        onOpenLink: (href, sourceFile) => requestWorkspaceAction("open-link", { href, sourceFile }),
         onRespondToRequest: (response) => requestWorkspaceAction("respond-request", { response }),
+        onSaveDocument: (change) => requestWorkspaceAction("save-document", { change }),
         onSubmit: (submission) => requestWorkspaceAction("submit", { submission }),
         onUploadAttachments: (files) => requestWorkspaceAction("upload-attachments", { files }),
       }}

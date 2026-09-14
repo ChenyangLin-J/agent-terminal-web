@@ -66,8 +66,8 @@ test("worker reads only user and final-answer events after its watermark", () =>
   assert.match(prompt, /feature requests, acceptance criteria/);
   assert.match(prompt, /current-turn or follow-up requirements/);
   assert.match(prompt, /different future task in the same repository/);
-  assert.match(prompt, /always require review/);
-  assert.match(prompt, /Personal memories, project rules, and Skills are proposals only/);
+  assert.match(prompt, /personal memories may be applied automatically/);
+  assert.match(prompt, /Project rules and Skills always require review/);
   assert.match(prompt, /existing first-level directory directly under the workspace root/);
   assert.match(prompt, /local calibration examples/);
   assert.match(prompt, /Home Session 标题保持一致/);

@@ -44,7 +44,7 @@ test("Home capture prompt keeps tasks in Home and verifies exact evidence", () =
     }],
   });
   assert.match(prompt, /A task remains a Home task/);
-  assert.match(prompt, /requires user approval/);
+  assert.match(prompt, /may be applied automatically/);
   assert.match(prompt, /pending-tibetan-one/);
   assert.match(prompt, /正在长期学习藏语/);
   assert.match(prompt, /mergePendingId/);

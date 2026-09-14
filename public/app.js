@@ -229,7 +229,7 @@ const APP_COMMANDS = [
   { name: "/rename", description: "重命名当前 Session", requiresArgument: true },
   { name: "/compact", description: "压缩上下文，释放容量" },
   { name: "/copy", description: "复制最近一次完整回答", clientOnly: true },
-  { name: "/memories", description: "查看个人记忆、项目规则与审批记录", clientOnly: true },
+  { name: "/memories", description: "查看个人记忆、项目规则与变更记录", clientOnly: true },
   { name: "/diff", description: "查看工作区未提交修改" },
   { name: "/review", description: "Review 当前未提交修改" },
   { name: "/mcp", description: "查看已连接的 MCP Server" },

@@ -32,7 +32,7 @@ test("Codex memory status reflects config and generated files", async (t) => {
   assert.equal(status.documents.detail.available, false);
 });
 
-test("all automatic personal-memory proposals remain pending until approval", async (t) => {
+test("low-risk personal memories apply automatically while risky changes stay pending", async (t) => {
   const codexHome = await temporaryCodexHome(t);
   await fs.mkdir(path.join(codexHome, "personal-memories"), { recursive: true });
   await fs.writeFile(
@@ -83,7 +83,27 @@ test("all automatic personal-memory proposals remain pending until approval", as
     ],
     source,
   );
-  assert.deepEqual(created.map((item) => item.status), ["pending", "pending"]);
+  assert.deepEqual(created.map((item) => item.status), ["confirmed", "pending"]);
+
+  const [automaticUpdate] = await applyPersonalMemoryProposals(
+    codexHome,
+    [
+      {
+        action: "update",
+        targetId: "global-answer-style",
+        scope: "global",
+        category: "交流偏好",
+        text: "喜欢具体、有依据并分析利弊的回答。",
+        confidence: 0.92,
+        explicit: true,
+        conflict: false,
+        sensitive: false,
+        evidenceQuote: "希望分析利弊",
+      },
+    ],
+    source,
+  );
+  assert.deepEqual(automaticUpdate, { action: "updated", id: "global-answer-style", status: "confirmed" });
 
   const [pendingUpdate] = await applyPersonalMemoryProposals(
     codexHome,
@@ -93,7 +113,7 @@ test("all automatic personal-memory proposals remain pending until approval", as
         targetId: "global-answer-style",
         scope: "global",
         category: "交流偏好",
-        text: "喜欢具体、有依据并分析利弊的回答。",
+        text: "喜欢先给结论，再说明依据和利弊。",
         confidence: 0.8,
         explicit: true,
         conflict: true,
@@ -111,7 +131,7 @@ test("all automatic personal-memory proposals remain pending until approval", as
       targetId: "global-answer-style",
       scope: "global",
       category: "交流偏好",
-      text: "喜欢具体、有依据并分析利弊的回答。",
+      text: "喜欢先给结论，再说明依据和利弊。",
       confidence: 0.8,
       explicit: true,
       conflict: true,
@@ -142,10 +162,10 @@ test("all automatic personal-memory proposals remain pending until approval", as
 
   await updatePersonalMemoryEntry(codexHome, pendingUpdate.id, { status: "confirmed" });
   const view = await readPersonalMemoryView(codexHome, { view: "overview" });
-  assert.match(view.entries.find((entry) => entry.id === "global-answer-style").text, /分析利弊/);
+  assert.match(view.entries.find((entry) => entry.id === "global-answer-style").text, /先给结论/);
   assert.equal(view.entries.find((entry) => entry.id === "global-answer-style").memoryLocation, "Core");
-  assert.deepEqual(view.documents.map((document) => document.fileName), ["Core.md", "Now.md"]);
-  assert.equal(view.counts.pending, 3);
+  assert.deepEqual(view.documents.map((document) => document.fileName), ["Core.md", "Now.md", "Learning-and-Information.md"]);
+  assert.equal(view.counts.pending, 2);
 
   const audit = await fs.readFile(path.join(codexHome, "personal-memories", "history.jsonl"), "utf8");
   assert.match(audit, /approve-update/);
@@ -244,7 +264,7 @@ test("Agent Web exposes memory review views and authenticated APIs", async () =>
   assert.match(page, /id="app-session-memories"/);
   assert.match(page, /id="memory-project-routing"/);
   assert.doesNotMatch(page, /id="open-memories" class="hidden"/);
-  assert.match(page, /Memory System · 审批后写入/);
+  assert.match(page, /Memory System · 自动沉淀/);
   assert.match(page, /data-memory-trigger-status/);
   assert.match(page, /data-memory-view="overview"/);
   assert.match(page, /data-memory-view="detail"/);
@@ -260,7 +280,7 @@ test("Agent Web exposes memory review views and authenticated APIs", async () =>
   assert.match(memoryUi, /待确认 \$\{pendingCount\}/);
   assert.match(memoryUi, /onProjectChange/);
   assert.match(memoryUi, /默认读取 Core 与 Now/);
-  assert.match(memoryUi, /待审批变更置顶/);
+  assert.match(memoryUi, /待确认变更置顶/);
   assert.match(memoryUi, /审批反馈/);
   assert.match(memoryUi, /今天模型整理/);
   assert.match(memoryUi, /Turn 完成 1 分钟后整理/);
@@ -285,7 +305,7 @@ test("Agent Web exposes memory review views and authenticated APIs", async () =>
   assert.match(styles, /\.memory-markdown-file/);
   assert.match(page, /id="memory-context">Core、Now 与按需 Topics/);
   assert.match(app, /name: "\/memories"/);
-  assert.match(app, /查看个人记忆、项目规则与审批记录/);
+  assert.match(app, /查看个人记忆、项目规则与变更记录/);
   assert.match(app, /AgentMemories\?\.open/);
   assert.match(app, /type: "set-memory-projects"/);
   assert.match(styles, /\.memory-dialog/);

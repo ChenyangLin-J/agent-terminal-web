@@ -142,7 +142,7 @@
         : runtime.status === "running"
           ? { key: "working", text: "整理中", title: "个人记忆正在后台自动整理" }
           : runtime.initializedAt
-            ? { key: "ready", text: "自动检查", title: "后台自动提取候选，审批后才会写入；点击管理和追溯" }
+            ? { key: "ready", text: "自动整理", title: "后台自动沉淀明确的个人记忆；点击管理和追溯" }
             : { key: "off", text: "未启动", title: "个人记忆后台尚未启动" };
     for (const button of triggerButtons) {
       button.dataset.memoryState = state.key;
@@ -160,7 +160,7 @@
     const labels = {
       overview: "Core、Now 与 Topics 文档",
       detail: "各项目 AGENTS.md",
-      changes: "待审批置顶 · 全部可追溯",
+      changes: "待确认置顶 · 自动变更可追溯",
     };
     contextElement.textContent = labels[activeView] || "个人记忆";
   }
@@ -244,7 +244,7 @@
     } else {
       const knowledgeChanges = data.knowledge?.changes || [];
       if (knowledgeChanges.length) fragment.append(renderKnowledgeChanges(knowledgeChanges));
-      else fragment.append(message("还没有记忆、项目规则或 Skill 的审批记录。", "empty"));
+      else fragment.append(message("还没有记忆、项目规则或 Skill 的变更记录。", "empty"));
     }
     contentElement.replaceChildren(fragment);
   }
@@ -582,9 +582,9 @@
   function viewNote(view) {
     const note = documentElement("aside", "memory-note");
     const copy = {
-      overview: "这里按 Markdown 文档展示 Obsidian 中的 Core、Now 与 Topics。后台只生成候选，审批后才会写入。",
+      overview: "这里按 Markdown 文档展示 Obsidian 中的 Core、Now 与 Topics。明确、低风险的个人记忆会自动沉淀；其他候选等待确认。",
       detail: "这里直接展示 workspace 一级项目目录中的 AGENTS.md；项目事实和产品需求仍应留在项目文档、代码或测试中。",
-      changes: "待审批变更置顶，已处理记录接在后面；每条都保留原因与来源证据，并可在安全时撤回。",
+      changes: "待确认变更置顶，自动应用与已处理记录接在后面；每条都保留原因与来源证据，并可在安全时撤回。",
     };
     note.textContent = copy[view] || "";
     return note;

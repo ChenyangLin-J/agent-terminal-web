@@ -30,10 +30,11 @@ The UI distinguishes checks from model extraction runs. A check may scan every e
 
 The worker reads the Session's persisted semantic project set. Manual selections are authoritative; automatic selections are a strong hint that the fresh user transcript must still support. Separate durable facts may be written to separate projects when a Session uses multiple projects.
 
-- Every automatically extracted create, update, or retirement proposal remains pending until the user approves it.
-- Confidence, sensitivity, and conflict still affect the explanation and warning level, but never bypass approval.
+- Explicit, high-confidence, non-sensitive, non-conflicting personal-memory additions and updates are applied automatically and remain visible in the audit feed with revert support.
+- Sensitive, uncertain, conflicting, or weakly inferred personal memories remain pending. Retirement proposals also remain pending because they remove established context.
 - Direct Obsidian edits and changes explicitly requested by the user are user actions rather than automatic extraction; they may be applied immediately and remain audited.
-- Update and retirement proposals leave the confirmed original untouched until approved.
+- Pending update and retirement proposals leave the confirmed original untouched until approved.
+- Project-rule and Skill candidates always remain pending.
 - Deleted or retired content is tombstoned to prevent immediate recreation.
 - One-off tasks, reminders, deadlines, transient status, and assistant-only statements are not memory.
 

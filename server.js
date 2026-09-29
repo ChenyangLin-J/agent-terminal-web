@@ -224,6 +224,7 @@ const SHARED_APP_SERVER_ENABLED = process.env.AGENT_SHARED_APP_SERVER !== "0";
 const PLATFORM_KERNEL_MODE = String(process.env.AGENT_PLATFORM_KERNEL || "").trim().toLowerCase();
 const PLATFORM_KERNEL_NEW_SESSIONS = ["1", "true", "new", "all"].includes(PLATFORM_KERNEL_MODE);
 const PLATFORM_KERNEL_ALL = PLATFORM_KERNEL_MODE === "all";
+const PLATFORM_KERNEL_FORCE_LEGACY = ["legacy", "off", "0", "false"].includes(PLATFORM_KERNEL_MODE);
 const PLATFORM_BINDINGS_FILE = path.join(
   CODEX_HOME,
   "agent-web-platform-bindings.json",
@@ -2299,6 +2300,17 @@ function sharedPlatformKernel(agentHost) {
   return kernel;
 }
 
+function platformKernelEnabledFor(agentHost, restored = {}) {
+  if (PLATFORM_KERNEL_FORCE_LEGACY) return false;
+  if (!SHARED_APP_SERVER_ENABLED) return false;
+  if (!agentHost || agentHost.type === "ssh") return false;
+  return (
+    restored.runtimeKernel === "platform" ||
+    PLATFORM_KERNEL_ALL ||
+    (PLATFORM_KERNEL_NEW_SESSIONS && !restored.id)
+  );
+}
+
 function createAgentAppServerClient(
   cwd,
   webSessionId,
@@ -2560,10 +2572,7 @@ function createAppServerSession(cwd, launch, restored = {}) {
     agentHost.type === "local"
       ? initialSessionMemoryRouting(launch.sessionId, restored)
       : { mode: "auto", projects: [], source: "global" };
-  const usePlatformKernel =
-    restored.runtimeKernel === "platform" ||
-    PLATFORM_KERNEL_ALL ||
-    (PLATFORM_KERNEL_NEW_SESSIONS && !restored.id);
+  const usePlatformKernel = platformKernelEnabledFor(agentHost, restored);
   const appServer = createAgentAppServerClient(cwd, id, undefined, agentHost, {
     runtimeKernel: usePlatformKernel ? "platform" : "legacy",
   });
@@ -2650,6 +2659,7 @@ function createAppServerSession(cwd, launch, restored = {}) {
     codexSessionId: session.sessionId,
     mode: session.mode,
     transport: session.transport,
+    runtimeKernel: session.runtimeKernel,
     project: session.project,
     restored: Boolean(launch.sessionId),
   });
@@ -6955,6 +6965,7 @@ function publicSession(session) {
     args: session.args,
     transport: session.transport || "terminal",
     access: normalizeAccessMode(session.access),
+    runtimeKernel: session.runtimeKernel === "platform" ? "platform" : "legacy",
     purpose: normalizeSessionPurpose(session.purpose),
     ready: session.ready !== false,
     suspended: Boolean(session.suspended),

@@ -12,6 +12,11 @@ import { WebSocketServer } from "ws";
 import {
   CodexAppServerClient,
 } from "./lib/codex-app-server-client.js";
+import {
+  PlatformAppServerClient,
+  jsonFileBindingStore,
+  platformKernelFor,
+} from "./lib/platform-app-server-client.js";
 import { AgentHostAppServerPool } from "./lib/agent-host-app-server.js";
 import {
   agentHostProject,
@@ -216,6 +221,13 @@ const MAX_APP_TRANSCRIPT_OUTPUT = 80_000;
 const WS_HEARTBEAT_MS = Number(process.env.WS_HEARTBEAT_MS || 25_000);
 const USE_TMUX_SESSIONS = process.env.AGENT_USE_TMUX === "1";
 const SHARED_APP_SERVER_ENABLED = process.env.AGENT_SHARED_APP_SERVER !== "0";
+const PLATFORM_KERNEL_MODE = String(process.env.AGENT_PLATFORM_KERNEL || "").trim().toLowerCase();
+const PLATFORM_KERNEL_NEW_SESSIONS = ["1", "true", "new", "all"].includes(PLATFORM_KERNEL_MODE);
+const PLATFORM_KERNEL_ALL = PLATFORM_KERNEL_MODE === "all";
+const PLATFORM_BINDINGS_FILE = path.join(
+  CODEX_HOME,
+  "agent-web-platform-bindings.json",
+);
 const CODEX_NOTIFY_SCRIPT = path.join(__dirname, "scripts", "codex-notify.js");
 const CODEX_GUARD_BIN = path.join(__dirname, "scripts", "codex-guard-bin");
 const AGENT_NOTIFY_URL = process.env.AGENT_NOTIFY_URL || `http://${HOST}:${PORT}/internal/codex-notify`;
@@ -1969,7 +1981,10 @@ server.listen(PORT, HOST, () => {
   console.log(`Shared App Server: ${SHARED_APP_SERVER_ENABLED ? "enabled" : "disabled"}`);
 });
 
-process.once("exit", () => agentHostAppServerPool?.close());
+process.once("exit", () => {
+  agentHostAppServerPool?.close();
+  if (platformKernelPool) for (const kernel of platformKernelPool.values()) kernel.close();
+});
 
 function isDirectLoopbackRequest(req) {
   const address = req.socket.remoteAddress || "";
@@ -2268,12 +2283,41 @@ function sharedAgentAppServerConnection(agentHost = PERSONAL_AGENT_HOST) {
   return connection;
 }
 
+let platformKernelPool = null;
+
+function sharedPlatformKernel(agentHost) {
+  platformKernelPool ||= new Map();
+  let kernel = platformKernelPool.get(agentHost.id);
+  if (!kernel) {
+    kernel = platformKernelFor(sharedAgentAppServerConnection(agentHost), {
+      bindingStore: jsonFileBindingStore(PLATFORM_BINDINGS_FILE),
+      runtimeLeaseMs: SESSION_TTL_MS,
+      detachedLeaseMs: SESSION_TTL_MS,
+    });
+    platformKernelPool.set(agentHost.id, kernel);
+  }
+  return kernel;
+}
+
 function createAgentAppServerClient(
   cwd,
   webSessionId,
   clientInfo = undefined,
   agentHost = PERSONAL_AGENT_HOST,
+  { runtimeKernel = "legacy" } = {},
 ) {
+  if (
+    runtimeKernel === "platform" &&
+    SHARED_APP_SERVER_ENABLED &&
+    agentHost.type !== "ssh"
+  ) {
+    return new PlatformAppServerClient({
+      sessionId: webSessionId,
+      cwd,
+      connection: sharedAgentAppServerConnection(agentHost),
+      kernel: sharedPlatformKernel(agentHost),
+    });
+  }
   if (SHARED_APP_SERVER_ENABLED) {
     return new CodexAppServerClient({
       cwd,
@@ -2516,7 +2560,13 @@ function createAppServerSession(cwd, launch, restored = {}) {
     agentHost.type === "local"
       ? initialSessionMemoryRouting(launch.sessionId, restored)
       : { mode: "auto", projects: [], source: "global" };
-  const appServer = createAgentAppServerClient(cwd, id, undefined, agentHost);
+  const usePlatformKernel =
+    restored.runtimeKernel === "platform" ||
+    PLATFORM_KERNEL_ALL ||
+    (PLATFORM_KERNEL_NEW_SESSIONS && !restored.id);
+  const appServer = createAgentAppServerClient(cwd, id, undefined, agentHost, {
+    runtimeKernel: usePlatformKernel ? "platform" : "legacy",
+  });
   const session = {
     id,
     hostId: agentHost.id,
@@ -2528,6 +2578,7 @@ function createAppServerSession(cwd, launch, restored = {}) {
     args: ["app-server"],
     transport: APP_SERVER_TRANSPORT,
     access: normalizeAccessMode(launch.access),
+    runtimeKernel: usePlatformKernel ? "platform" : "legacy",
     purpose: normalizeSessionPurpose(launch.purpose || restored.purpose),
     thinkSkillActivated: Boolean(restored.thinkSkillActivated),
     ready: false,
@@ -2805,6 +2856,7 @@ function restoreTmuxSession(id) {
         memoryProjectMode: record.memoryProjectMode,
         memoryProjects: record.memoryProjects,
         memoryProjectSource: record.memoryProjectSource,
+        runtimeKernel: record.runtimeKernel,
         turnState: interruptedTurnStateAfterProcessLoss(record.turnState, record.lastActivityAt),
       },
     );
@@ -2848,6 +2900,7 @@ function restoreTmuxSession(id) {
         memoryProjectMode: record.memoryProjectMode,
         memoryProjects: record.memoryProjects,
         memoryProjectSource: record.memoryProjectSource,
+        runtimeKernel: record.runtimeKernel,
         turnState: interruptedTurnStateAfterProcessLoss(record.turnState, record.lastActivityAt),
       },
     );
@@ -3633,6 +3686,7 @@ function renewSessionRetention(session) {
 
 function renewAppServerRuntimeLease(session) {
   if (session?.transport !== APP_SERVER_TRANSPORT || session.exited || session.released) return;
+  session.appServer?.renewRuntimeLease?.();
   session.lastMeaningfulActivityAt = new Date().toISOString();
   scheduleAppServerRuntimeLease(session, { reset: true });
 }
@@ -7097,6 +7151,7 @@ function persistWebSession(session) {
     args: session.args,
     transport: session.transport || "terminal",
     access: normalizeAccessMode(session.access),
+    runtimeKernel: session.runtimeKernel === "platform" ? "platform" : "legacy",
     purpose: normalizeSessionPurpose(session.purpose),
     thinkSkillActivated: Boolean(session.thinkSkillActivated),
     appModel: String(session.appModel || ""),

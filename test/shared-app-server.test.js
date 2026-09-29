@@ -10,11 +10,17 @@ test("Agent Web defaults to one on-demand App Server connection", () => {
   assert.match(serverSource, /function sharedAgentAppServerConnection\(agentHost = PERSONAL_AGENT_HOST\)/);
   assert.match(serverSource, /sharedAgentAppServerPool\(\)\.connectionFor\(agentHost\)/);
   assert.match(serverSource, /connection: sharedAgentAppServerConnection\(agentHost\)/);
-  assert.match(serverSource, /process\.once\("exit", \(\) => agentHostAppServerPool\?\.close\(\)\)/);
+  assert.match(
+    serverSource,
+    /process\.once\("exit", \(\) => \{\s*agentHostAppServerPool\?\.close\(\);/,
+  );
 });
 
 test("main sessions, side chats, and catalog metadata reuse the shared connection", () => {
-  assert.match(serverSource, /const appServer = createAgentAppServerClient\(cwd, id, undefined, agentHost\)/);
+  assert.match(
+    serverSource,
+    /const appServer = createAgentAppServerClient\(cwd, id, undefined, agentHost, \{\s*runtimeKernel: usePlatformKernel \? "platform" : "legacy",\s*\}\)/,
+  );
   assert.match(serverSource, /const client = createAgentAppServerClient\(\s*session\.cwd,/);
   assert.match(serverSource, /resolveAgentHost\(AGENT_HOSTS, session\.hostId\) \|\| PERSONAL_AGENT_HOST/);
   assert.match(

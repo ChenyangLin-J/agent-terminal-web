@@ -102,6 +102,7 @@ import {
 import { createAmapMcpProxy } from "./lib/amap-mcp-proxy.js";
 import { createPlaywrightMcpProxy } from "./lib/playwright-mcp-proxy.js";
 import { buildAppServerTurnAdditionalContext } from "./lib/app-server-turn-context.js";
+import { fileAttachmentPromptText, isAttachmentPromptText } from "./lib/attachment-prompt.js";
 import {
   normalizeRemoteTurnCompletion,
   readRemoteNotificationTokens,
@@ -4466,6 +4467,10 @@ function requestedAppSkillNames(text, supplied) {
 function appServerPromptInput(text, skills, attachments = []) {
   const input = skills.map((skill) => ({ type: "skill", name: skill.name, path: skill.path }));
   if (String(text || "").trim()) input.push({ type: "text", text });
+  const fileText = fileAttachmentPromptText(
+    attachments.filter((attachment) => !isAudioAttachment(attachment) && !attachment.mime.startsWith("image/")),
+  );
+  if (fileText) input.push({ type: "text", text: fileText });
   for (const attachment of attachments) {
     input.push(
       isAudioAttachment(attachment)
@@ -6080,8 +6085,9 @@ function appServerUserMessageContent(session, content) {
   const attachments = [];
   for (const entry of content) {
     if (typeof entry === "string") text.push(entry);
-    else if (entry?.type === "text" && entry.text) text.push(entry.text);
-    else if (entry?.type === "image" && entry.url) text.push(`图片：${entry.url}`);
+    else if (entry?.type === "text" && entry.text) {
+      if (!isAttachmentPromptText(entry.text)) text.push(entry.text);
+    } else if (entry?.type === "image" && entry.url) text.push(`图片：${entry.url}`);
     else if (["localImage", "localAudio", "mention"].includes(entry?.type) && entry.path) {
       attachments.push(appServerMessageAttachment(session, entry));
     } else if (entry?.type === "skill") text.push(`Skill：${entry.name || entry.path || ""}`);

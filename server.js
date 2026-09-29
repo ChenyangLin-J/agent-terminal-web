@@ -3013,6 +3013,7 @@ function listDetachedSessions() {
       args: Array.isArray(record.args) ? record.args : [],
       transport,
       access: normalizeAccessMode(record.access),
+      runtimeKernel: platformKernelEnabledFor(agentHost, record) ? "platform" : "legacy",
       purpose: normalizeSessionPurpose(record.purpose),
       ready: transport === APP_SERVER_TRANSPORT && !explicitlyReleased,
       suspended: transport === APP_SERVER_TRANSPORT,

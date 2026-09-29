@@ -8,6 +8,26 @@
 - Preserve unrelated work in the shared worktree. Stage and commit only the
   changes owned by the current task.
 
+## Deployment
+
+- Production runs as a user systemd service on the VPS. Its unit files and
+  drop-ins are versioned in `~/workspace/server-config/systemd/user/`; install
+  them with `./scripts/validate.sh` and `./scripts/install-user-units.sh`
+  (which already reloads systemd). Do not edit `~/.config/systemd/user` alone.
+- Update code with `git pull --ff-only` and `npm ci`. Restart with
+  `systemctl --user restart agent-terminal-web.service` from a terminal
+  outside Agent Web, and only when no Turn is running.
+
+## Platform kernel switch
+
+- `AGENT_PLATFORM_KERNEL` chooses the Session kernel: `new` puts new web
+  Sessions on the Platform kernel, `all` puts every Session on it, and
+  `legacy` forces every Session back to the old kernel, overriding the
+  persisted `runtimeKernel`. Removing the variable is not a rollback: Sessions
+  already marked `platform` keep using Platform.
+- SSH hosts and `AGENT_SHARED_APP_SERVER=0` always use the old kernel. The
+  persisted and reported `runtimeKernel` must be the kernel actually in use.
+
 ## Shared MCP architecture
 
 - A local MCP provider is a shared capability, not a per-Session process.

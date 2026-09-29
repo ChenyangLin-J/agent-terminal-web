@@ -123,6 +123,7 @@ input.on("line", (line) => {
   );
   const resumedActive = await resumedActiveClient.next(
     (message) => message.type === "status" && message.payload.ready,
+    8_000,
   );
   assert.equal(resumedActive.payload.turnState.active, true);
   assert.equal(resumedActive.payload.turnState.turnId, activeTurnId);

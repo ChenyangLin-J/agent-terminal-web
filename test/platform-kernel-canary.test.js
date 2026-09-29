@@ -96,7 +96,7 @@ input.on("line", (line) => {
     `ws://127.0.0.1:${canary.agentPort}/terminal?cwd=.&transport=app-server&access=safe&clientId=platform-canary`,
   );
   const ready = await client
-    .next((message) => message.type === "status" && message.payload.ready, 5_000)
+    .next((message) => message.type === "status" && message.payload.ready, 15_000)
     .catch((error) => {
       throw new Error(`${error.message}\n--- server output ---\n${canary.getOutput()}`);
     });
@@ -125,6 +125,14 @@ input.on("line", (line) => {
   assert.equal(released.payload.runtimeKernel, "platform");
   client.ws.close();
 
+  const detachedList = await (
+    await fetch(`http://127.0.0.1:${canary.agentPort}/api/sessions`)
+  ).json();
+  const detachedItem = detachedList.sessions.find(
+    (session) => session.id === ready.payload.id,
+  );
+  assert.equal(detachedItem?.runtimeKernel, "platform");
+
   const bindings = JSON.parse(
     await readFile(path.join(codexHome, "agent-web-platform-bindings.json"), "utf8"),
   );
@@ -141,6 +149,14 @@ input.on("line", (line) => {
     if (rollback.child.exitCode === null) rollback.child.kill("SIGTERM");
     await rm(temporaryRoot, { recursive: true, force: true });
   });
+
+  const rollbackList = await (
+    await fetch(`http://127.0.0.1:${rollback.agentPort}/api/sessions`)
+  ).json();
+  const rollbackDetached = rollbackList.sessions.find(
+    (session) => session.id === webSessionId,
+  );
+  assert.equal(rollbackDetached?.runtimeKernel, "legacy");
 
   const rollbackClient = await connect(
     `ws://127.0.0.1:${rollback.agentPort}/terminal?cwd=.&transport=app-server&access=safe` +

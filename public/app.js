@@ -334,6 +334,8 @@ let appTranscriptItems = [];
 let restoredAppTurnCount = 0;
 let restoredAppHistoryHasMore = false;
 let restoredAppHistoryLoading = false;
+let previewHistoryCursor = "";
+let previewHistoryExpanded = false;
 let appTranscriptInitialRestorePending = false;
 let appReadingPositionSaveTimer = null;
 let appTranscriptHasUnseenContent = false;
@@ -2758,6 +2760,8 @@ function openSessionPreview(params = {}) {
   restoredAppTurnCount = 0;
   restoredAppHistoryHasMore = false;
   restoredAppHistoryLoading = false;
+  previewHistoryCursor = "";
+  previewHistoryExpanded = false;
   appTranscriptInitialRestorePending = true;
   appTranscriptHasUnseenContent = false;
   appTranscriptSubmitFollowActive = false;
@@ -2866,6 +2870,8 @@ async function openSocket(params, options = {}) {
       historicalProcessLoads.clear();
     }
     restoredAppHistoryLoading = false;
+    previewHistoryCursor = "";
+    previewHistoryExpanded = false;
     appTranscriptInitialRestorePending = activeTransport === "app-server";
     appTranscriptHasUnseenContent = false;
     appTranscriptSubmitFollowActive = false;
@@ -6031,6 +6037,8 @@ function replaceAppTranscript(payload = {}) {
   restoredAppTurnCount = availableTurnCount;
   restoredAppHistoryHasMore = Boolean(payload.hasEarlierTurns);
   restoredAppHistoryLoading = Boolean(payload.loadingEarlier);
+  previewHistoryCursor = "";
+  previewHistoryExpanded = false;
   renderAppTranscript({
     follow: !prepended && (appTranscriptSubmitFollowActive || !replacingDiskPreview || wasAtBottom),
   });
@@ -6326,22 +6334,16 @@ function renderAppTranscript({ follow = false } = {}) {
           ? "仅查看 · 发送消息时恢复"
           : "正在连接 Session";
       banner.append(note);
-    } else if (restoredAppHistoryHasMore) {
+    }
+    if (restoredAppHistoryHasMore && (activeSessionPreviewOnly || appTranscriptSource === "app-server")) {
       const loadEarlier = document.createElement("button");
       loadEarlier.type = "button";
       loadEarlier.className = "app-history-load";
       loadEarlier.disabled = restoredAppHistoryLoading;
       loadEarlier.textContent = restoredAppHistoryLoading ? "正在加载…" : `加载更早 ${APP_INITIAL_TURN_LIMIT} 轮`;
-      loadEarlier.addEventListener("click", () => {
-        restoredAppHistoryLoading = true;
-        renderAppTranscript({ follow: false });
-        if (!send({ type: "load-app-history" })) {
-          restoredAppHistoryLoading = false;
-          renderAppTranscript({ follow: false });
-        }
-      });
+      loadEarlier.addEventListener("click", requestEarlierAppHistory);
       banner.append(loadEarlier);
-    } else {
+    } else if (appTranscriptSource === "app-server") {
       const note = document.createElement("span");
       note.textContent = "已到最早记录";
       banner.append(note);
@@ -6529,11 +6531,20 @@ async function loadSessionPreview(sessionId, requestSequence) {
     if (activeTransport === "terminal") {
       renderTerminalSessionPreview();
     } else if (appTranscriptSource !== "app-server") {
+      const keepEarlier = previewHistoryExpanded && appTranscriptSource === "live-preview";
+      if (!keepEarlier) previewHistoryCursor = String(data.conversation?.nextCursor || "");
       if (data.live && data.transcript && Array.isArray(data.transcript.items)) {
-        appTranscriptItems = data.transcript.items.map(normalizeClientTranscriptItem);
+        const freshItems = data.transcript.items.map(normalizeClientTranscriptItem);
+        if (keepEarlier) {
+          const merged = new Map(appTranscriptItems.map((item) => [item.id, item]));
+          for (const item of freshItems) merged.set(item.id, item);
+          appTranscriptItems = [...merged.values()];
+        } else {
+          appTranscriptItems = freshItems;
+        }
         appTranscriptSource = "live-preview";
-        restoredAppTurnCount = Number(data.transcript.restoredTurnCount || 0);
-        restoredAppHistoryHasMore = Boolean(data.transcript.hasEarlierTurns);
+        restoredAppTurnCount = new Set(appTranscriptItems.map((item) => item.turnId).filter(Boolean)).size;
+        if (!keepEarlier) restoredAppHistoryHasMore = Boolean(data.transcript.hasEarlierTurns && previewHistoryCursor);
         renderAppTranscript({ follow: false });
       } else {
         const diskItems = diskConversationItems(data.conversation);
@@ -6541,7 +6552,7 @@ async function loadSessionPreview(sessionId, requestSequence) {
           appTranscriptItems = diskItems;
           appTranscriptSource = data.live ? "live-preview" : "disk";
           restoredAppTurnCount = Array.isArray(data.conversation?.turns) ? data.conversation.turns.length : 0;
-          restoredAppHistoryHasMore = Boolean(data.conversation?.hasEarlier);
+          restoredAppHistoryHasMore = Boolean(data.conversation?.hasEarlier && previewHistoryCursor);
           renderAppTranscript({ follow: false });
         } else if (!appTranscriptItems.length) {
           renderAppTranscript({ follow: false });
@@ -6574,6 +6585,10 @@ function scheduleLiveSessionPreviewRefresh(sessionId) {
     return;
   }
   sessionPreviewRefreshTimer = window.setTimeout(() => {
+    if (restoredAppHistoryLoading) {
+      scheduleLiveSessionPreviewRefresh(sessionId);
+      return;
+    }
     sessionPreviewRefreshTimer = null;
     if (
       !activeSessionPreviewOnly ||
@@ -6599,12 +6614,13 @@ function stopLiveSessionPreviewRefresh() {
 function diskConversationItems(conversation = {}) {
   const items = [];
   for (const [turnIndex, turn] of (Array.isArray(conversation.turns) ? conversation.turns : []).entries()) {
-    const turnId = String(turn.id || `disk-turn-${turnIndex + 1}`);
+    const itemIdPrefix = String(turn.id || `disk-turn-${turnIndex + 1}`);
+    const turnId = String(turn.turnId || itemIdPrefix);
     const turnStartedAt = Date.parse(turn.startedAt || "");
     if (turn.user) {
       items.push(
         normalizeClientTranscriptItem({
-          id: `${turnId}-user`,
+          id: `${itemIdPrefix}-user`,
           type: "user",
           label: "你",
           text: turn.user,
@@ -6618,7 +6634,7 @@ function diskConversationItems(conversation = {}) {
     for (const [answerIndex, answer] of (Array.isArray(turn.assistant) ? turn.assistant : []).entries()) {
       items.push(
         normalizeClientTranscriptItem({
-          id: `${turnId}-assistant-${answerIndex + 1}`,
+          id: `${itemIdPrefix}-assistant-${answerIndex + 1}`,
           type: "assistant",
           label: "Codex",
           text: answer.text,
@@ -7335,7 +7351,63 @@ function handleAppTranscriptScroll() {
     appTranscriptHasUnseenContent = false;
     syncAppTranscriptLatestButton();
   }
+  if (
+    appServerView.scrollTop <= 120 &&
+    appServerView.scrollHeight > appServerView.clientHeight &&
+    restoredAppHistoryHasMore &&
+    !restoredAppHistoryLoading &&
+    (activeSessionPreviewOnly || appTranscriptSource === "app-server")
+  ) {
+    requestEarlierAppHistory();
+  }
   scheduleAppReadingPositionSave();
+}
+
+function requestEarlierAppHistory() {
+  if (!restoredAppHistoryHasMore || restoredAppHistoryLoading) return;
+  if (activeSessionPreviewOnly && appTranscriptSource !== "app-server") {
+    void loadEarlierPreviewHistory();
+    return;
+  }
+  if (appTranscriptSource !== "app-server" || !activeSessionReady) return;
+  restoredAppHistoryLoading = true;
+  renderAppTranscript({ follow: false });
+  if (!send({ type: "load-app-history" })) {
+    restoredAppHistoryLoading = false;
+    renderAppTranscript({ follow: false });
+  }
+}
+
+async function loadEarlierPreviewHistory() {
+  const sessionId = String(activeSessionParams.sessionId || "");
+  const cursor = previewHistoryCursor;
+  if (!sessionId || !cursor || restoredAppHistoryLoading) return;
+  restoredAppHistoryLoading = true;
+  renderAppTranscript({ follow: false });
+  try {
+    const url = new URL(`/api/session-preview/${encodeURIComponent(sessionId)}`, window.location.origin);
+    url.searchParams.set("before", cursor);
+    if (activeSessionParams.sourceSession) url.searchParams.set("sourceSession", activeSessionParams.sourceSession);
+    const response = await fetch(agentHostApiUrl(`${url.pathname}${url.search}`, activeSessionParams.host || activeAgentHostId));
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "更早记录暂时无法读取。");
+    if (!activeSessionPreviewOnly || activeSessionParams.sessionId !== sessionId || previewHistoryCursor !== cursor) return;
+    const conversation = data.conversation || {};
+    const existingIds = new Set(appTranscriptItems.map((item) => item.id));
+    const earlierItems = diskConversationItems(conversation).filter((item) => !existingIds.has(item.id));
+    appTranscriptItems = [...earlierItems, ...appTranscriptItems];
+    previewHistoryExpanded = true;
+    restoredAppTurnCount = new Set(appTranscriptItems.map((item) => item.turnId).filter(Boolean)).size;
+    previewHistoryCursor = String(conversation.nextCursor || "");
+    restoredAppHistoryHasMore = Boolean(conversation.hasEarlier && previewHistoryCursor);
+  } catch (error) {
+    setUploadStatus(error.message || "更早记录暂时无法读取。", { clear: true });
+  } finally {
+    if (activeSessionPreviewOnly && activeSessionParams.sessionId === sessionId) {
+      restoredAppHistoryLoading = false;
+      renderAppTranscript({ follow: false });
+    }
+  }
 }
 
 async function markCurrentSessionViewedOnExit({ beacon = false } = {}) {

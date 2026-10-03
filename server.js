@@ -1539,9 +1539,49 @@ app.get("/api/session-preview/:id", async (req, res) => {
     res.status(400).json({ error: "Invalid session id." });
     return;
   }
+  const historyCursor = String(req.query.before || "").trim();
+  if (historyCursor.length > 512) {
+    res.status(400).json({ error: "Invalid history cursor." });
+    return;
+  }
 
   try {
     const liveSource = liveSessionPreviewSource(req, agentHost);
+    if (historyCursor) {
+      let conversation;
+      if (liveSource) {
+        const page = await liveSource.appServer.listThreadTurns({
+          threadId: id,
+          limit: APP_HISTORY_PAGE_LIMIT,
+          cursor: historyCursor,
+          sortDirection: "desc",
+          itemsView: "full",
+        });
+        conversation = appServerConversationFromTurnPage(page);
+      } else if (agentHost.type !== "local") {
+        conversation = await withStandaloneAppServer(agentHost, (client) =>
+          readAppServerSessionConversation(client, id, { limit: APP_HISTORY_PAGE_LIMIT, cursor: historyCursor }),
+        );
+      } else {
+        if (!/^[1-9]\d*$/.test(historyCursor) || !Number.isSafeInteger(Number(historyCursor))) {
+          res.status(400).json({ error: "Invalid history cursor." });
+          return;
+        }
+        const file = await findCodexSessionFile(id);
+        if (!file) {
+          res.status(404).json({ error: "Session history is unavailable." });
+          return;
+        }
+        conversation = await extractSessionConversationFromJsonl(file, {
+          maxBytes: Number.MAX_SAFE_INTEGER,
+          limit: APP_HISTORY_PAGE_LIMIT,
+          offset: Number(historyCursor),
+        });
+      }
+      res.set("Cache-Control", "private, no-store");
+      res.json({ conversation });
+      return;
+    }
     if (liveSource) {
       try {
         const live = await readLiveSessionPreview(liveSource, id);
@@ -1585,7 +1625,10 @@ app.get("/api/session-preview/:id", async (req, res) => {
 
     const cached = readSessionPreviews(CODEX_SESSION_PREVIEWS_FILE)[id];
     const file = await findCodexSessionFile(id);
-    const conversation = file ? await extractSessionConversationFromJsonl(file, { limit: APP_INITIAL_TURN_LIMIT }) : null;
+    const conversation = file ? await extractSessionConversationFromJsonl(file, {
+      maxBytes: Number.MAX_SAFE_INTEGER,
+      limit: APP_INITIAL_TURN_LIMIT,
+    }) : null;
     const conversationPreview = sessionPreviewFromConversation(conversation);
     const extracted = newerSessionPreview(cached, conversationPreview) || (file ? await extractSessionPreviewFromJsonl(file) : null);
     if (!extracted && !conversation?.turns?.length) {

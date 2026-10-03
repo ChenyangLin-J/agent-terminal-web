@@ -39,7 +39,9 @@ test("App Server resume restores structured history without terminal replay", as
     app,
     /fetch\([\s\S]*agentHostApiUrl\([\s\S]*`\/api\/session-preview\/\$\{encodeURIComponent\(sessionId\)\}`/,
   );
-  assert.match(server, /extractSessionConversationFromJsonl\(file, \{ limit: APP_INITIAL_TURN_LIMIT \}\)/);
+  assert.match(server, /extractSessionConversationFromJsonl\(file, \{[\s\S]*limit: APP_INITIAL_TURN_LIMIT/);
+  assert.match(app, /function handleAppTranscriptScroll\(\)[\s\S]*requestEarlierAppHistory\(\)/);
+  assert.match(app, /function loadEarlierPreviewHistory\(\)/);
   assert.match(app, /function diskConversationItems\(conversation = \{\}\)/);
   assert.match(app, /`已从磁盘显示最近 \$\{restoredAppTurnCount\} 轮`/);
   assert.match(app, /if \(!allItems\.length && !activeSessionReady\) return;/);

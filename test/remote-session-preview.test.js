@@ -108,6 +108,22 @@ test("opening a company Session previews remote turns without creating a runtime
     }
     if (url.pathname === `/api/session-preview/${companyThreadId}`) {
       previewRequests += 1;
+      const before = url.searchParams.get("before");
+      if (before) {
+        await fulfillJson(route, {
+          conversation: {
+            turns: [{
+              id: before === "older-1" ? "turn-older-1" : "turn-older-2",
+              user: before === "older-1" ? "上一轮" : "最早一轮",
+              assistant: [],
+              startedAt: "2026-07-28T07:00:00.000Z",
+            }],
+            hasEarlier: before === "older-1",
+            nextCursor: before === "older-1" ? "older-2" : null,
+          },
+        });
+        return;
+      }
       await fulfillJson(route, {
         preview: {
           prompt: "检查公司项目",
@@ -129,7 +145,8 @@ test("opening a company Session previews remote turns without creating a runtime
               startedAt: "2026-07-28T08:00:00.000Z",
             },
           ],
-          hasEarlier: false,
+          hasEarlier: true,
+          nextCursor: "older-1",
         },
       });
       return;
@@ -150,6 +167,17 @@ test("opening a company Session previews remote turns without creating a runtime
   assert.equal(previewRequests, 1);
   assert.equal(webSocketsOpened, 0);
   assert.match(await page.locator("#connection").innerText(), /仅查看/);
+
+  await page.locator(".app-history-load").click();
+  await page.locator("#app-server-transcript").getByText("上一轮", { exact: true }).waitFor();
+  await page.locator("#app-server-view").evaluate((element) => {
+    element.style.height = "100px";
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await page.locator("#app-server-transcript").getByText("最早一轮", { exact: true }).waitFor();
+  assert.equal(previewRequests, 3);
+  assert.equal(webSocketsOpened, 0);
 });
 
 async function fulfillJson(route, body) {

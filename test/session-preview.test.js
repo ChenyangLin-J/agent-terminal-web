@@ -108,12 +108,38 @@ test("extracts recent user and assistant conversation turns directly from disk",
   const conversation = await extractSessionConversationFromJsonl(file, { limit: 10 });
   assert.equal(conversation.turns.length, 10);
   assert.equal(conversation.hasEarlier, true);
+  assert.equal(conversation.nextCursor, "10");
   assert.equal(conversation.turns[0].user, "request 3");
   assert.equal(conversation.turns[0].id, "019f0000-0000-7000-8000-000000000003");
   assert.deepEqual(
     conversation.turns.at(-1).assistant.map((item) => item.phase),
     ["commentary", "final_answer"],
   );
+
+  const earlier = await extractSessionConversationFromJsonl(file, { limit: 10, offset: 10 });
+  assert.deepEqual(earlier.turns.map((turn) => turn.user), ["request 1", "request 2"]);
+  assert.equal(earlier.hasEarlier, false);
+  assert.equal(earlier.nextCursor, null);
+});
+
+test("paginates rollouts that store user messages as response items", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "agent-response-item-history-"));
+  const file = path.join(directory, "rollout-session.jsonl");
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const records = [];
+  for (let index = 1; index <= 3; index += 1) {
+    records.push(message("user", `request ${index}`, `2026-07-17T00:0${index}:00.000Z`));
+    records.push(message("assistant", `answer ${index}`, `2026-07-17T00:0${index}:10.000Z`, "final_answer"));
+  }
+  await fs.writeFile(file, `${records.map(JSON.stringify).join("\n")}\n`);
+
+  const recent = await extractSessionConversationFromJsonl(file, { limit: 2 });
+  assert.deepEqual(recent.turns.map((turn) => turn.user), ["request 2", "request 3"]);
+  assert.equal(recent.nextCursor, "2");
+  const earlier = await extractSessionConversationFromJsonl(file, { limit: 2, offset: Number(recent.nextCursor) });
+  assert.deepEqual(earlier.turns.map((turn) => turn.user), ["request 1"]);
+  assert.deepEqual(earlier.turns[0].assistant.map((item) => item.text), ["answer 1"]);
+  assert.equal(earlier.hasEarlier, false);
 });
 
 test("extracts a subagent conversation from task metadata when its rollout has no user_message event", async (t) => {

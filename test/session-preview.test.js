@@ -8,6 +8,7 @@ import {
   appServerConversationFromTurnPage,
   extractSessionConversationFromJsonl,
   extractSessionPreviewFromJsonl,
+  extractSessionPreviewFromLines,
   extractSessionTokenUsageFromJsonl,
   readAppServerSessionConversation,
   readSessionPreviews,
@@ -141,6 +142,33 @@ test("paginates rollouts that store user messages as response items", async (t) 
   assert.deepEqual(earlier.turns.map((turn) => turn.user), ["request 1"]);
   assert.deepEqual(earlier.turns[0].assistant.map((item) => item.text), ["answer 1"]);
   assert.equal(earlier.hasEarlier, false);
+});
+
+test("does not expose injected AGENTS.md or environment context as user history", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "agent-injected-context-history-"));
+  const file = path.join(directory, "rollout-session.jsonl");
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const injected = message("user", "# AGENTS.md instructions for /workspace", "2026-10-03T13:00:00.000Z");
+  injected.payload.content.push({ type: "input_text", text: "<environment_context>private paths</environment_context>" });
+  injected.payload.internal_chat_message_metadata_passthrough = {
+    content_item_kinds: ["agents_md.instructions", "environments.environment_context"],
+  };
+  const mixed = message("user", "<environment_context>more private paths</environment_context>", "2026-10-03T13:00:01.000Z");
+  mixed.payload.content.push({ type: "input_text", text: "帮我看历史记录" });
+  mixed.payload.internal_chat_message_metadata_passthrough = {
+    content_item_kinds: ["environments.environment_context", "user.text"],
+  };
+  const answer = message("assistant", "查到了", "2026-10-03T13:00:02.000Z", "final_answer");
+  const lines = [injected, mixed, answer].map(JSON.stringify);
+  await fs.writeFile(file, `${lines.join("\n")}\n`);
+
+  const conversation = await extractSessionConversationFromJsonl(file);
+  assert.deepEqual(conversation.turns.map((turn) => turn.user), ["帮我看历史记录"]);
+  assert.equal(extractSessionPreviewFromLines(lines).prompt, "帮我看历史记录");
+
+  const injectionOnly = extractSessionPreviewFromLines([JSON.stringify(injected), JSON.stringify(answer)]);
+  assert.equal(injectionOnly.prompt, "");
 });
 
 test("extracts a subagent conversation from task metadata when its rollout has no user_message event", async (t) => {

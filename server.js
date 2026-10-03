@@ -587,6 +587,7 @@ app.get("/api/auth", async (req, res) => {
 });
 
 app.get("/api/codex-updates", async (req, res) => {
+  res.setHeader("X-Codex-Updates", "ready");
   if (!(await isAuthenticated(req))) {
     res.status(401).json({ error: "Authentication required." });
     return;

@@ -41,6 +41,7 @@
     <link rel="stylesheet" href="/thinking-session.css?v=20260716-1" />
     <link rel="stylesheet" href="/agent-memories.css?v=20261003-change-timeline-1" />
     <link rel="stylesheet" href="/agent-integrations.css?v=20260825-custom-keys-1" />
+    <link rel="stylesheet" href="/codex-updates.css?v=20261003-1" />
   </head>
   <body>
     <main class="app">
@@ -76,6 +77,7 @@
               <summary title="更多中控操作" aria-label="更多中控操作">•••</summary>
               <div>
                 <button id="open-integrations" type="button" title="管理外部工具凭证">集成</button>
+                <button id="open-codex-updates" type="button">Codex 更新</button>
                 <button
                   id="open-memories"
                   class="memory-trigger"
@@ -96,6 +98,8 @@
             </details>
           </div>
         </header>
+
+        <section id="codex-update-notices" class="codex-update-notices hidden" aria-label="Codex 更新提醒" aria-live="polite"></section>
 
         <nav id="agent-host-tabs" class="agent-host-tabs" aria-label="Session 账号筛选"></nav>
 
@@ -682,6 +686,7 @@
     <script src="/agent-voice-input.js?v=20260717-recovery-2"></script>
     <script src="/agent-realtime.js?v=20260807-webrtc-1"></script>
     <script src="/app.js?v=20260914-auto-memory-1"></script>
+    <script src="/codex-updates.js?v=20261003-1"></script>
     <script src="/session-focus-mode.js?v=20260716-app-chrome-1"></script>
   </body>
 </html>

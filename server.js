@@ -139,6 +139,10 @@ const AUTH_VERIFY_URL = process.env.PRIVATE_AUTH_VERIFY_URL || "http://127.0.0.1
 const AUTH_LOGIN_URL = process.env.PRIVATE_AUTH_LOGIN_URL || "https://auth.chenyanglin.com/login";
 const AUTH_LOGOUT_URL = process.env.PRIVATE_AUTH_LOGOUT_URL || "https://auth.chenyanglin.com/logout";
 const CODEX_HOME = process.env.CODEX_HOME || path.join(process.env.HOME, ".codex");
+const CODEX_UPDATE_NOTICES_FILE = path.resolve(
+  process.env.CODEX_UPDATE_NOTICES_FILE ||
+    path.join(path.dirname(CODEX_HOME), ".local", "state", "codex-update-monitor", "notices.json"),
+);
 const CODEX_SESSIONS_ROOT = path.join(CODEX_HOME, "sessions");
 const CODEX_ARCHIVED_SESSIONS_ROOT = path.join(CODEX_HOME, "archived_sessions");
 const CODEX_SESSION_TITLES_FILE = path.join(CODEX_HOME, "session-titles.json");
@@ -580,6 +584,36 @@ app.get("/api/auth", async (req, res) => {
     loginUrl: loginUrlForNext(req, getOrigin(req)),
     logoutUrl: logoutUrl(req),
   });
+});
+
+app.get("/api/codex-updates", async (req, res) => {
+  if (!(await isAuthenticated(req))) {
+    res.status(401).json({ error: "Authentication required." });
+    return;
+  }
+  res.setHeader("Cache-Control", "no-store");
+  try {
+    const notices = JSON.parse(await fs.readFile(CODEX_UPDATE_NOTICES_FILE, "utf8"));
+    const items = (Array.isArray(notices?.items) ? notices.items : []).slice(0, 20).map((notice) => ({
+      version: String(notice?.version || "").slice(0, 30),
+      publishedAt: String(notice?.publishedAt || "").slice(0, 40),
+      url: /^https:\/\/github\.com\/openai\/codex\/releases\/tag\/rust-v\d+\.\d+\.\d+$/.test(notice?.url || "")
+        ? notice.url
+        : "",
+      features: (Array.isArray(notice?.features) ? notice.features : []).slice(0, 6).map((item) => String(item).slice(0, 500)),
+      fixes: (Array.isArray(notice?.fixes) ? notice.fixes : []).slice(0, 6).map((item) => String(item).slice(0, 500)),
+      documentation: (Array.isArray(notice?.documentation) ? notice.documentation : []).slice(0, 3).map((item) => String(item).slice(0, 500)),
+      chores: (Array.isArray(notice?.chores) ? notice.chores : []).slice(0, 3).map((item) => String(item).slice(0, 500)),
+    })).filter((notice) => /^\d+\.\d+\.\d+$/.test(notice.version));
+    res.json({ items });
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      res.json({ items: [] });
+      return;
+    }
+    console.error(`Codex update notices unavailable: ${error.message}`);
+    res.status(503).json({ error: "Codex update notices unavailable." });
+  }
 });
 
 app.post("/api/login", (req, res) => {

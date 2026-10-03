@@ -306,6 +306,7 @@
 
       const path = documentElement("p", "memory-change-path");
       path.textContent = change.targetPath;
+      const timeline = renderChangeTimeline(change);
       const unresolvedTarget = change.targetType === "project_rule" && String(change.targetPath || "").startsWith("project:");
       const targetWarning = unresolvedTarget ? documentElement("p", "memory-change-target-warning") : null;
       if (targetWarning) {
@@ -320,7 +321,7 @@
 
       const rationale = documentElement("div", "memory-change-rationale");
       const rationaleTitle = documentElement("strong", "memory-change-subtitle");
-      rationaleTitle.textContent = "为什么这样改";
+      rationaleTitle.textContent = change.targetType === "native_review" ? "检查依据" : "为什么这样改";
       const rationaleText = documentElement("p", "memory-entry-text");
       rationaleText.textContent = change.rationale || "没有记录修改原因。";
       rationale.append(rationaleTitle, rationaleText);
@@ -358,6 +359,7 @@
         actions.append(actionButton("撤回", "danger", () => confirmKnowledgeChange(change, "revert", card)));
       }
       card.append(header, path);
+      if (timeline) card.append(timeline);
       if (targetWarning) card.append(targetWarning);
       card.append(diff, rationale);
       if (review) card.append(review);
@@ -365,6 +367,42 @@
       section.append(card);
     }
     return section;
+  }
+
+  function renderChangeTimeline(change) {
+    const events = [];
+    const add = (label, value) => {
+      if (!value || Number.isNaN(Date.parse(value))) return;
+      const previous = events.at(-1);
+      if (previous?.value === value) previous.label = label;
+      else events.push({ label, value });
+    };
+    add("提出", change.createdAt);
+    if (change.appliedAt) {
+      const label = change.targetType === "native_review"
+        ? "检查"
+        : change.targetType === "skill" ? "批准候选" : "写入";
+      add(label, change.appliedAt);
+    }
+    if (change.resolvedAt) {
+      const label = {
+        approved: change.targetType === "skill" ? "批准候选" : "写入",
+        rejected: "拒绝",
+        reverted: "撤回",
+        conflict: "标记冲突",
+        superseded: "合并",
+      }[change.status] || "处理";
+      add(label, change.resolvedAt);
+    }
+    if (!events.length) return null;
+    const timeline = documentElement("p", "memory-change-time");
+    for (const event of events) {
+      const time = document.createElement("time");
+      time.dateTime = event.value;
+      time.textContent = `${event.label}：${formatChangeDate(event.value)}`;
+      timeline.append(time);
+    }
+    return timeline;
   }
 
   function diffValue(label, value, tone) {
@@ -584,7 +622,7 @@
     const copy = {
       overview: "这里按 Markdown 文档展示 Obsidian 中的 Core、Now 与 Topics。明确、低风险的个人记忆会自动沉淀；其他候选等待确认。",
       detail: "这里直接展示 workspace 一级项目目录中的 AGENTS.md；项目事实和产品需求仍应留在项目文档、代码或测试中。",
-      changes: "待确认变更置顶，自动应用与已处理记录接在后面；每条都保留原因与来源证据，并可在安全时撤回。",
+      changes: "待确认变更置顶，自动应用与已处理记录接在后面；时间均为北京时间。每条保留修改前后内容、原因与来源证据。Codex 原生记忆的“已检查”表示完成对照，没有改写正式记忆。",
     };
     note.textContent = copy[view] || "";
     return note;
@@ -634,6 +672,18 @@
     return Number.isNaN(date.getTime())
       ? "时间未知"
       : new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(date);
+  }
+
+  function formatChangeDate(value) {
+    return new Intl.DateTimeFormat("zh-CN", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).format(new Date(value));
   }
 
   function formatTokenCount(value) {

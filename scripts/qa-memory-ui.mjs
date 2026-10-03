@@ -33,9 +33,15 @@ try {
     await page.screenshot({ path: `/tmp/memory-system-${viewport.name}-projects.png`, fullPage: true });
     await page.click('[data-memory-view="changes"]');
     await page.waitForSelector(".memory-change-card");
+    const appliedChange = page.locator(".memory-change-card").filter({ hasText: "Now.md" });
+    assert.match(await appliedChange.locator(".memory-change-time").textContent(), /提出：2026\/09\/28 18:00/);
+    assert.match(await appliedChange.locator(".memory-change-time").textContent(), /写入：2026\/09\/29 15:40/);
+    assert.match(await appliedChange.textContent(), /原内容.*更新后的重点/s);
     const nativeAudit = page.locator(".memory-change-card").filter({ hasText: "Codex 原生记忆" });
     assert.equal(await nativeAudit.count(), 1, `${viewport.name}: expected one native memory audit`);
     assert.match(await nativeAudit.textContent(), /已检查/);
+    assert.match(await nativeAudit.locator(".memory-change-time").textContent(), /检查：2026\/10\/03 18:36/);
+    assert.match(await nativeAudit.textContent(), /检查依据/);
     assert.equal(await nativeAudit.locator("button").count(), 0, `${viewport.name}: native audits must be read-only`);
     const mergedAudit = page.locator(".memory-change-card").filter({ hasText: "已合并至待审批候选" });
     assert.equal(await mergedAudit.count(), 1, `${viewport.name}: expected one merged pending audit`);
@@ -82,6 +88,22 @@ function memoryPayload(view) {
       reviewReason: "",
       evidence: [{ threadId: "thread-1", title: "回答偏好", quote: "希望讨论时能够分析利弊" }],
       confidence: 0.91,
+      createdAt: "2026-09-29T07:40:41Z",
+    },
+    {
+      id: "change-applied",
+      targetType: "personal_memory",
+      targetPath: "Now.md",
+      entryId: "current-focus",
+      action: "update",
+      status: "approved",
+      before: { text: "原内容" },
+      after: { text: "更新后的重点" },
+      rationale: "用户明确更新了近期重点。",
+      evidence: [],
+      confidence: 1,
+      createdAt: "2026-09-28T10:00:00Z",
+      appliedAt: "2026-09-29T07:40:41Z",
     },
     {
       id: "change-project",
@@ -124,6 +146,8 @@ function memoryPayload(view) {
       reviewReason: "",
       evidence: [{ threadId: "native:abc", title: "Codex 原生记忆", quote: "变化文件：raw_memories.md" }],
       confidence: 1,
+      createdAt: "2026-10-03T10:36:20Z",
+      appliedAt: "2026-10-03T10:36:20Z",
     },
   ];
   const selected = view === "pending" || view === "changes" ? changes : view === "detail" ? changes.slice(1) : [];

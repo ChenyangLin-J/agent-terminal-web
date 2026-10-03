@@ -424,12 +424,22 @@
 }
 
 .memory-change-path {
-  margin: -2px 0 10px;
+  margin: -2px 0 5px;
   color: #8190a7;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 10px;
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+.memory-change-time {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0 0 10px;
+  color: #b5c4da;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .memory-change-diff {

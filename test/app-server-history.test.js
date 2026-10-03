@@ -77,7 +77,7 @@ test("App Server resume restores structured history without terminal replay", as
   assert.match(app, /function createAppProcessGroup\(items, groupNumber = 1\)/);
   assert.match(app, /function replaceAppProcessGroup\(itemId\)/);
   assert.match(app, /function appendAppTranscriptItem\(item\)/);
-  assert.match(app, /item\.type === "assistant" && item\.phase !== "final_answer"/);
+  assert.match(app, /item\.type === "assistant" && !\["final_answer", "async_question", "async_message"\]\.includes\(item\.phase\)/);
   assert.match(app, /function appTurnHasFinalAnswer\(turnId\)/);
   assert.match(
     app,

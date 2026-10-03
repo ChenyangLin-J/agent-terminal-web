@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  agentMessageDisplayPhase,
   appServerConversationFromTurnPage,
   extractSessionConversationFromJsonl,
   extractSessionPreviewFromJsonl,
@@ -358,6 +359,31 @@ test("normalizes App Server preview pages without exposing reasoning items", () 
   assert.equal(conversation.turns.length, 1);
   assert.deepEqual(conversation.turns[0].assistant, [
     { text: "可见回答", phase: "final_answer", completedAt: "" },
+  ]);
+});
+
+test("keeps async questions distinct from final answers in App Server history", () => {
+  const question = {
+    type: "agentMessage",
+    phase: "final_answer",
+    delivery: "async",
+    questions: [{ title: "请提供链接" }],
+    text: "请提供链接",
+  };
+  assert.equal(agentMessageDisplayPhase(question), "async_question");
+  assert.equal(agentMessageDisplayPhase({ ...question, delivery: undefined }), "async_question");
+  assert.equal(agentMessageDisplayPhase({ ...question, questions: undefined }), "async_message");
+  assert.equal(agentMessageDisplayPhase({ type: "agentMessage", phase: "final_answer" }), "final_answer");
+
+  const conversation = appServerConversationFromTurnPage({
+    data: [{
+      id: "turn-1",
+      items: [question, { type: "agentMessage", phase: "final_answer", text: "已查明原因" }],
+    }],
+  });
+  assert.deepEqual(conversation.turns[0].assistant.map((item) => [item.phase, item.text]), [
+    ["async_question", "请提供链接"],
+    ["final_answer", "已查明原因"],
   ]);
 });
 

@@ -71,6 +71,7 @@ import {
 import { viewedImagePath } from "./lib/session-image.js";
 import { commandDisplayText } from "./lib/command-display.js";
 import {
+  agentMessageDisplayPhase,
   appServerConversationFromTurnPage,
   extractSessionConversationFromJsonl,
   extractSessionPreviewFromJsonl,
@@ -6032,7 +6033,7 @@ function appTranscriptFromThreadItem(session, item, context = {}) {
       type: "assistant",
       label: "Codex",
       text: item.text || "",
-      phase: item.phase || "",
+      phase: agentMessageDisplayPhase(item),
       memoryCitation: mergeMemoryCitations(
         item.memoryCitation,
         session.personalMemoryCitationsByTurn?.get(turnId),
@@ -6516,7 +6517,9 @@ function renderAppServerItemCompleted(session, item) {
   if (item.type === "agentMessage") {
     if (!session.streamedItemIds.has(item.id) && item.text) appendSessionOutput(session, item.text);
     session.streamedItemIds.delete(item.id);
-    if (item.phase === "final_answer") session.lastAssistantMessage = item.text || session.lastAssistantMessage;
+    if (agentMessageDisplayPhase(item) === "final_answer") {
+      session.lastAssistantMessage = item.text || session.lastAssistantMessage;
+    }
     appendSessionOutput(session, "\r\n");
   } else if (item.type === "plan") {
     if (item.text) appendSessionOutput(session, `\r\n\x1b[36mPlan\x1b[0m\r\n${item.text}\r\n`);

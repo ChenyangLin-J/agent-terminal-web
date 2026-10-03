@@ -6666,7 +6666,7 @@ function hideTerminalSessionPreview() {
 function isProcessTranscriptItem(item) {
   return (
     ["command", "plan", "file", "tool"].includes(item.type) ||
-    (item.type === "assistant" && item.phase !== "final_answer")
+    (item.type === "assistant" && !["final_answer", "async_question", "async_message"].includes(item.phase))
   );
 }
 
@@ -7286,7 +7286,9 @@ function transcriptMetaText(item) {
     failed: "失败",
     declined: "已拒绝",
   };
-  if (item.type === "assistant" && item.phase && item.phase !== "final_answer") values.push("过程说明");
+  if (item.type === "assistant" && item.phase === "async_question") values.push("任务中提问");
+  else if (item.type === "assistant" && item.phase === "async_message") values.push("任务中消息");
+  else if (item.type === "assistant" && item.phase && item.phase !== "final_answer") values.push("过程说明");
   if (statuses[item.status]) values.push(statuses[item.status]);
   if (item.exitCode !== null) values.push(`退出码 ${item.exitCode}`);
   if (item.durationMs !== null) values.push(formatTranscriptDuration(item.durationMs));

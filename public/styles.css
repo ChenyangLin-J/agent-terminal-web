@@ -1820,6 +1820,100 @@ input {
   color: #d4dfdf;
 }
 
+.app-transcript-async-question {
+  border-left-color: #6385df;
+  background: #0d1525;
+}
+
+.app-async-question-form,
+.app-async-question-form fieldset {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.app-async-question-form fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.app-async-question-form legend {
+  padding: 0 0 8px;
+  color: #e9efff;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.app-async-question-form label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid #34435c;
+  border-radius: 8px;
+  color: #dbe5f7;
+  background: #111c2f;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.app-async-question-form label:has(input:checked) {
+  border-color: #7399ef;
+  background: #1a2b49;
+}
+
+.app-async-question-form input[type="radio"] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  margin: 0;
+  padding: 0;
+  border-radius: 50%;
+  accent-color: #88aaff;
+}
+
+.app-async-question-form input[type="text"] {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid #34435c;
+  border-radius: 8px;
+  color: #e9efff;
+  background: #0b1220;
+  font: inherit;
+  font-size: 13px;
+}
+
+.app-async-question-form input[type="text"]::placeholder {
+  color: #8593ad;
+}
+
+.app-async-question-form > button {
+  justify-self: start;
+  min-height: 38px;
+  padding: 8px 14px;
+  border: 1px solid #6c91e5;
+  border-radius: 8px;
+  color: #fff;
+  background: #3459a7;
+  cursor: pointer;
+}
+
+.app-async-question-form > button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.app-async-question-status {
+  color: #a9b9d6;
+  font-size: 12px;
+}
+
 .app-transcript-command,
 .app-transcript-plan,
 .app-transcript-file,

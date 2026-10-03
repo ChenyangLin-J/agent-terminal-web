@@ -395,7 +395,7 @@ test("keeps async questions distinct from final answers in App Server history", 
     type: "agentMessage",
     phase: "final_answer",
     delivery: "async",
-    questions: [{ title: "请提供链接" }],
+    questions: [{ title: "请提供链接", options: ["现在提供", "稍后提供"] }],
     text: "请提供链接",
   };
   assert.equal(agentMessageDisplayPhase(question), "async_question");
@@ -413,6 +413,8 @@ test("keeps async questions distinct from final answers in App Server history", 
     ["async_question", "请提供链接"],
     ["final_answer", "已查明原因"],
   ]);
+  assert.deepEqual(conversation.turns[0].assistant[0].questions, question.questions);
+  assert.equal("questions" in conversation.turns[0].assistant[1], false);
 });
 
 test("preview cache is stored atomically and normalized by session id", async (t) => {

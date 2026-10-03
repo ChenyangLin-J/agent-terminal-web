@@ -330,6 +330,7 @@ let lastSubmittedPrompt = "";
 let lastSubmittedAttachments = [];
 let activeSessionPreviewOnly = false;
 let pendingPreviewSubmission = null;
+const pendingAsyncQuestionAnswers = new Set();
 let appTranscriptItems = [];
 let restoredAppTurnCount = 0;
 let restoredAppHistoryHasMore = false;
@@ -3032,6 +3033,10 @@ async function openSocket(params, options = {}) {
       return;
     }
     if (message.type === "error") {
+      if (message.payload.preservePrompt && pendingAsyncQuestionAnswers.size) {
+        pendingAsyncQuestionAnswers.clear();
+        renderAppTranscript({ follow: false });
+      }
       if (resumeInterruptedPending) {
         resumeInterruptedPending = false;
         renderAppTranscript({ follow: false });
@@ -3073,6 +3078,10 @@ async function openSocket(params, options = {}) {
   nextSocket.addEventListener("close", (event) => {
     stopClientHeartbeat();
     if (socket === event.currentTarget) socket = null;
+    if (pendingAsyncQuestionAnswers.size) {
+      pendingAsyncQuestionAnswers.clear();
+      if (!sessionScreen.classList.contains("hidden")) renderAppTranscript({ follow: false });
+    }
     if (event.currentTarget.intentionalClose) return;
     if (pendingPreviewSubmission) {
       const previewParams = { ...activeSessionParams, preview: "1" };
@@ -3106,32 +3115,33 @@ async function openSocket(params, options = {}) {
   });
 }
 
-async function submitPrompt(deliveryMode = "auto") {
+async function submitPrompt(deliveryMode = "auto", overridePrompt = null) {
+  const isInlineReply = typeof overridePrompt === "string";
   if (isReadOnlySubagentPreview()) {
     setUploadStatus("子 Agent 预览为只读，不会恢复或发送消息。", { clear: true });
-    return;
+    return false;
   }
-  if (promptSubmissionPending) return;
+  if (promptSubmissionPending) return false;
   promptSubmissionPending = true;
   try {
-    const uploadsReady = await uploadController.waitForUploads();
+    const uploadsReady = isInlineReply || await uploadController.waitForUploads();
     if (!uploadsReady) {
       setUploadStatus("附件上传失败，文字和已成功的附件都未发送，请重试上传。");
-      return;
+      return false;
     }
 
-    const prompt = promptInput.value.trim();
-    const attachments = uploadController.getAttachments();
+    const prompt = isInlineReply ? overridePrompt.trim() : promptInput.value.trim();
+    const attachments = isInlineReply ? [] : uploadController.getAttachments();
     if (activeAgentHostId !== "personal" && attachments.length) {
       setUploadStatus("公司 Session 暂不支持从 Agent Web 传附件；请把文件保留在公司 Mac 工作区。");
-      return;
+      return false;
     }
-    if (!prompt && !attachments.length) return;
-    if (!pendingEditFork && !attachments.length && activeTransport === "app-server" && runAppComposerCommand(prompt)) return;
+    if (!prompt && !attachments.length) return false;
+    if (!isInlineReply && !pendingEditFork && !attachments.length && activeTransport === "app-server" && runAppComposerCommand(prompt)) return false;
     if (notificationTarget.app === "agent") {
       void ensureAgentPushSubscription({ requestPermission: true }).catch(logPushRegistrationError);
     }
-    const message = pendingEditFork
+    const message = pendingEditFork && !isInlineReply
       ? {
           type: "edit-and-fork",
           data: prompt,
@@ -3153,9 +3163,9 @@ async function submitPrompt(deliveryMode = "auto") {
     if (activeSessionPreviewOnly) {
       if (pendingPreviewSubmission) {
         setUploadStatus("上一条消息正在等待 Session 恢复，请稍候。");
-        return;
+        return false;
       }
-      pendingPreviewSubmission = { message, prompt, attachments };
+      pendingPreviewSubmission = { message, prompt, attachments, preserveComposer: isInlineReply };
       setUploadStatus(activeSessionParams.sessionId ? "正在恢复 Session，消息会自动发送…" : "正在创建 Session…");
       startSession({
         cwd: activeSessionParams.cwd || ".",
@@ -3165,18 +3175,22 @@ async function submitPrompt(deliveryMode = "auto") {
         access: activeAccessMode,
         purpose: activeSessionParams.purpose || "",
       });
-      return;
+      return true;
     }
     if (send(message)) {
-      lastSubmittedPrompt = prompt;
+      lastSubmittedPrompt = isInlineReply ? "" : prompt;
       lastSubmittedAttachments = attachments;
       startAppTranscriptSubmitFollow();
-      promptInput.value = "";
-      uploadController.clearAttachments();
-      hideComposerSuggestions();
-      setUploadStatus(pendingEditFork ? "正在创建编辑分支…" : "正在发送…");
+      if (!isInlineReply) {
+        promptInput.value = "";
+        uploadController.clearAttachments();
+        hideComposerSuggestions();
+      }
+      setUploadStatus(pendingEditFork && !isInlineReply ? "正在创建编辑分支…" : "正在发送…");
+      return true;
     } else {
       setUploadStatus("连接恢复中，文本已保留。");
+      return false;
     }
   } finally {
     promptSubmissionPending = false;
@@ -3188,12 +3202,14 @@ function flushPendingPreviewSubmission() {
   if (!pending || !socket || socket.readyState !== WebSocket.OPEN) return;
   if (!send(pending.message)) return;
   pendingPreviewSubmission = null;
-  lastSubmittedPrompt = pending.prompt;
+  lastSubmittedPrompt = pending.preserveComposer ? "" : pending.prompt;
   lastSubmittedAttachments = pending.attachments;
   startAppTranscriptSubmitFollow();
-  promptInput.value = "";
-  uploadController.clearAttachments();
-  hideComposerSuggestions();
+  if (!pending.preserveComposer) {
+    promptInput.value = "";
+    uploadController.clearAttachments();
+    hideComposerSuggestions();
+  }
   setUploadStatus("Session 正在恢复，消息已排队…");
 }
 
@@ -6126,6 +6142,7 @@ function normalizeClientTranscriptItem(item = {}) {
     status: String(item.status || ""),
     tone: String(item.tone || ""),
     phase: String(item.phase || ""),
+    questions: normalizeClientAsyncQuestions(item.questions),
     durationMs: Number.isFinite(item.durationMs) ? item.durationMs : null,
     exitCode: Number.isFinite(item.exitCode) ? item.exitCode : null,
     turnId: String(item.turnId || ""),
@@ -6138,6 +6155,19 @@ function normalizeClientTranscriptItem(item = {}) {
     attachments: normalizeClientAttachments(item.attachments),
     memoryCitation: normalizeClientMemoryCitation(item.memoryCitation),
   };
+}
+
+function normalizeClientAsyncQuestions(questions) {
+  return (Array.isArray(questions) ? questions : [])
+    .slice(0, 3)
+    .map((question) => ({
+      title: String(question?.title || "").slice(0, 1_000).trim(),
+      options: (Array.isArray(question?.options) ? question.options : [])
+        .slice(0, 10)
+        .map((option) => String(option || "").slice(0, 300).trim())
+        .filter(Boolean),
+    }))
+    .filter((question) => question.title);
 }
 
 function normalizeClientAttachments(attachments) {
@@ -6639,6 +6669,7 @@ function diskConversationItems(conversation = {}) {
           label: "Codex",
           text: answer.text,
           phase: answer.phase,
+          questions: answer.questions,
           status: "completed",
           turnId,
           turnStartedAt: Number.isFinite(turnStartedAt) ? turnStartedAt : null,
@@ -6949,6 +6980,9 @@ function createAppTranscriptCard(item) {
   if (item.type === "assistant" && item.phase && item.phase !== "final_answer") {
     card.classList.add("app-transcript-commentary");
   }
+  if (item.type === "assistant" && item.phase === "async_question") {
+    card.classList.add("app-transcript-async-question");
+  }
   card.dataset.transcriptId = item.id;
   card.dataset.scrollAnchor = item.id;
   card.dataset.turnId = item.turnId || "";
@@ -6979,7 +7013,7 @@ function createAppTranscriptCard(item) {
   }
   card.append(header);
 
-  if (item.text) {
+  if (item.text && !asyncQuestionTextMatchesOptions(item)) {
     const copy = document.createElement(item.type === "command" ? "code" : "div");
     copy.className = item.type === "command" ? "app-transcript-command-text" : "app-transcript-copy";
     if (item.type === "tool" && item.label === "查看图片" && activeSessionId) {
@@ -6998,6 +7032,9 @@ function createAppTranscriptCard(item) {
       copy.textContent = item.text;
     }
     card.append(copy);
+  }
+  if (item.type === "assistant" && item.phase === "async_question" && item.questions?.length) {
+    card.append(createAsyncQuestionForm(item));
   }
   if (item.attachments?.length) card.append(createAppTranscriptAttachments(item.attachments));
 
@@ -7034,6 +7071,100 @@ function createAppTranscriptCard(item) {
     card.append(openAgent);
   }
   return card;
+}
+
+function asyncQuestionTextMatchesOptions(item) {
+  if (item.phase !== "async_question" || !item.questions?.length) return false;
+  const text = item.questions
+    .map((question) => [question.title, ...question.options.map((option) => `- ${option}`)].join("\n"))
+    .join("\n\n");
+  return item.text.trim() === text;
+}
+
+function asyncQuestionAnswerPrefix(item) {
+  return `关于「${item.questions[0].title}」的回答：`;
+}
+
+function asyncQuestionAnswerKey(item) {
+  return `${activeSessionId || activeSessionParams.sessionId || "preview"}:${item.id}`;
+}
+
+function asyncQuestionHasAnswer(item) {
+  const prefix = asyncQuestionAnswerPrefix(item);
+  return appTranscriptItems.some((entry) => entry.type === "user" && entry.text.includes(prefix));
+}
+
+function createAsyncQuestionForm(item) {
+  const form = document.createElement("form");
+  form.className = "app-async-question-form";
+  const key = asyncQuestionAnswerKey(item);
+  const answered = asyncQuestionHasAnswer(item);
+  if (answered) pendingAsyncQuestionAnswers.delete(key);
+  if (answered || pendingAsyncQuestionAnswers.has(key) || isReadOnlySubagentPreview()) {
+    const status = document.createElement("span");
+    status.className = "app-async-question-status";
+    status.textContent = answered
+      ? "已回答"
+      : pendingAsyncQuestionAnswers.has(key)
+        ? "正在发送回答…"
+        : "子 Agent 预览为只读";
+    form.append(status);
+    return form;
+  }
+
+  const inputs = [];
+  item.questions.forEach((question, index) => {
+    const fieldset = document.createElement("fieldset");
+    const legend = document.createElement("legend");
+    legend.textContent = question.title;
+    fieldset.append(legend);
+    const group = `async-question-${item.id}-${index}`;
+    for (const option of question.options) {
+      const label = document.createElement("label");
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = group;
+      radio.value = option;
+      label.append(radio, document.createTextNode(option));
+      fieldset.append(label);
+    }
+    const custom = document.createElement("input");
+    custom.type = "text";
+    custom.maxLength = 4_000;
+    custom.placeholder = question.options.length ? "或输入其他回答" : "输入回答";
+    custom.setAttribute("aria-label", `${question.title}：自定义回答`);
+    fieldset.append(custom);
+    inputs.push({ fieldset, custom });
+    form.append(fieldset);
+  });
+  const submit = document.createElement("button");
+  submit.type = "submit";
+  submit.textContent = "提交回答";
+  form.append(submit);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const answers = inputs.map(({ fieldset, custom }) =>
+      custom.value.trim() || fieldset.querySelector('input[type="radio"]:checked')?.value || "",
+    );
+    const missing = answers.findIndex((answer) => !answer);
+    if (missing >= 0) {
+      inputs[missing].custom.focus();
+      return;
+    }
+    const answerText = item.questions.length === 1
+      ? `${asyncQuestionAnswerPrefix(item)}${answers[0]}`
+      : `${asyncQuestionAnswerPrefix(item)}\n${item.questions.map((question, index) => `${question.title}\n${answers[index]}`).join("\n\n")}`;
+    pendingAsyncQuestionAnswers.add(key);
+    submit.disabled = true;
+    const sent = await submitPrompt("auto", answerText);
+    if (!sent) {
+      pendingAsyncQuestionAnswers.delete(key);
+      submit.disabled = false;
+      return;
+    }
+    renderAppTranscript({ follow: false });
+  });
+  return form;
 }
 
 function createTranscriptItemActions(item) {

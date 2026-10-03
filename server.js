@@ -6010,6 +6010,7 @@ function normalizeAppTranscriptItem(item) {
     status: String(item.status || ""),
     tone: String(item.tone || ""),
     phase: String(item.phase || ""),
+    questions: normalizeAsyncTranscriptQuestions(item.questions),
     durationMs: Number.isFinite(item.durationMs) ? item.durationMs : null,
     exitCode: Number.isFinite(item.exitCode) ? item.exitCode : null,
     turnId: String(item.turnId || ""),
@@ -6022,6 +6023,19 @@ function normalizeAppTranscriptItem(item) {
     attachments: normalizeTranscriptAttachments(item.attachments),
     memoryCitation: normalizeMemoryCitation(item.memoryCitation),
   };
+}
+
+function normalizeAsyncTranscriptQuestions(questions) {
+  return (Array.isArray(questions) ? questions : [])
+    .slice(0, 3)
+    .map((question) => ({
+      title: trimAppTranscriptValue(question?.title, 1_000),
+      options: (Array.isArray(question?.options) ? question.options : [])
+        .slice(0, 10)
+        .map((option) => trimAppTranscriptValue(option, 300))
+        .filter(Boolean),
+    }))
+    .filter((question) => question.title);
 }
 
 function normalizeTranscriptAttachments(attachments) {
@@ -6069,6 +6083,7 @@ function appTranscriptFromThreadItem(session, item, context = {}) {
       label: "Codex",
       text: item.text || "",
       phase: agentMessageDisplayPhase(item),
+      questions: item.questions,
       memoryCitation: mergeMemoryCitations(
         item.memoryCitation,
         session.personalMemoryCitationsByTurn?.get(turnId),

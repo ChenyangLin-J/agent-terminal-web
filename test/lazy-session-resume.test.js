@@ -49,7 +49,7 @@ test("the first message activates a previewed Session and keeps permissions loca
 
   assert.match(
     app,
-    /if \(activeSessionPreviewOnly\) \{[\s\S]*pendingPreviewSubmission = \{ message, prompt, attachments \};[\s\S]*startSession\(\{/,
+    /if \(activeSessionPreviewOnly\) \{[\s\S]*pendingPreviewSubmission = \{ message, prompt, attachments, preserveComposer: isInlineReply \};[\s\S]*startSession\(\{/,
   );
   assert.match(app, /function flushPendingPreviewSubmission\(\)[\s\S]*if \(!send\(pending\.message\)\) return/);
   assert.match(

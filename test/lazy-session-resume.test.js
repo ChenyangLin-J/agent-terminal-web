@@ -17,11 +17,11 @@ test("saved and released Sessions open from disk before a runtime is attached", 
   );
   assert.match(
     app,
-    /const previewPath = new URL\(`\/api\/session-preview\/\$\{encodeURIComponent\(sessionId\)\}`[\s\S]*agentHostApiUrl\(\s*`\$\{previewPath\.pathname\}\$\{previewPath\.search\}`,\s*activeSessionParams\.host \|\| activeAgentHostId/,
+    /const previewPath = new URL\(`\/api\/session-preview\/\$\{encodeURIComponent\(sessionId\)\}`[\s\S]*fetch\(`\$\{previewPath\.pathname\}\$\{previewPath\.search\}`\)/,
   );
   assert.match(
     app,
-    /function openSavedSessionPreview\(session\)[\s\S]*host: hostId,[\s\S]*preview: "1"/,
+    /function openSavedSessionPreview\(session\)[\s\S]*transport: "app-server",[\s\S]*preview: "1"/,
   );
   assert.match(
     app,
@@ -31,7 +31,7 @@ test("saved and released Sessions open from disk before a runtime is attached", 
   assert.match(app, /if \(!resumesRenderedPreview\) renderAppTranscript\(\)/);
   assert.match(
     app,
-    /if \(!resumesRenderedPreview && params\.sessionId && activeAgentHostId === "personal"\)/,
+    /if \(!resumesRenderedPreview && params\.sessionId\) \{\s*void loadSessionPreview/,
   );
   assert.match(app, /function transcriptAnchorAliases\(previousItems, nextItems\)/);
   assert.match(
@@ -62,7 +62,7 @@ test("the first message activates a previewed Session and keeps permissions loca
   );
   assert.match(app, /发送第一条消息时会使用这里选择的权限/);
   assert.match(app, /sendPromptButton\.disabled = !canCompose/);
-  assert.match(app, /sendStatusButton\.disabled = !canCompose/);
+  assert.match(app, /promptInput\.disabled = !canCompose/);
   assert.match(app, /queuePromptButton\.disabled = !connected \|\| activeSessionPreviewOnly/);
   assert.match(app, /sessionMenu\.classList\.toggle\("hidden", activeSessionPreviewOnly\)/);
   assert.match(
@@ -71,7 +71,7 @@ test("the first message activates a previewed Session and keeps permissions loca
   );
   assert.match(
     server,
-    /app\.get\("\/api\/session-preview\/:id"[\s\S]*agentHost\.type !== "local"[\s\S]*readAppServerSessionConversation\(client, id,[\s\S]*res\.json\(\{ preview, conversation, \.\.\.\(liveSource/,
+    /app\.get\("\/api\/session-preview\/:id"[\s\S]*liveSessionPreviewSource\(req\)[\s\S]*extractSessionConversationFromJsonl\(file, \{[\s\S]*res\.json\(\{[\s\S]*preview,[\s\S]*conversation: conversation \|\| \{ turns: \[\], hasEarlier: false \},[\s\S]*\.\.\.\(liveSource/,
   );
   assert.match(
     server,

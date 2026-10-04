@@ -14,13 +14,10 @@
     "@amap/amap-maps-mcp-server": "0.0.8",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@playwright/mcp": "0.0.78",
-    "@xterm/addon-fit": "^0.11.0",
-    "@xterm/xterm": "^6.0.0",
     "acorn": "^8.17.0",
     "busboy": "^1.6.0",
     "express": "^5.2.1",
-    "markdown-it": "^14.3.0",
-    "node-pty": "^1.1.0",
+    "markdown-it": "^14.3.2",
     "ws": "^8.18.3"
   },
   "devDependencies": {
@@ -28,6 +25,7 @@
   },
   "overrides": {
     "@modelcontextprotocol/sdk": "$@modelcontextprotocol/sdk",
-    "@hono/node-server": "2.0.12"
+    "@hono/node-server": "2.0.12",
+    "hono": "4.13.8"
   }
 }

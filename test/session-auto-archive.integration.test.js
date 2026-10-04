@@ -15,7 +15,7 @@ const ids = Array.from({ length: 8 }, (_, index) =>
 
 // All server processes, Codex processes and metadata in this suite are isolated
 // from the running service and the user's Codex home.
-async function harness(t, seed = async () => {}, { runtimeTtlMs = 60000 } = {}) {
+async function harness(t, seed = async () => {}, { runtimeTtlMs = 60000, runtimeKernel = "legacy" } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "agent-media-archive-"));
   const codexHome = path.join(root, "codex");
   const workspaceRoot = path.join(root, "workspace");
@@ -31,10 +31,7 @@ async function harness(t, seed = async () => {}, { runtimeTtlMs = 60000 } = {}) 
   await writeFile(fakeCodex, `#!/usr/bin/env node
 const fs = require('node:fs');
 const readline = require('node:readline');
-if (!process.argv.includes('app-server')) {
-  process.stdin.resume();
-  setInterval(() => {}, 1000);
-} else {
+if (process.argv.includes('app-server')) {
   const send = (message) => process.stdout.write(JSON.stringify(message) + '\\n');
   const archived = new Set();
   readline.createInterface({ input: process.stdin }).on('line', (line) => {
@@ -61,9 +58,11 @@ if (!process.argv.includes('app-server')) {
       setTimeout(() => send({ method: 'turn/started', params: {
         threadId: message.params.threadId, turn: { id: turnId, status: 'inProgress' },
       } }), 5);
-      setTimeout(() => send({ method: 'turn/completed', params: {
-        threadId: message.params.threadId, turn: { id: turnId, status: entry.status || 'completed' },
-      } }), 40);
+      if (entry.complete !== false) setTimeout(() => send({ method: 'turn/completed', params: {
+        threadId: message.params.threadId, turn: {
+          id: turnId, status: entry.status || 'completed', error: entry.error || null,
+        },
+      } }), Number(entry.completionDelay) || 40);
     }
     if (message.method === 'thread/archive' && !entry.failArchive) archived.add(message.params.threadId);
     if (message.method === 'thread/unarchive') archived.delete(message.params.threadId);
@@ -94,9 +93,8 @@ if (!process.argv.includes('app-server')) {
     env: {
       ...process.env, HOST: "127.0.0.1", PORT: String(agentPort),
       CODEX_HOME: codexHome, WORKSPACE_ROOT: workspaceRoot,
-      CODEX_COMMAND: fakeCodex, CODEX_APP_SERVER_COMMAND: fakeCodex,
-      AGENT_HOSTS_FILE: path.join(root, "no-hosts.json"), AGENT_USE_TMUX: "0",
-      AGENT_PLATFORM_KERNEL: "legacy", AGENT_NATIVE_THREAD_CATALOG: "0",
+      CODEX_APP_SERVER_COMMAND: fakeCodex,
+      AGENT_PLATFORM_KERNEL: runtimeKernel, AGENT_NATIVE_THREAD_CATALOG: "0",
       AGENT_MEDIA_SESSION_AUTO_ARCHIVE_IDLE_MS: String(idleMs),
       AGENT_MEDIA_SESSION_AUTO_ARCHIVE_CHECK_MS: "30", SESSION_TTL_MS: String(runtimeTtlMs),
       AGENT_SESSION_FAVORITES_FILE: favoritesFile,
@@ -124,30 +122,30 @@ if (!process.argv.includes('app-server')) {
     archives: () => jsonFile(path.join(codexHome, "session-archive.json"), {}),
     calls: async () => (await readFile(callsFile, "utf8")).trim().split("\n").filter(Boolean).map(JSON.parse),
     state: (state) => writeFile(nativeStateFile, JSON.stringify(state)),
-    async connect(transport = "terminal") {
-      const client = await connect("ws://127.0.0.1:" + agentPort + "/terminal?cwd=.&transport=" + transport + "&access=safe");
+    archiveSession: (id, archived) => fetch("http://127.0.0.1:" + agentPort + "/api/codex-sessions/" + id + "/archive", {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ archived }),
+    }),
+    async connect() {
+      const client = await connect("ws://127.0.0.1:" + agentPort + "/terminal?cwd=.&access=safe");
       sockets.push(client.ws);
-      const status = await client.next((message) => message.type === "status");
+      const status = await client
+        .next((message) => message.type === "status" && message.payload.ready)
+        .catch((error) => { throw new Error(`${error.message}\n${output}`); });
       await client.next((message) => message.type === "replay");
       return { ...client, id: status.payload.id };
     },
-    async complete(client, sessionId, turnId) {
-      const response = await fetch("http://127.0.0.1:" + agentPort + "/internal/codex-notify", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ webSessionId: client.id, event: {
-          type: "agent-turn-complete", "thread-id": sessionId, "turn-id": turnId,
-          "last-assistant-message": "Extraction finished.",
-        } }),
-      });
-      assert.equal(response.status, 200, output);
+    async waitForCompletion(client, turnId) {
+      return client.next((message) => message.type === "status" &&
+        message.payload.turnState?.lastCompletedTurnId === turnId && !message.payload.turnState.active, 5000);
     },
   };
 }
 
-function track(store, sessionId, { completed = Date.now() - 5000, turnId = "turn-1" } = {}) {
-  store.recordPrompt({ hostId: "personal", sessionId, text: "https://v.douyin.com/demo/",
+function track(store, sessionId, { completed = Date.now() - 5000, turnId = "turn-1", hostId = "personal" } = {}) {
+  store.recordPrompt({ hostId, sessionId, text: "https://v.douyin.com/demo/",
     isFirstPrompt: true, now: completed - 100 });
-  store.recordCompletion({ hostId: "personal", sessionId, turnId, now: completed });
+  store.recordCompletion({ hostId, sessionId, turnId, now: completed });
 }
 
 async function submit(client, text) {
@@ -158,6 +156,7 @@ async function submit(client, text) {
 test("restart recovery archives expired media threads and protects favorites, active turns and RPC failures", async (t) => {
   const h = await harness(t, async ({ store, nativeStateFile, favoritesFile }) => {
     for (const id of ids.slice(0, 5)) track(store, id);
+    track(store, ids[5], { hostId: "retired-remote" });
     await writeFile(favoritesFile, JSON.stringify([ids[1]]));
     await writeFile(nativeStateFile, JSON.stringify({
       [ids[2]]: { active: true, status: "inProgress" },
@@ -174,7 +173,33 @@ test("restart recovery archives expired media threads and protects favorites, ac
   assert.equal(calls.some((call) => call.method === "thread/archive" && call.params.threadId === ids[2]), false);
   assert.equal(calls.some((call) => call.method === "thread/archive" && call.params.threadId === ids[3]), false);
   assert.ok(calls.some((call) => call.method === "thread/archive" && call.params.threadId === ids[4]));
+  assert.equal(calls.some((call) => call.params?.threadId === ids[5]), false);
   assert.equal(new MediaSessionAutoArchiveStore(h.storeFile).get({ hostId: "personal", sessionId: ids[0] }).completedAt, null);
+  assert.equal(
+    new MediaSessionAutoArchiveStore(h.storeFile).get({ hostId: "retired-remote", sessionId: ids[5] }).completedAt > 0,
+    true,
+  );
+});
+
+test("concurrent manual and automatic archives preserve every thread's local archive record", async (t) => {
+  const h = await harness(t, async ({ store, nativeStateFile }) => {
+    track(store, ids[0]);
+    await writeFile(nativeStateFile, JSON.stringify({ [ids[0]]: { archiveDelay: 100 } }));
+  });
+  await waitFor(async () => (await h.calls()).some((call) =>
+    call.method === "thread/archive" && call.params.threadId === ids[0]));
+  const responses = await Promise.all(ids.slice(1, 6).map((id) => h.archiveSession(id, true)));
+  for (const response of responses) {
+    assert.equal(response.status, 200, await response.text());
+  }
+  await waitFor(async () => (await h.archives())[ids[0]]);
+  assert.deepEqual(Object.keys(await h.archives()).sort(), ids.slice(0, 6), h.output());
+
+  const removed = await Promise.all(ids.slice(1, 4).map((id) => h.archiveSession(id, false)));
+  for (const response of removed) {
+    assert.equal(response.status, 200, await response.text());
+  }
+  assert.deepEqual(Object.keys(await h.archives()).sort(), [ids[0], ids[4], ids[5]], h.output());
 });
 
 test("older active or interrupted runtime records cannot block a later completed extraction", async (t) => {
@@ -198,25 +223,36 @@ test("older active or interrupted runtime records cannot block a later completed
   assert.equal(calls.some((call) => call.method === "thread/archive" && call.params.threadId === ids[2]), false);
 });
 
+for (const runtimeKernel of ["legacy", "all"]) {
+  test(`App Server ${runtimeKernel} completion starts the media archive deadline`, async (t) => {
+    const h = await harness(t, async ({ nativeStateFile }) => {
+      await writeFile(nativeStateFile, JSON.stringify({ [ids[6]]: { turnId: "turn-1" } }));
+    }, { runtimeKernel });
+    const client = await h.connect();
+    await submit(client, "https://xhslink.cn/demo");
+    await h.waitForCompletion(client, "turn-1");
+    await waitFor(async () => (await h.archives())[ids[6]]);
+  });
+}
+
 test("a real submitted extraction survives follow-ups and archives only after the latest completion", async (t) => {
   const h = await harness(t);
   const client = await h.connect();
-  client.ws.send(JSON.stringify({ type: "input", data: "\u001b[A" }));
-  await client.next((message) => message.type === "control-ack" && message.payload.kind === "input");
+  await h.state({ [ids[6]]: { turnId: "turn-1" } });
   await submit(client, "https://xhslink.cn/demo");
-  await h.state({ [ids[0]]: { turnId: "turn-1" } });
-  await h.complete(client, ids[0], "turn-1");
+  await h.waitForCompletion(client, "turn-1");
   await delay(80);
-  await submit(client, "再检查一下第三段");
+  await h.state({ [ids[6]]: { turnId: "turn-2", completionDelay: 600 } });
+  client.ws.send(JSON.stringify({ type: "submit", data: "再检查一下第三段" }));
+  await client.next((message) => message.type === "status" &&
+    message.payload.turnState?.turnId === "turn-2" && message.payload.turnState.active);
   await delay(idleMs + 100);
-  assert.equal((await h.archives())[ids[0]], undefined, h.output());
-  await h.state({ [ids[0]]: { turnId: "turn-2" } });
-  await h.complete(client, ids[0], "turn-2");
+  assert.equal((await h.archives())[ids[6]], undefined, h.output());
+  await h.waitForCompletion(client, "turn-2");
   await delay(100);
-  assert.equal((await h.archives())[ids[0]], undefined);
-  await h.complete(client, ids[0], "turn-1"); // An old notification must not replace the latest deadline.
-  await waitFor(async () => (await h.archives())[ids[0]]);
-  const saved = new MediaSessionAutoArchiveStore(h.storeFile).get({ hostId: "personal", sessionId: ids[0] });
+  assert.equal((await h.archives())[ids[6]], undefined);
+  await waitFor(async () => (await h.archives())[ids[6]]);
+  const saved = new MediaSessionAutoArchiveStore(h.storeFile).get({ hostId: "personal", sessionId: ids[6] });
   assert.equal(saved.kind, "xiaohongshu");
   assert.equal(saved.lastCompletedTurnId, "turn-2");
 });
@@ -224,22 +260,23 @@ test("a real submitted extraction survives follow-ups and archives only after th
 test("a new prompt during the native archive RPC restores the thread before submitting", async (t) => {
   const h = await harness(t);
   const client = await h.connect();
+  await h.state({ [ids[6]]: { turnId: "turn-1", archiveDelay: 200 } });
   await submit(client, "https://v.douyin.com/demo/");
-  await h.state({ [ids[0]]: { turnId: "turn-1", archiveDelay: 200 } });
-  await h.complete(client, ids[0], "turn-1");
   await waitFor(async () => (await h.calls()).some((call) => call.method === "thread/archive"));
+  await h.state({ [ids[6]]: { turnId: "turn-2" } });
   await submit(client, "还要补充一个时间戳");
   assert.ok((await h.calls()).some((call) => call.method === "thread/unarchive"), h.output());
-  assert.equal((await h.archives())[ids[0]], undefined);
+  assert.equal((await h.archives())[ids[6]], undefined);
   assert.equal(client.ws.readyState, WebSocket.OPEN);
+  await h.waitForCompletion(client, "turn-2");
   await delay(idleMs + 100);
-  assert.equal((await h.archives())[ids[0]], undefined);
+  assert.ok((await h.archives())[ids[6]]);
 });
 
 test("a failed archive response still restores a thread when a follow-up arrived during the request", async (t) => {
   const h = await harness(t);
   await h.state({ [ids[6]]: { turnId: "turn-1", archiveDelay: 200, failAfterArchive: true } });
-  const client = await h.connect("app-server");
+  const client = await h.connect();
   await submit(client, "https://v.douyin.com/demo/");
   await waitFor(async () => (await h.calls()).some((call) => call.method === "thread/archive"));
   await h.state({ [ids[6]]: { turnId: "turn-2" } });
@@ -273,7 +310,7 @@ test("existing completed extraction histories are classified from their original
 test("App Server failures remain available and a successful follow-up starts the deadline", async (t) => {
   const h = await harness(t);
   await h.state({ [ids[6]]: { turnId: "failed-turn", status: "failed" } });
-  const client = await h.connect("app-server");
+  const client = await h.connect();
   await submit(client, "https://v.douyin.com/demo/");
   await client.next((message) => message.type === "status" &&
     message.payload.turnState?.lastCompletedTurnId === "failed-turn" && !message.payload.turnState.active);
@@ -289,7 +326,7 @@ test("App Server runtime reclamation does not discard an extraction's archive de
   const h = await harness(t, async ({ nativeStateFile }) => {
     await writeFile(nativeStateFile, JSON.stringify({ [ids[6]]: { turnId: "turn-1" } }));
   }, { runtimeTtlMs: 150 });
-  const client = await h.connect("app-server");
+  const client = await h.connect();
   await submit(client, "https://xhslink.cn/demo");
   await client.next((message) => message.type === "status" && message.payload.released);
   assert.equal((await h.archives())[ids[6]], undefined);
@@ -315,15 +352,15 @@ async function connect(url) {
     } else queue.push(message);
   });
   await new Promise((resolve, reject) => { ws.once("open", resolve); ws.once("error", reject); });
-  return { ws, next(predicate) {
+  return { ws, next(predicate, timeoutMs = 3000) {
     const index = queue.findIndex(predicate);
     if (index >= 0) return Promise.resolve(queue.splice(index, 1)[0]);
     return new Promise((resolve, reject) => {
       const waiter = { predicate, resolve };
       waiter.timer = setTimeout(() => {
         waiters.splice(waiters.indexOf(waiter), 1);
-        reject(new Error("Timed out waiting for WebSocket message"));
-      }, 3000);
+        reject(new Error(`Timed out waiting for WebSocket message; queued=${JSON.stringify(queue)}`));
+      }, timeoutMs);
       waiters.push(waiter);
     });
   } };

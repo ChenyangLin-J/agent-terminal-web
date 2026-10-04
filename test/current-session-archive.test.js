@@ -31,9 +31,9 @@ test("the active Agent session can be archived from the responsive session heade
   );
   assert.match(app, /setArchiveSessionDisabled\(!activeSessionParams\.sessionId \|\| !canManageSession\)/);
   assert.match(server, /const endLiveSession = archived && Boolean\(req\.body\?\.endLiveSession\)/);
-  assert.match(server, /removePersistedWebSessionsForCodexSession\(id, agentHost\.id\)/);
+  assert.match(server, /removePersistedWebSessionsForCodexSession\(id\)/);
   assert.match(
     server,
-    /if \(endLiveSession\) \{[\s\S]*!session\.exited && session\.hostId === agentHost\.id && session\.sessionId === id[\s\S]*killSessionTerminal\(session\)/,
+    /if \(endLiveSession\) \{[\s\S]*!session\.exited && session\.sessionId === id[\s\S]*killSessionTerminal\(session\)/,
   );
 });

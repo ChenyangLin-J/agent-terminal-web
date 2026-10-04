@@ -12,12 +12,11 @@ test("the desktop and Pad Session switcher collapses and exposes contextual acti
 
   assert.match(page, /id="session-switcher-toggle"[\s\S]*aria-label="收起快速切换"/);
   assert.match(page, /id="session-switcher-open"[\s\S]*aria-label="展开快速切换"/);
-  assert.match(page, /id="session-switcher-host-tabs"[\s\S]*aria-label="会话账号筛选"/);
+  assert.doesNotMatch(page, /session-switcher-host-tabs/);
   assert.match(app, /const SESSION_SWITCHER_COLLAPSED_STORE_KEY/);
   assert.match(app, /return stored === null \? false : stored !== "0"/);
   assert.match(app, /function setSessionSwitcherCollapsed\(collapsed/);
-  assert.match(app, /function renderSessionSwitcherHostTabs\(\)/);
-  assert.match(app, /sessionSwitcherAccountFilter = filter\.id/);
+  assert.doesNotMatch(app, /renderSessionSwitcherHostTabs|sessionSwitcherAccountFilter|agentHostApiUrl/);
   assert.match(styles, /\.session-screen\.session-switcher-collapsed \{[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
   assert.match(styles, /\.session-screen\.session-switcher-collapsed \.session-switcher \{\s*display: none/);
   assert.match(
@@ -40,11 +39,11 @@ test("the desktop and Pad Session switcher collapses and exposes contextual acti
   );
   assert.match(
     app,
-    /function archiveSessionFromSwitcher\(session\)[\s\S]*agentHostApiUrl\([\s\S]*session\.hostId \|\| activeAgentHostId/,
+    /function archiveSessionFromSwitcher\(session\)[\s\S]*`\/api\/codex-sessions\/\$\{encodeURIComponent\(sessionId\)\}\/archive`/,
   );
   assert.match(
     app,
-    /agentHostApiUrl\(`\/api\/sessions\/\$\{encodeURIComponent\(webSessionId\)\}\/end`, session\.hostId \|\| activeAgentHostId\)/,
+    /function endSessionFromSwitcher\(session\)[\s\S]*`\/api\/sessions\/\$\{encodeURIComponent\(webSessionId\)\}\/end`/,
   );
   assert.match(
     app,
@@ -52,7 +51,7 @@ test("the desktop and Pad Session switcher collapses and exposes contextual acti
   );
   assert.match(
     app,
-    /async function endSession\(\)[\s\S]*agentHostApiUrl\([\s\S]*\/api\/sessions\/\$\{encodeURIComponent\(webSessionId\)\}\/end[\s\S]*openNewSessionAfterEnd\(\{/,
+    /async function endSession\(\)[\s\S]*`\/api\/sessions\/\$\{encodeURIComponent\(webSessionId\)\}\/end`[\s\S]*openNewSessionAfterEnd\(\{/,
   );
   assert.match(
     app,
@@ -64,15 +63,15 @@ test("the desktop and Pad Session switcher collapses and exposes contextual acti
     /\.session-switcher-row:hover \.session-switcher-actions > summary,[\s\S]*opacity: 1;[\s\S]*pointer-events: auto;/,
   );
   assert.match(styles, /@media \(hover: none\)[\s\S]*\.session-switcher-actions > summary/);
-  assert.match(styles, /\.session-switcher-host-tabs \{[\s\S]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
+  assert.doesNotMatch(styles, /\.session-switcher-host-tabs/);
   assert.ok(server.includes('app.post("/api/sessions/:id/end"'));
   assert.match(
     server,
-    /session && !session\.exited && session\.hostId === agentHost\.id[\s\S]*killSessionTerminal\(session\)/,
+    /session && !session\.exited[\s\S]*killSessionTerminal\(session\)/,
   );
   assert.match(server, /res\.json\(\{ id, ended: true, session: publicSession\(session\) \}\)/);
   assert.match(
     server,
-    /listDetachedSessions\(\)\.find\([\s\S]*candidate\.hostId === agentHost\.id[\s\S]*removePersistedWebSession\(id\)/,
+    /listDetachedSessions\(\)\.find\(\(candidate\) => candidate\.id === id\)[\s\S]*removePersistedWebSession\(id\)/,
   );
 });

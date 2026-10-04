@@ -21,9 +21,7 @@ The loopback endpoints are:
 - `/internal/mcp/amap`
 - `/internal/mcp/playwright`
 
-Direct non-loopback requests receive `404`. When
-`AGENT_SHARED_APP_SERVER=0` is used for rollback, the legacy Catalog process
-still starts with `mcp_servers={}`.
+Direct non-loopback requests receive `404`.
 
 ## Lifecycle contract
 

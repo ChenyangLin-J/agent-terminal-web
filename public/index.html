@@ -29,15 +29,11 @@
 
       body,
       .app,
-      .session-screen,
-      .terminal-view,
-      #terminal {
+      .session-screen {
         background: #0f1115;
       }
     </style>
-    <link rel="stylesheet" href="/styles.css?v=20260728-auto-orchestration-1" />
-    <link rel="stylesheet" href="/agent-hosts.css?v=20260727-account-control-center-1" />
-    <link rel="stylesheet" href="/session-focus-mode.css?v=20260720-app-toolbar-1" />
+    <link rel="stylesheet" href="/styles.css?v=20261004-app-server-1" />
     <link rel="stylesheet" href="/thinking-session.css?v=20260716-1" />
     <link rel="stylesheet" href="/agent-memories.css?v=20261003-change-timeline-1" />
     <link rel="stylesheet" href="/agent-integrations.css?v=20260825-custom-keys-1" />
@@ -101,8 +97,6 @@
 
         <section id="codex-update-notices" class="codex-update-notices hidden" aria-label="Codex 更新提醒" aria-live="polite"></section>
 
-        <nav id="agent-host-tabs" class="agent-host-tabs" aria-label="Session 账号筛选"></nav>
-
         <section class="control-center-summary" aria-label="Session 状态概览">
           <button type="button" data-summary-kind="pending" data-summary-filter="pending">
             <span>待处理</span>
@@ -141,10 +135,6 @@
             <button id="close-new-session" type="button" aria-label="关闭新建 Session">×</button>
           </header>
           <div class="start-grid">
-            <label>
-              <span>Account</span>
-              <select id="session-host"></select>
-            </label>
 
             <label>
               <span>Project</span>
@@ -226,11 +216,6 @@
             <span class="hidden">搜索 Session</span>
             <input id="session-switcher-search" type="search" placeholder="搜索 Session…" />
           </label>
-          <nav
-            id="session-switcher-host-tabs"
-            class="session-switcher-host-tabs"
-            aria-label="会话账号筛选"
-          ></nav>
           <div id="session-switcher-list" class="session-switcher-list"></div>
           <button id="session-switcher-new" class="session-switcher-new" type="button">＋ 新建 Session</button>
         </aside>
@@ -288,43 +273,11 @@
           </div>
         </header>
 
-        <section class="view-tabs" aria-label="Terminal view mode">
-          <button id="terminal-tab" class="active" type="button">Terminal</button>
-          <button id="text-tab" type="button">Text</button>
-        </section>
-
-        <section class="terminal-view">
-          <div id="terminal" aria-label="Codex terminal"></div>
-          <section id="terminal-session-preview" class="terminal-session-preview hidden" aria-live="polite">
-            <header>
-              <strong>上次完成</strong>
-              <span>Terminal 会话正在后台恢复</span>
-            </header>
-            <pre id="terminal-session-preview-result"></pre>
-            <button id="terminal-session-preview-dismiss" type="button">查看 Terminal 加载画面</button>
-          </section>
-        </section>
-
-        <section id="app-server-view" class="app-server-view hidden" aria-label="Session conversation">
+        <section id="app-server-view" class="app-server-view" aria-label="Session conversation">
           <div class="app-transcript-latest-layer">
             <button id="app-transcript-latest" class="app-transcript-latest hidden" type="button">有新内容 ↓</button>
           </div>
           <div id="app-server-transcript" class="app-server-transcript" aria-live="polite"></div>
-        </section>
-
-        <section id="text-view" class="text-view hidden" aria-label="Terminal text">
-          <textarea id="terminal-text" readonly spellcheck="false" wrap="soft"></textarea>
-        </section>
-
-        <section class="quick-actions" aria-label="Quick commands">
-          <button id="page-up" type="button">Page Up</button>
-          <button id="page-down" type="button">Page Down</button>
-          <button id="key-up" type="button">Up</button>
-          <button id="key-down" type="button">Down</button>
-          <button id="key-enter" type="button">Enter</button>
-          <button id="key-esc" type="button">Esc</button>
-          <button id="send-status" type="button">/status</button>
-          <button id="send-permissions" type="button">/permissions</button>
         </section>
 
         <section id="app-session-tools" class="app-session-tools" aria-label="Session tools">
@@ -375,7 +328,7 @@
             <div class="app-session-more-menu">
               <button id="app-session-agents" type="button" title="查看当前 Session 的子 Agent">
                 <span>Agents</span>
-                <strong id="app-session-agents-mode">Auto</strong>
+                <strong id="app-session-agents-mode">管理</strong>
               </button>
               <button id="app-session-tree" type="button" title="查看 Session 分支与 Agent 关系">
                 <span>关系</span>
@@ -484,19 +437,6 @@
             <button id="agent-manager-close" class="dialog-close" type="button" aria-label="关闭">×</button>
           </div>
         </header>
-        <section class="orchestration-panel" aria-labelledby="orchestration-mode-title">
-          <div>
-            <strong id="orchestration-mode-title">协作模式</strong>
-            <span id="orchestration-mode-summary">Auto 会先判断任务，只在有净收益时委派。</span>
-          </div>
-          <div class="orchestration-mode-options" role="group" aria-label="Multi-Agent 协作模式">
-            <button id="orchestration-mode-auto" type="button" data-mode="auto" aria-pressed="true">Auto</button>
-            <button id="orchestration-mode-manual" type="button" data-mode="manual" aria-pressed="false">手动</button>
-          </div>
-          <p id="orchestration-role-summary">
-            Explorer · Terra/medium　Worker · Sol/high　Reviewer · Sol/high
-          </p>
-        </section>
         <p id="agent-manager-note" class="feature-dialog-note">正在读取当前 Session 的子 Agent…</p>
         <div id="agent-manager-list" class="agent-manager-list" aria-live="polite"></div>
       </section>
@@ -687,6 +627,5 @@
     <script src="/agent-realtime.js?v=20260807-webrtc-1"></script>
     <script src="/app.js?v=20260914-auto-memory-1"></script>
     <script src="/codex-updates.js?v=20261003-1"></script>
-    <script src="/session-focus-mode.js?v=20260716-app-chrome-1"></script>
   </body>
 </html>

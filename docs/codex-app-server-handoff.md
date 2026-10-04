@@ -44,7 +44,6 @@ codex app-server（JSONL stdio）
 核心客户端代码：
 
 - `lib/codex-app-server-client.js`
-- `lib/agent-host-app-server.js`
 
 ## 已经遇到的问题
 
@@ -293,11 +292,10 @@ App Server 的事件类型在增加。UI 如果用一个完整枚举硬编码所
 
 - `APP_SERVER_MIGRATION.md`：Agent Web 当前 App Server 行为。
 - `lib/codex-app-server-client.js`：JSON-RPC connection、thread client、turn 与队列。
-- `lib/agent-host-app-server.js`：每个执行主机的共享 connection pool。
+- `server.js` 中的 `sharedAgentAppServerConnection`：本地共享 App Server connection。
 - `docs/shared-mcp-providers.md`：共享、按需启动 MCP Provider。
-- `docs/multi-host.md`：通过 SSH stdio 连接另一台执行主机。
 - `test/app-server-client.test.js`：turn 竞态、恢复和多 thread 隔离。
-- `test/shared-app-server.test.js`：共享进程与 rollback。
+- `test/shared-app-server.test.js`：共享进程。
 - `test/app-server-runtime-lease.test.js`：空闲释放与恢复。
 - `test/attachments.test.js`：附件等待与路径校验。
 - `test/restart-protection.test.js`：避免 Agent 自己重启承载服务。

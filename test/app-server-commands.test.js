@@ -79,8 +79,8 @@ test("App Server exposes slash commands and structured Skill mentions", async ()
   assert.match(app, /appSessionTaskStop\.classList\.toggle\("hidden", !canInterrupt\)/);
   assert.match(app, /activeTurnInterruptSupported = Boolean\(status\.capabilities\?\.interruptTurn\)/);
   assert.match(app, /send\(\{ type: "interrupt-turn" \}\)/);
-  assert.match(server, /interruptTurn: session\.transport === APP_SERVER_TRANSPORT/);
-  assert.match(app, /skills: activeTransport === "app-server" \? extractSkillMentions\(prompt\) : \[\]/);
+  assert.match(server, /interruptTurn: true/);
+  assert.match(app, /skills: extractSkillMentions\(prompt\)/);
   assert.match(styles, /\.composer-suggestions/);
   assert.match(styles, /\.app-command-dialog/);
   assert.match(styles, /\.app-command-meters/);

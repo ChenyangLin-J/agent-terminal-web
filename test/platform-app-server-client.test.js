@@ -90,6 +90,120 @@ test("platform client steers the exact active turn and surfaces late-steer error
   await assert.rejects(() => client.steerTurn("Too late"), /no active turn/i);
 });
 
+test("platform client delivers error notifications without requiring an error listener", async (t) => {
+  const { fake, client, kernel } = createClient();
+  t.after(() => {
+    client.close();
+    kernel.close();
+  });
+  await client.start();
+  await client.startThread({ cwd: "/tmp" });
+  await client.startTurn("Working");
+
+  const notifications = [];
+  client.on("notification", (message) => notifications.push(message));
+  for (const willRetry of [true, false]) {
+    const notification = {
+      method: "error",
+      params: {
+        threadId: client.threadId,
+        turnId: client.activeTurnId,
+        error: {
+          message: "Selected model is at capacity. Please try a different model.",
+          codexErrorInfo: "serverOverloaded",
+        },
+        willRetry,
+      },
+    };
+    assert.doesNotThrow(() => fake.send(notification));
+    assert.deepEqual(notifications.at(-1), notification);
+  }
+  assert.equal(notifications.length, 2);
+  assert.equal(client.closed, false);
+  assert.equal(client.connection.closed, false);
+});
+
+test("platform client also forwards errors to explicit error listeners", async (t) => {
+  const { fake, client, kernel } = createClient();
+  t.after(() => {
+    client.close();
+    kernel.close();
+  });
+  await client.start();
+  await client.startThread({ cwd: "/tmp" });
+
+  const notifications = [];
+  const errors = [];
+  client.on("notification", (message) => notifications.push(message));
+  client.on("error", (params) => errors.push(params));
+  const notification = {
+    method: "error",
+    params: { threadId: client.threadId, error: { message: "Model unavailable" }, willRetry: false },
+  };
+  fake.send(notification);
+  assert.deepEqual(notifications, [notification]);
+  assert.deepEqual(errors, [notification.params]);
+});
+
+test("a platform turn failure leaves other sessions on the shared connection running", async (t) => {
+  const { fake, client, kernel } = createClient();
+  const other = new PlatformAppServerClient({
+    sessionId: "web-2",
+    cwd: "/tmp",
+    connection: client.connection,
+    kernel,
+  });
+  t.after(() => {
+    client.close();
+    other.close();
+    kernel.close();
+  });
+  await client.start();
+  await other.start();
+  await client.startThread({ cwd: "/tmp" });
+  await other.startThread({ cwd: "/tmp" });
+  const failedTurn = await client.startTurn("First task");
+  const otherTurn = await other.startTurn("Other task");
+
+  const notifications = [];
+  const otherNotifications = [];
+  client.on("notification", (message) => notifications.push(message));
+  other.on("notification", (message) => otherNotifications.push(message));
+  const error = {
+    message: "Selected model is at capacity. Please try a different model.",
+    codexErrorInfo: "serverOverloaded",
+  };
+  assert.doesNotThrow(() => fake.send({
+    method: "error",
+    params: { threadId: client.threadId, turnId: failedTurn.id, error, willRetry: false },
+  }));
+  fake.send({
+    method: "turn/completed",
+    params: { threadId: client.threadId, turn: { id: failedTurn.id, status: "failed", error } },
+  });
+  await tick();
+  assert.equal(client.activeTurnId, "");
+  assert.equal(other.activeTurnId, otherTurn.id);
+  assert.deepEqual(otherNotifications, []);
+  assert.equal(client.connection.closed, false);
+  assert.equal(other.closed, false);
+
+  const delta = {
+    method: "item/agentMessage/delta",
+    params: { threadId: other.threadId, turnId: otherTurn.id, itemId: "item-2", delta: "Still working" },
+  };
+  fake.send(delta);
+  fake.send({
+    method: "turn/completed",
+    params: { threadId: other.threadId, turn: { id: otherTurn.id, status: "completed" } },
+  });
+  await tick();
+  assert.deepEqual(otherNotifications[0], delta);
+  assert.equal(other.activeTurnId, "");
+  assert.equal(notifications.length, 2);
+  assert.equal((await client.startTurn("Retry the first task")).id, "turn-3");
+});
+
 test("platform client queues turns behind the active turn and drains on completion", async (t) => {
   const { fake, client, kernel } = createClient();
   t.after(() => {
@@ -204,6 +318,7 @@ function createFakeAppServer() {
   const stderr = new PassThrough();
   const received = [];
   let inputBuffer = "";
+  let threadNumber = 0;
   let turnNumber = 0;
 
   const stdin = new Writable({
@@ -242,7 +357,8 @@ function createFakeAppServer() {
       return;
     }
     if (message.method === "thread/start") {
-      send({ id: message.id, result: { thread: { id: "thread-1" } } });
+      threadNumber += 1;
+      send({ id: message.id, result: { thread: { id: `thread-${threadNumber}` } } });
       return;
     }
     if (message.method === "thread/resume") {

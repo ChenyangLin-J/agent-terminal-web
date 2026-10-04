@@ -16,8 +16,6 @@ const controlReadyCount = document.querySelector("#control-ready-count");
 const controlHistoryCount = document.querySelector("#control-history-count");
 const controlLiveCount = document.querySelector("#control-live-count");
 const controlSummaryButtons = document.querySelectorAll("[data-summary-filter]");
-const agentHostTabs = document.querySelector("#agent-host-tabs");
-const newSessionHostSelect = document.querySelector("#session-host");
 const projectSelect = document.querySelector("#project");
 const accessModeSelect = document.querySelector("#access-mode");
 const connectButton = document.querySelector("#connect");
@@ -40,16 +38,6 @@ const sessionSearchResults = document.querySelector("#session-search-results");
 const backButton = document.querySelector("#back");
 const searchCurrentSessionButton = document.querySelector("#search-current-session");
 const disconnectButton = document.querySelector("#disconnect");
-const terminalTabButton = document.querySelector("#terminal-tab");
-const textTabButton = document.querySelector("#text-tab");
-const pageUpButton = document.querySelector("#page-up");
-const pageDownButton = document.querySelector("#page-down");
-const keyUpButton = document.querySelector("#key-up");
-const keyDownButton = document.querySelector("#key-down");
-const keyEnterButton = document.querySelector("#key-enter");
-const keyEscButton = document.querySelector("#key-esc");
-const sendStatusButton = document.querySelector("#send-status");
-const sendPermissionsButton = document.querySelector("#send-permissions");
 const appSessionPermissionsButton = document.querySelector("#app-session-permissions");
 const appSessionPermissionsValue = document.querySelector("#app-session-permissions-value");
 const appSessionContextButton = document.querySelector("#app-session-context");
@@ -60,7 +48,6 @@ const appSessionTaskControl = document.querySelector("#app-session-task-control"
 const appSessionTaskState = document.querySelector("#app-session-task-state");
 const appSessionTaskStop = document.querySelector("#app-session-task-stop");
 const appSessionAgentsButton = document.querySelector("#app-session-agents");
-const appSessionAgentsMode = document.querySelector("#app-session-agents-mode");
 const appSessionTreeButton = document.querySelector("#app-session-tree");
 const appSessionShareButton = document.querySelector("#app-session-share");
 const appSessionSideChatButton = document.querySelector("#app-session-side-chat");
@@ -101,15 +88,9 @@ const agentRequestAnswer = document.querySelector("#agent-request-answer");
 const agentRequestAccept = document.querySelector("#agent-request-accept");
 const agentRequestSession = document.querySelector("#agent-request-session");
 const agentRequestDecline = document.querySelector("#agent-request-decline");
-const terminalView = document.querySelector(".terminal-view");
-const terminalSessionPreview = document.querySelector("#terminal-session-preview");
-const terminalSessionPreviewResult = document.querySelector("#terminal-session-preview-result");
-const terminalSessionPreviewDismiss = document.querySelector("#terminal-session-preview-dismiss");
 const appServerView = document.querySelector("#app-server-view");
 const appServerTranscript = document.querySelector("#app-server-transcript");
 const appTranscriptLatestButton = document.querySelector("#app-transcript-latest");
-const textView = document.querySelector("#text-view");
-const terminalText = document.querySelector("#terminal-text");
 const appCommandDialog = document.querySelector("#app-command-dialog");
 const appCommandEyebrow = document.querySelector("#app-command-eyebrow");
 const appCommandTitle = document.querySelector("#app-command-title");
@@ -121,10 +102,6 @@ const agentManagerRefresh = document.querySelector("#agent-manager-refresh");
 const agentManagerClose = document.querySelector("#agent-manager-close");
 const agentManagerNote = document.querySelector("#agent-manager-note");
 const agentManagerList = document.querySelector("#agent-manager-list");
-const orchestrationModeSummary = document.querySelector("#orchestration-mode-summary");
-const orchestrationModeAuto = document.querySelector("#orchestration-mode-auto");
-const orchestrationModeManual = document.querySelector("#orchestration-mode-manual");
-const orchestrationRoleSummary = document.querySelector("#orchestration-role-summary");
 const threadTreeDialog = document.querySelector("#thread-tree-dialog");
 const threadTreeRefresh = document.querySelector("#thread-tree-refresh");
 const threadTreeClose = document.querySelector("#thread-tree-close");
@@ -169,7 +146,6 @@ const sessionSwitcherToggle = document.querySelector("#session-switcher-toggle")
 const sessionSwitcherOpenButton = document.querySelector("#session-switcher-open");
 const sessionSwitcherNewButton = document.querySelector("#session-switcher-new");
 const sessionSwitcherSearch = document.querySelector("#session-switcher-search");
-const sessionSwitcherHostTabs = document.querySelector("#session-switcher-host-tabs");
 const sessionSwitcherList = document.querySelector("#session-switcher-list");
 const sessionSwitcherCount = document.querySelector("#session-switcher-count");
 
@@ -180,10 +156,6 @@ const statusEls = {
   project: document.querySelector("#session-project"),
 };
 
-const PAGE_SCROLL_OVERLAP_RATIO = 0.18;
-const PAGE_SCROLL_MIN_OVERLAP = 3;
-const PAGE_SCROLL_MAX_OVERLAP = 8;
-const PAGE_DOWN_LONG_PRESS_MS = 450;
 const DEFAULT_DOCUMENT_TITLE = "Agent Terminal Web";
 const AGENT_RESTART_ENDPOINT = "https://home.chenyanglin.com/api/system/agent/restart";
 const AGENT_TIME_ZONE = "Asia/Shanghai";
@@ -194,17 +166,10 @@ const CLIENT_STALE_MS = 45_000;
 const CLIENT_RESUME_PROBE_MS = 1_500;
 const CLIENT_ID_KEY = "agent_terminal_client_id";
 const PUSH_DEVICE_ID_KEY = "agent_terminal_push_device_id";
-const SESSION_SNAPSHOT_STORE_KEY = "agent_terminal_session_snapshots";
 const APP_READING_POSITION_STORE_KEY = "agent_terminal_app_reading_positions";
 const LAST_SESSION_NAVIGATION_STORE_KEY = "agent_terminal_last_session_navigation";
 const SESSION_SWITCHER_COLLAPSED_STORE_KEY = "agent_terminal_session_switcher_collapsed";
 const SESSION_SHARE_LINKS_STORE_KEY = "agent_terminal_session_share_links";
-const SESSION_SNAPSHOT_LIMIT = 8;
-const SESSION_SNAPSHOT_MAX_CHARS = 200_000;
-const TERMINAL_RECENT_HISTORY_MAX_CHARS = 24_000;
-const TERMINAL_HISTORY_QUIET_MS = 1_200;
-const TERMINAL_HISTORY_EMPTY_READY_MS = 120;
-const TERMINAL_DELAYED_HISTORY_GUARD_MS = 60_000;
 const APP_INITIAL_TURN_LIMIT = 10;
 const APP_READING_POSITION_LIMIT = 40;
 const APP_READING_POSITION_SAVE_MS = 120;
@@ -212,10 +177,6 @@ const LIVE_SESSIONS_FALLBACK_MS = 60_000;
 const SESSION_CATALOG_FALLBACK_MS = 5 * 60_000;
 const CONTROL_EVENT_CATALOG_DEBOUNCE_MS = 500;
 const LIVE_SESSION_PREVIEW_REFRESH_MS = 4_000;
-const REMOTE_AGENT_REQUEST_TIMEOUT_MS = 5_000;
-const REMOTE_AGENT_INITIAL_REQUEST_TIMEOUT_MS = 12_000;
-const REMOTE_HOST_RETRY_BASE_MS = 15_000;
-const REMOTE_HOST_RETRY_MAX_MS = 2 * 60_000;
 const DEFAULT_TRANSPORT = "app-server";
 const DEFAULT_ACCESS_MODE = "full";
 const APP_COMMANDS = [
@@ -238,17 +199,6 @@ const APP_COMMANDS = [
 ];
 const appMarkdownRenderer = globalThis.AgentMarkdown?.createRenderer() || null;
 
-let terminal = null;
-let fitAddon = null;
-let terminalAssetsPromise = null;
-let terminalTouchY = null;
-let fitFrame = null;
-let fitTimer = null;
-let lastSentCols = 0;
-let lastSentRows = 0;
-let pageDownLongPressTimer = null;
-let pageDownLongPressFired = false;
-
 let socket = null;
 let sessionsTimer = null;
 let sessionCatalogTimer = null;
@@ -257,9 +207,6 @@ let controlEventCatalogTimer = null;
 let sessionCatalogRefreshPromise = null;
 let sessionCatalogLastRefreshedAt = 0;
 let sessionCatalogLoaded = false;
-const remoteHostRetryTimers = new Map();
-const remoteHostRetryAttempts = new Map();
-const successfulRemoteSessionLists = new Set();
 let reconnectTimer = null;
 let clientHeartbeatTimer = null;
 let visibleProbeTimer = null;
@@ -270,18 +217,6 @@ let activeSessionId = "";
 let activeSessionParams = {};
 let currentSessionExited = false;
 let lastServerSeenAt = 0;
-let historySyncPending = false;
-let historySyncStartedAt = 0;
-let lastOutputRevision = 0;
-let queuedOutputRevision = 0;
-let terminalHistoryBuffering = false;
-let terminalHistoryForceFull = false;
-let terminalHistoryWaitForOutput = false;
-let terminalHistoryChunks = [];
-let terminalHistoryChars = 0;
-let terminalHistoryRevision = null;
-let terminalHistoryFlushTimer = null;
-let terminalHistoryUiReady = false;
 let uploadStatusTimer = null;
 let promptSubmissionPending = false;
 let liveSessionsByCodexId = new Map();
@@ -289,10 +224,6 @@ let liveSessionsCache = [];
 let savedSessionsCache = [];
 let archivedSessionsCache = [];
 let openSessionSwitcherActionId = "";
-let agentHosts = [];
-let activeAgentHostId = cleanAgentHostId(new URLSearchParams(window.location.search).get("host")) || "personal";
-let activeAccountFilter = "all";
-let sessionSwitcherAccountFilter = "all";
 let activeControlCenterFilter = "all";
 let archivedSessionsExpanded = false;
 let savedSessionsExpanded = false;
@@ -309,12 +240,10 @@ let latestTurnState = {
 };
 let resumeInterruptedPending = false;
 let interruptRequestPending = false;
-let activeTransport = DEFAULT_TRANSPORT;
 let activeAccessMode = DEFAULT_ACCESS_MODE;
 let activeMemoryProjectMode = "auto";
 let activeMemoryProjects = [];
 let activeMemoryProjectSource = "global";
-let activeOrchestrationMode = "auto";
 let activeTokenUsage = null;
 let lastContextNoticeKey = "";
 let activeSessionReady = true;
@@ -354,8 +283,6 @@ let sessionPreviewLiveActive = false;
 let sessionPreviewRefreshTimer = null;
 let appTranscriptAnchorAliases = new Map();
 let sessionPreviewRequestSequence = 0;
-let terminalPreviewAllowed = false;
-let terminalOutputWhilePreviewChars = 0;
 let agentManagerRefreshTimer = null;
 let currentSessionShare = null;
 let currentSessionShareUrl = "";
@@ -395,10 +322,7 @@ setSessionSwitcherCollapsed(
   window.matchMedia("(max-width: 720px)").matches ? true : readSessionSwitcherCollapsed(),
   { persist: false },
 );
-window.addEventListener("resize", () => {
-  fitTerminal({ delay: 120 });
-  followAppTranscriptAfterViewportChange();
-});
+window.addEventListener("resize", followAppTranscriptAfterViewportChange);
 window.visualViewport?.addEventListener("resize", followAppTranscriptAfterViewportChange);
 
 logoutButton.addEventListener("click", logout);
@@ -407,7 +331,6 @@ navControlCenterButton.addEventListener("click", showStartScreen);
 navCurrentSessionButton.addEventListener("click", openCurrentSessionNavigation);
 openNewSessionButton.addEventListener("click", () => toggleNewSessionPanel(true));
 closeNewSessionButton.addEventListener("click", () => toggleNewSessionPanel(false));
-newSessionHostSelect.addEventListener("change", () => switchNewSessionHost(newSessionHostSelect.value));
 controlCenterFilters.addEventListener("click", (event) => {
   const button = event.target.closest("[data-session-filter]");
   if (!button) return;
@@ -456,23 +379,6 @@ mobileDisconnectButton.addEventListener("click", () => {
   closeSessionMenu();
   detach();
 });
-terminalTabButton.addEventListener("click", closeTextView);
-textTabButton.addEventListener("click", openTextView);
-pageUpButton.addEventListener("click", () => scrollTerminalPage(-1));
-pageDownButton.addEventListener("click", (event) => {
-  if (pageDownLongPressFired) {
-    event.preventDefault();
-    pageDownLongPressFired = false;
-    return;
-  }
-  scrollTerminalPage(1);
-});
-keyUpButton.addEventListener("click", () => sendTerminalKey("\x1b[A"));
-keyDownButton.addEventListener("click", () => sendTerminalKey("\x1b[B"));
-keyEnterButton.addEventListener("click", () => sendTerminalKey("\r"));
-keyEscButton.addEventListener("click", () => sendTerminalKey("\x1b"));
-sendStatusButton.addEventListener("click", () => command("/status"));
-sendPermissionsButton.addEventListener("click", openPermissionsPanel);
 appSessionPermissionsButton.addEventListener("click", openPermissionsPanel);
 appSessionContextButton.addEventListener("click", () => runAppCommand("/status"));
 appSessionMemoriesButton.addEventListener("click", openMemoryManager);
@@ -530,7 +436,6 @@ document.addEventListener("click", (event) => {
     }
   }
 });
-terminalSessionPreviewDismiss.addEventListener("click", hideTerminalSessionPreview);
 appTranscriptLatestButton.addEventListener("click", () => scrollAppTranscriptToBottom({ smooth: true }));
 appServerView.addEventListener("scroll", handleAppTranscriptScroll, { passive: true });
 appServerView.addEventListener("pointerdown", stopAppTranscriptSubmitFollow, { passive: true });
@@ -545,8 +450,6 @@ agentManagerDialog.addEventListener("click", (event) => {
   if (event.target === agentManagerDialog) agentManagerDialog.close();
 });
 agentManagerDialog.addEventListener("close", stopAgentManagerRefresh);
-orchestrationModeAuto.addEventListener("click", () => updateOrchestrationMode("auto"));
-orchestrationModeManual.addEventListener("click", () => updateOrchestrationMode("manual"));
 threadTreeRefresh.addEventListener("click", requestThreadTree);
 threadTreeClose.addEventListener("click", () => threadTreeDialog.close());
 threadTreeDialog.addEventListener("click", (event) => {
@@ -634,7 +537,6 @@ const realtimeController = window.AgentRealtime.create({
   activateSession: activateRealtimeSession,
 });
 realtimeController.install();
-installPageDownLongPress();
 installClientEventLogging();
 
 bootstrap().catch(() => {
@@ -646,7 +548,6 @@ async function bootstrap() {
   const data = await response.json();
   if (data.authenticated) {
     loadedAgentInstance = await readAgentInstance();
-    await loadAgentHosts();
     await loadProjects();
     connectControlEvents();
     if (globalThis.Notification?.permission === "granted") {
@@ -739,10 +640,9 @@ function wait(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
-async function loadProjects(hostId = activeAgentHostId) {
-  const data = await apiJsonForHost("/api/projects", hostId);
+async function loadProjects() {
+  const data = await apiJson("/api/projects");
   if (!data) return;
-  if ((cleanAgentHostId(hostId) || "personal") !== activeAgentHostId) return;
 
   projectSelect.innerHTML = "";
   const rootOption = document.createElement("option");
@@ -760,127 +660,8 @@ async function loadProjects(hostId = activeAgentHostId) {
   projectSelect.value = ".";
 }
 
-async function loadAgentHosts() {
-  const response = await fetch("/api/hosts", { cache: "no-store" });
-  if (!response.ok) return;
-  const data = await response.json();
-  agentHosts = Array.isArray(data.hosts) ? data.hosts : [];
-  if (!agentHosts.some((host) => host.id === activeAgentHostId)) {
-    activeAgentHostId = cleanAgentHostId(data.defaultHostId) || "personal";
-  }
-  renderNewSessionHostOptions();
-  renderAgentHostTabs();
-}
-
-function renderAgentHostTabs() {
-  if (!agentHostTabs) return;
-  agentHostTabs.replaceChildren();
-  const filters = [
-    { id: "all", label: "全部", type: "all", count: liveSessionsCache.length },
-    ...agentHosts.map((host) => ({
-      ...host,
-      count: liveSessionsCache.filter((session) => session.hostId === host.id).length,
-    })),
-  ];
-  for (const host of filters) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.dataset.hostId = host.id;
-    button.dataset.hostType = host.type;
-    button.classList.toggle("active", host.id === activeAccountFilter);
-    button.toggleAttribute("aria-current", host.id === activeAccountFilter);
-    const label = document.createElement("span");
-    label.textContent = host.label || host.id;
-    const count = document.createElement("small");
-    count.textContent = String(host.count || 0);
-    button.append(label, count);
-    button.addEventListener("click", () => setAccountFilter(host.id));
-    agentHostTabs.append(button);
-  }
-  agentHostTabs.classList.toggle("hidden", agentHosts.length < 2);
-}
-
-function renderNewSessionHostOptions() {
-  newSessionHostSelect.replaceChildren(
-    ...agentHosts.map((host) => {
-      const option = document.createElement("option");
-      option.value = host.id;
-      option.textContent = host.label || host.id;
-      return option;
-    }),
-  );
-  newSessionHostSelect.value = activeAgentHostId;
-}
-
-function filteredAgentHosts(filter = activeAccountFilter) {
-  return filter === "all" ? agentHosts : agentHosts.filter((host) => host.id === filter);
-}
-
-function agentHostLabel(hostId) {
-  const id = cleanAgentHostId(hostId) || "personal";
-  return agentHosts.find((host) => host.id === id)?.label || (id === "personal" ? "个人" : id);
-}
-
-function isRemoteAgentHost(hostId) {
-  const id = cleanAgentHostId(hostId) || "personal";
-  return agentHosts.find((host) => host.id === id)?.type === "ssh";
-}
-
-function accountMatches(session, filter = activeAccountFilter) {
-  return filter === "all" || (cleanAgentHostId(session?.hostId) || "personal") === filter;
-}
-
-function filteredControlLiveSessions() {
-  return liveSessionsCache.filter((session) => accountMatches(session));
-}
-
-function hostSessionKey(hostId, sessionId) {
-  return `${cleanAgentHostId(hostId) || "personal"}:${String(sessionId || "")}`;
-}
-
-function syncAgentHostCapabilities() {
-  const remote = activeAgentHostId !== "personal";
-  attachFileButton.disabled = remote;
-  attachFileButton.title = remote
-    ? "远端 Session 暂不支持从 Agent Web 上传附件"
-    : "添加文件";
-  appSessionMemoriesButton.disabled = remote;
-  appSessionMemoriesButton.title = remote
-    ? "公司 Session 不加载个人记忆"
-    : "查看当前 Session 的个人记忆路由";
-}
-
-async function switchNewSessionHost(hostId) {
-  const nextHostId = cleanAgentHostId(hostId);
-  if (!nextHostId || nextHostId === activeAgentHostId) return;
-  if (!agentHosts.some((host) => host.id === nextHostId)) return;
-  activeAgentHostId = nextHostId;
-  newSessionHostSelect.value = activeAgentHostId;
-  syncControlCenterHostUrl();
-  await loadProjects();
-  syncAgentHostCapabilities();
-}
-
-function setAccountFilter(filter) {
-  const next = filter === "all" || agentHosts.some((host) => host.id === filter) ? filter : "all";
-  if (next === activeAccountFilter) return;
-  activeAccountFilter = next;
-  sessionSearchResults.classList.add("hidden");
-  sessionSearchResults.replaceChildren();
-  renderAgentHostTabs();
-  renderSavedCodexSessions(savedSessionsCache);
-  renderArchivedCodexSessions(archivedSessionsCache);
-  renderFavoriteSessions();
-  updateControlCenterSummary();
-  applyControlCenterFilter();
-}
-
-function syncControlCenterHostUrl() {
-  if (startScreen.classList.contains("hidden")) return;
-  const url = new URL(window.location.href);
-  url.search = "";
-  if (activeAgentHostId !== "personal") url.searchParams.set("host", activeAgentHostId);
-  window.history.replaceState(null, "", url.toString());
+function codexSessionKey(sessionId) {
+  return String(sessionId || "");
 }
 
 async function refreshLists({ forceCatalog = false } = {}) {
@@ -915,7 +696,6 @@ async function refreshSessionCatalogs({ force = false } = {}) {
 async function loadLiveSessions() {
   const sessions = await loadSessionsAcrossHosts("/api/sessions", {
     previousSessions: liveSessionsCache,
-    onPartial: renderLiveSessions,
   });
   renderLiveSessions(sessions);
 }
@@ -941,10 +721,6 @@ function connectControlEvents() {
       applyControlSessionEvent(payload.session);
       return;
     }
-    if (payload?.type === "remote-completion") {
-      applyRemoteCompletionEvent(payload);
-      return;
-    }
     if (payload?.type === "catalog") scheduleControlCatalogRefresh();
   };
   controlEvents.onerror = () => {
@@ -953,10 +729,8 @@ function connectControlEvents() {
 }
 
 function applyControlSessionEvent(session) {
-  const hostId = cleanAgentHostId(session.hostId) || "personal";
-  const next = liveSessionsCache.filter(
-    (candidate) => !(candidate.id === session.id && (cleanAgentHostId(candidate.hostId) || "personal") === hostId),
-  );
+  const hostId = session.hostId || "personal";
+  const next = liveSessionsCache.filter((candidate) => candidate.id !== session.id);
   if (session.released) {
     next.push({ ...session, hostId, exited: false, suspended: true });
   } else if (!session.exited) {
@@ -964,55 +738,6 @@ function applyControlSessionEvent(session) {
   }
   renderLiveSessions(next);
   if (session.exited || session.released) scheduleControlCatalogRefresh();
-}
-
-function applyRemoteCompletionEvent(payload) {
-  const hostId = cleanAgentHostId(payload?.hostId);
-  const sessionId = String(payload?.sessionId || "");
-  const turnId = String(payload?.turnId || "");
-  if (!hostId || !sessionId || !turnId) return;
-
-  const completedSessionState = (session) => {
-    return {
-      ...session,
-      lastCompletedTurnId: turnId,
-      lastCompletedAt: String(payload?.completedAt || ""),
-      hasUnreadResult: true,
-      updatedAt: String(payload?.completedAt || session.updatedAt || ""),
-    };
-  };
-  const applyLiveCompletion = (session) => {
-    if (
-      String(session?.sessionId || "") !== sessionId ||
-      (cleanAgentHostId(session?.hostId) || "personal") !== hostId
-    ) {
-      return session;
-    }
-    return completedSessionState(session);
-  };
-  const applySavedCompletion = (session) => {
-    if (
-      String(session?.id || "") !== sessionId ||
-      (cleanAgentHostId(session?.hostId) || "personal") !== hostId
-    ) {
-      return session;
-    }
-    return completedSessionState(session);
-  };
-  liveSessionsCache = liveSessionsCache.map(applyLiveCompletion);
-  savedSessionsCache = savedSessionsCache.map(applySavedCompletion);
-  renderLiveSessions(liveSessionsCache);
-  renderSavedCodexSessions(savedSessionsCache);
-
-  if (
-    activeSessionPreviewOnly &&
-    activeAgentHostId === hostId &&
-    activeSessionParams.sessionId === sessionId
-  ) {
-    activeSessionUnreadTurnId = turnId;
-    sessionPreviewRequestSequence += 1;
-    void loadSessionPreview(sessionId, sessionPreviewRequestSequence);
-  }
 }
 
 function scheduleControlCatalogRefresh() {
@@ -1026,7 +751,6 @@ function scheduleControlCatalogRefresh() {
 async function loadSavedCodexSessions() {
   const sessions = await loadSessionsAcrossHosts("/api/codex-sessions", {
     previousSessions: savedSessionsCache,
-    onPartial: renderSavedCodexSessions,
   });
   renderSavedCodexSessions(sessions);
 }
@@ -1034,123 +758,26 @@ async function loadSavedCodexSessions() {
 async function loadArchivedCodexSessions() {
   const sessions = await loadSessionsAcrossHosts("/api/codex-sessions/archived", {
     previousSessions: archivedSessionsCache,
-    onPartial: renderArchivedCodexSessions,
   });
   renderArchivedCodexSessions(sessions);
 }
 
-async function loadSessionsAcrossHosts(path, { previousSessions = [], onPartial = null } = {}) {
-  const hosts = agentHosts.length ? agentHosts : [{ id: activeAgentHostId, label: activeAgentHostId }];
-  const sessionsByHost = new Map(
-    hosts.map((host) => [
-      host.id,
-      previousSessions.filter(
-        (session) => (cleanAgentHostId(session?.hostId) || "personal") === host.id,
-      ),
-    ]),
-  );
-  const combinedSessions = () => hosts.flatMap((host) => sessionsByHost.get(host.id) || []);
-  await Promise.all(
-    hosts.map(async (host) => {
-      const retryKey = remoteHostRetryKey(path, host.id);
-      if (isRemoteAgentHost(host.id) && remoteHostRetryTimers.has(retryKey)) return;
-      try {
-        const data = await apiJsonForHost(path, host.id, {
-          timeoutMs:
-            isRemoteAgentHost(host.id) && !successfulRemoteSessionLists.has(retryKey)
-              ? REMOTE_AGENT_INITIAL_REQUEST_TIMEOUT_MS
-              : undefined,
-        });
-        if (!data || data.error) throw new Error(data?.error || "Session 列表暂不可用");
-        if (isRemoteAgentHost(host.id)) successfulRemoteSessionLists.add(retryKey);
-        clearRemoteHostRetry(path, host.id);
-        sessionsByHost.set(host.id, normalizeHostSessions(data, host));
-        onPartial?.(combinedSessions());
-      } catch {
-        // Keep the last successful data for this host while it is temporarily unavailable.
-        scheduleRemoteHostRetry(path, host.id);
-      }
-    }),
-  );
-  return combinedSessions();
-}
-
-function normalizeHostSessions(data, host) {
-  return (Array.isArray(data.sessions) ? data.sessions : []).map((session) => ({
-    ...session,
-    hostId: session.hostId || data.host?.id || host.id,
-    hostLabel: session.hostLabel || data.host?.label || host.label || host.id,
-  }));
-}
-
-function remoteHostRetryKey(path, hostId) {
-  return `${cleanAgentHostId(hostId) || "personal"}:${path}`;
-}
-
-function clearRemoteHostRetry(path, hostId) {
-  const key = remoteHostRetryKey(path, hostId);
-  window.clearTimeout(remoteHostRetryTimers.get(key));
-  remoteHostRetryTimers.delete(key);
-  remoteHostRetryAttempts.delete(key);
-}
-
-function scheduleRemoteHostRetry(path, hostId) {
-  if (!isRemoteAgentHost(hostId)) return;
-  const key = remoteHostRetryKey(path, hostId);
-  if (remoteHostRetryTimers.has(key)) return;
-  const attempt = remoteHostRetryAttempts.get(key) || 0;
-  const delay = Math.min(REMOTE_HOST_RETRY_BASE_MS * 2 ** attempt, REMOTE_HOST_RETRY_MAX_MS);
-  remoteHostRetryAttempts.set(key, attempt + 1);
-  remoteHostRetryTimers.set(
-    key,
-    window.setTimeout(() => {
-      remoteHostRetryTimers.delete(key);
-      if (navigator.onLine === false) {
-        scheduleRemoteHostRetry(path, hostId);
-        return;
-      }
-      void retryRemoteSessionList(path, hostId);
-    }, delay),
-  );
-}
-
-async function retryRemoteSessionList(path, hostId) {
-  const host = agentHosts.find((candidate) => candidate.id === hostId);
-  if (!host || !isRemoteAgentHost(hostId)) return;
+async function loadSessionsAcrossHosts(path, { previousSessions = [] } = {}) {
   try {
-    const key = remoteHostRetryKey(path, hostId);
-    const data = await apiJsonForHost(path, hostId, {
-      timeoutMs: successfulRemoteSessionLists.has(key)
-        ? undefined
-        : REMOTE_AGENT_INITIAL_REQUEST_TIMEOUT_MS,
-    });
+    const data = await apiJson(path);
     if (!data || data.error) throw new Error(data?.error || "Session 列表暂不可用");
-    successfulRemoteSessionLists.add(key);
-    const previousSessions = currentSessionsForPath(path);
-    const sessions = [
-      ...previousSessions.filter(
-        (session) => (cleanAgentHostId(session?.hostId) || "personal") !== hostId,
-      ),
-      ...normalizeHostSessions(data, host),
-    ];
-    clearRemoteHostRetry(path, hostId);
-    renderSessionsForPath(path, sessions);
+    return normalizeSessionList(data);
   } catch {
-    scheduleRemoteHostRetry(path, hostId);
+    // Keep the last successful data while the list is temporarily unavailable.
+    return previousSessions;
   }
 }
 
-function currentSessionsForPath(path) {
-  if (path === "/api/sessions") return liveSessionsCache;
-  if (path === "/api/codex-sessions") return savedSessionsCache;
-  if (path === "/api/codex-sessions/archived") return archivedSessionsCache;
-  return [];
-}
-
-function renderSessionsForPath(path, sessions) {
-  if (path === "/api/sessions") renderLiveSessions(sessions);
-  if (path === "/api/codex-sessions") renderSavedCodexSessions(sessions);
-  if (path === "/api/codex-sessions/archived") renderArchivedCodexSessions(sessions);
+function normalizeSessionList(data) {
+  return (Array.isArray(data.sessions) ? data.sessions : []).map((session) => ({
+    ...session,
+    hostId: session.hostId || "personal",
+  }));
 }
 
 async function searchSavedSessions() {
@@ -1165,25 +792,15 @@ async function searchSavedSessions() {
   sessionSearchResults.classList.remove("hidden");
   sessionSearchResults.replaceChildren(empty("正在搜索历史会话…"));
   try {
-    const hosts = filteredAgentHosts(activeAccountFilter);
-    const payloads = await Promise.all(
-      hosts.map(async (host) => {
-        try {
-          const data = await apiJsonForHost(`/api/codex-sessions/search?q=${encodeURIComponent(query)}`, host.id);
-          return (Array.isArray(data?.results) ? data.results : []).map((result) => ({
-            ...result,
-            session: {
-              ...(result.session || {}),
-              hostId: result.session?.hostId || host.id,
-              hostLabel: result.session?.hostLabel || host.label || host.id,
-            },
-          }));
-        } catch {
-          return [];
-        }
-      }),
-    );
-    const results = payloads.flat();
+    const data = await apiJson(`/api/codex-sessions/search?q=${encodeURIComponent(query)}`);
+    const results = (Array.isArray(data?.results) ? data.results : []).map((result) => ({
+      ...result,
+      session: {
+        ...(result.session || {}),
+        hostId: result.session?.hostId || "personal",
+        hostLabel: result.session?.hostLabel || "个人",
+      },
+    }));
     if (!results.length) {
       sessionSearchResults.replaceChildren(empty("没有找到匹配的 Session。"));
       return;
@@ -1195,11 +812,10 @@ async function searchSavedSessions() {
         return sessionCard({
           title: session.title || "Untitled session",
           subtitle: `${displayProject(session.project)} · ${formatTime(session.updatedAt)}${snippet ? ` · ${snippet}` : ""}`,
-          meta: [agentHostLabel(session.hostId)],
           hostId: session.hostId,
           sessionId: session.id,
           favorited: Boolean(session.favorited),
-          onFavoriteClick: () => setCodexSessionFavorite(session.id, !session.favorited, session.hostId),
+          onFavoriteClick: () => setCodexSessionFavorite(session.id, !session.favorited),
           action: session.archived ? "已归档" : "打开",
           onClick: () => {
             if (session.archived) {
@@ -1224,7 +840,7 @@ function renderLiveSessions(sessions) {
   liveSessionsByCodexId = new Map(
     uniqueSessions
       .filter((session) => session.sessionId)
-      .map((session) => [hostSessionKey(session.hostId, session.sessionId), session]),
+      .map((session) => [codexSessionKey(session.sessionId), session]),
   );
   sessionsList.replaceChildren();
   renderSessionSwitcher();
@@ -1271,13 +887,13 @@ function renderLiveSessions(sessions) {
           title: session.title || "New Codex session",
           subtitle: displayProject(session.project),
           description: liveSessionCurrentTask(session),
-          meta: [agentHostLabel(session.hostId), ...liveSessionMeta(session, presentation)],
+          meta: liveSessionMeta(session, presentation),
           kind: presentation.kind,
           hostId: session.hostId,
           sessionId: session.sessionId,
           favorited: Boolean(session.favorited),
           onFavoriteClick: () =>
-            setCodexSessionFavorite(session.sessionId, !session.favorited, session.hostId),
+            setCodexSessionFavorite(session.sessionId, !session.favorited),
           action:
             presentation.kind === "attention"
               ? "处理"
@@ -1298,7 +914,7 @@ function uniqueLiveSessions(sessions) {
   const byKey = new Map();
 
   for (const session of sessions) {
-    const key = hostSessionKey(session.hostId, session.sessionId || session.id);
+    const key = codexSessionKey(session.sessionId || session.id);
     const current = byKey.get(key);
     if (!current || compareLiveSession(session, current) > 0) {
       byKey.set(key, session);
@@ -1376,7 +992,6 @@ function liveSessionCurrentTask(session) {
 
 function liveSessionMeta(session, presentation = liveSessionPresentation(session)) {
   const parts = [session.lastActivityAt ? `任务更新 ${formatTime(session.lastActivityAt)}` : ""];
-  if (session?.transport && session.transport !== "app-server") parts.unshift("Terminal");
   if (presentation.pendingRequestCount) parts.unshift(`${presentation.pendingRequestCount} 个待处理`);
   else if (session?.turnState?.queuedTurns?.length) parts.unshift(`${session.turnState.queuedTurns.length} 条排队`);
   else if (session?.connectedClients > 0) parts.unshift(`${session.connectedClients} 个页面`);
@@ -1386,7 +1001,6 @@ function liveSessionMeta(session, presentation = liveSessionPresentation(session
 function liveSessionOpenParams(session) {
   const previewOnly = Boolean(session.released || session.suspended);
   return {
-    host: session.hostId || activeAgentHostId,
     attach: previewOnly ? "" : session.id,
     cwd: session.project || ".",
     sessionId: session.sessionId || "",
@@ -1403,9 +1017,7 @@ function renderSavedCodexSessions(sessions) {
   savedSessionsCache = sessions;
   codexSessionsList.replaceChildren();
   const nonLiveSessions = sessions.filter(
-    (session) =>
-      accountMatches(session) &&
-      !liveSessionsByCodexId.has(hostSessionKey(session.hostId, session.id)),
+    (session) => !liveSessionsByCodexId.has(codexSessionKey(session.id)),
   );
   updateControlCenterSummary();
   renderFavoriteSessions();
@@ -1427,14 +1039,14 @@ function renderSavedCodexSessions(sessions) {
       sessionCard({
         title: session.title || "Untitled session",
         subtitle: displayProject(session.project),
-        meta: [agentHostLabel(session.hostId), formatCompactSessionTime(session.updatedAt)],
+        meta: [formatCompactSessionTime(session.updatedAt)],
         kind: "history",
         compact: true,
         actionIcon: "↗",
         hostId: session.hostId,
         sessionId: session.id,
         favorited: Boolean(session.favorited),
-        onFavoriteClick: () => setCodexSessionFavorite(session.id, !session.favorited, session.hostId),
+        onFavoriteClick: () => setCodexSessionFavorite(session.id, !session.favorited),
         action: "打开",
         onClick: () => openSavedSessionPreview(session),
         onTitleSave: (title) => saveSessionCardTitle(session, title),
@@ -1464,7 +1076,7 @@ function renderArchivedCodexSessions(sessions) {
   archivedSessionsCache = sessions;
   archivedCodexSessionsList.replaceChildren();
   updateControlCenterSummary();
-  const filteredSessions = sessions.filter((session) => accountMatches(session));
+  const filteredSessions = sessions;
   if (!filteredSessions.length) {
     archivedCodexSessionsList.append(empty("没有已归档的 Session。"));
     applyControlCenterFilter();
@@ -1480,14 +1092,14 @@ function renderArchivedCodexSessions(sessions) {
       sessionCard({
         title: session.title || "Untitled session",
         subtitle: displayProject(session.project),
-        meta: [agentHostLabel(session.hostId), formatCompactSessionTime(session.archivedAt || session.updatedAt)],
+        meta: [formatCompactSessionTime(session.archivedAt || session.updatedAt)],
         kind: "history",
         compact: true,
         actionIcon: "↩",
         hostId: session.hostId,
         sessionId: session.id,
         favorited: Boolean(session.favorited),
-        onFavoriteClick: () => setCodexSessionFavorite(session.id, !session.favorited, session.hostId),
+        onFavoriteClick: () => setCodexSessionFavorite(session.id, !session.favorited),
         action: "恢复",
         onClick: () => archiveCodexSession(session, false),
         onTitleSave: (title) => saveSessionCardTitle(session, title),
@@ -1514,13 +1126,12 @@ function renderArchivedCodexSessions(sessions) {
 function renderFavoriteSessions() {
   favoriteSessionsList.replaceChildren();
   const liveFavorites = liveSessionsCache.filter(
-    (session) => accountMatches(session) && session.favorited && session.sessionId,
+    (session) => session.favorited && session.sessionId,
   );
   const savedFavorites = savedSessionsCache.filter(
     (session) =>
-      accountMatches(session) &&
       session.favorited &&
-      !liveSessionsByCodexId.has(hostSessionKey(session.hostId, session.id)),
+      !liveSessionsByCodexId.has(codexSessionKey(session.id)),
   );
 
   for (const session of liveFavorites) {
@@ -1530,12 +1141,12 @@ function renderFavoriteSessions() {
         title: session.title || "New Codex session",
         subtitle: displayProject(session.project),
         description: liveSessionCurrentTask(session),
-        meta: [agentHostLabel(session.hostId), ...liveSessionMeta(session, presentation)],
+        meta: liveSessionMeta(session, presentation),
         kind: presentation.kind,
         hostId: session.hostId,
         sessionId: session.sessionId,
         favorited: true,
-        onFavoriteClick: () => setCodexSessionFavorite(session.sessionId, false, session.hostId),
+        onFavoriteClick: () => setCodexSessionFavorite(session.sessionId, false),
         action:
           presentation.kind === "attention"
             ? "处理"
@@ -1552,12 +1163,12 @@ function renderFavoriteSessions() {
       sessionCard({
         title: session.title || "Untitled session",
         subtitle: displayProject(session.project),
-        meta: [agentHostLabel(session.hostId), session.updatedAt ? `更新于 ${formatTime(session.updatedAt)}` : ""],
+        meta: [session.updatedAt ? `更新于 ${formatTime(session.updatedAt)}` : ""],
         kind: "history",
         hostId: session.hostId,
         sessionId: session.id,
         favorited: true,
-        onFavoriteClick: () => setCodexSessionFavorite(session.id, false, session.hostId),
+        onFavoriteClick: () => setCodexSessionFavorite(session.id, false),
         action: "打开",
         onTitleSave: (title) => saveSessionCardTitle(session, title),
         onClick: () => openSavedSessionPreview(session),
@@ -1584,17 +1195,15 @@ function toggleNewSessionPanel(open) {
 
 function updateControlCenterSummary() {
   const counts = { attention: 0, running: 0, unread: 0, ready: 0, released: 0 };
-  const filteredLiveSessions = liveSessionsCache.filter((session) => accountMatches(session));
+  const filteredLiveSessions = liveSessionsCache;
   for (const session of filteredLiveSessions) {
     const kind = liveSessionPresentation(session).kind;
     if (Object.prototype.hasOwnProperty.call(counts, kind)) counts[kind] += 1;
   }
   const nonLiveSaved = savedSessionsCache.filter(
-    (session) =>
-      accountMatches(session) &&
-      !liveSessionsByCodexId.has(hostSessionKey(session.hostId, session.id)),
+    (session) => !liveSessionsByCodexId.has(codexSessionKey(session.id)),
   ).length;
-  const historyCount = nonLiveSaved + archivedSessionsCache.filter((session) => accountMatches(session)).length;
+  const historyCount = nonLiveSaved + archivedSessionsCache.length;
   controlPendingCount.textContent = String(counts.attention + counts.unread);
   controlPendingDetail.textContent = `${counts.attention} 需操作 · ${counts.unread} 新结果`;
   controlRunningCount.textContent = String(counts.running);
@@ -1603,7 +1212,6 @@ function updateControlCenterSummary() {
   controlLiveCount.textContent = `${filteredLiveSessions.length} 个当前`;
   navAttentionCount.textContent = String(counts.attention + counts.unread);
   navAttentionCount.classList.toggle("hidden", counts.attention + counts.unread === 0);
-  renderAgentHostTabs();
 }
 
 function applyControlCenterFilter() {
@@ -1615,9 +1223,8 @@ function applyControlCenterFilter() {
   for (const card of favoriteSessionsList.querySelectorAll(".session-card")) {
     const kind = card.dataset.sessionKind || "ready";
     const filterMatches = controlStatusFilterMatches(kind);
-    const accountMatchesCard = card.dataset.hostId === activeAccountFilter || activeAccountFilter === "all";
     const queryMatches = !query || card.textContent.toLocaleLowerCase().includes(query);
-    const visible = filterMatches && accountMatchesCard && queryMatches;
+    const visible = filterMatches && queryMatches;
     card.classList.toggle("hidden", !visible);
     if (visible) visibleFavoriteCards += 1;
   }
@@ -1629,9 +1236,8 @@ function applyControlCenterFilter() {
   for (const card of sessionsList.querySelectorAll(".session-card")) {
     const kind = card.dataset.sessionKind || "ready";
     const filterMatches = controlStatusFilterMatches(kind);
-    const accountMatchesCard = card.dataset.hostId === activeAccountFilter || activeAccountFilter === "all";
     const queryMatches = !query || card.textContent.toLocaleLowerCase().includes(query);
-    const visible = filterMatches && accountMatchesCard && queryMatches;
+    const visible = filterMatches && queryMatches;
     card.classList.toggle("hidden", !visible);
     if (visible) visibleLiveCards += 1;
   }
@@ -1647,9 +1253,8 @@ function applyControlCenterFilter() {
   for (const section of controlCenterHistorySections) {
     const cards = [...section.querySelectorAll(".session-card")];
     for (const card of cards) {
-      const accountMatchesCard = card.dataset.hostId === activeAccountFilter || activeAccountFilter === "all";
       const queryMatches = !query || card.textContent.toLocaleLowerCase().includes(query);
-      card.classList.toggle("hidden", !historyVisible || !accountMatchesCard || !queryMatches);
+      card.classList.toggle("hidden", !historyVisible || !queryMatches);
     }
     const hasVisibleCards = cards.some((card) => !card.classList.contains("hidden"));
     section.classList.toggle("hidden", !historyVisible || (Boolean(query) && cards.length > 0 && !hasVisibleCards));
@@ -1658,7 +1263,7 @@ function applyControlCenterFilter() {
   if (liveSection) {
     liveSection.classList.toggle(
       "hidden",
-      Boolean(query) && filteredControlLiveSessions().length > 0 && visibleLiveCards === 0,
+      Boolean(query) && liveSessionsCache.length > 0 && visibleLiveCards === 0,
     );
   }
 }
@@ -1694,10 +1299,7 @@ function syncControlCenterFilterReset() {
 function renderSessionSwitcher() {
   const query = sessionSwitcherSearch.value.trim().toLocaleLowerCase();
   sessionSwitcherList.replaceChildren();
-  renderSessionSwitcherHostTabs();
-  const accountSessions = liveSessionsCache.filter((session) =>
-    accountMatches(session, sessionSwitcherAccountFilter),
-  );
+  const accountSessions = liveSessionsCache;
   sessionSwitcherCount.textContent = `${accountSessions.length} 个当前`;
   const visible = accountSessions.filter((session) => {
     if (!query) return true;
@@ -1740,10 +1342,8 @@ function renderSessionSwitcher() {
       button.dataset.state = presentation.state;
       button.classList.toggle(
         "active",
-        (cleanAgentHostId(session.hostId) || "personal") ===
-          (cleanAgentHostId(activeSessionParams.host) || activeAgentHostId) &&
-          (session.id === activeSessionId ||
-            (session.sessionId && session.sessionId === activeSessionParams.sessionId)),
+        session.id === activeSessionId ||
+          (session.sessionId && session.sessionId === activeSessionParams.sessionId),
       );
       const dot = document.createElement("i");
       dot.className = "session-switcher-dot";
@@ -1751,7 +1351,7 @@ function renderSessionSwitcher() {
       const title = document.createElement("strong");
       title.textContent = session.title || "New Codex session";
       const status = document.createElement("small");
-      status.textContent = `${agentHostLabel(session.hostId)} · ${displayProject(session.project)}`;
+      status.textContent = displayProject(session.project);
       copy.append(title, status);
       button.append(dot, copy);
       button.addEventListener("click", () => {
@@ -1764,7 +1364,7 @@ function renderSessionSwitcher() {
 
       const actions = document.createElement("details");
       actions.className = "session-switcher-actions";
-      const sessionKey = hostSessionKey(session.hostId, session.id || session.sessionId);
+      const sessionKey = codexSessionKey(session.id || session.sessionId);
       actions.dataset.sessionKey = sessionKey;
       actions.open = sessionKey === openSessionSwitcherActionId;
       actions.addEventListener("toggle", () => {
@@ -1814,29 +1414,6 @@ function renderSessionSwitcher() {
   }
 }
 
-function renderSessionSwitcherHostTabs() {
-  sessionSwitcherHostTabs.replaceChildren();
-  const filters = [
-    { id: "all", label: "全部" },
-    ...agentHosts.map((host) => ({ id: host.id, label: host.label || host.id })),
-  ];
-  for (const filter of filters) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.dataset.hostFilter = filter.id;
-    button.textContent = filter.label;
-    button.classList.toggle("active", filter.id === sessionSwitcherAccountFilter);
-    button.setAttribute("aria-pressed", String(filter.id === sessionSwitcherAccountFilter));
-    button.addEventListener("click", () => {
-      sessionSwitcherAccountFilter = filter.id;
-      openSessionSwitcherActionId = "";
-      renderSessionSwitcher();
-    });
-    sessionSwitcherHostTabs.append(button);
-  }
-  sessionSwitcherHostTabs.classList.toggle("hidden", agentHosts.length < 2);
-}
-
 function readSessionSwitcherCollapsed() {
   try {
     const stored = localStorage.getItem(SESSION_SWITCHER_COLLAPSED_STORE_KEY);
@@ -1866,29 +1443,23 @@ function setSessionSwitcherCollapsed(collapsed, { persist = true } = {}) {
       // The switcher still works for this page when storage is unavailable.
     }
   }
-  fitTerminal({ delay: 120 });
 }
 
 function openSessionInCurrentPage(params) {
   void markCurrentSessionViewedOnExit();
-  const scopedParams = { host: params.host || activeAgentHostId, ...params };
+  const scopedParams = { ...params };
   activeSessionUnreadTurnId = String(scopedParams.unreadTurnId || "").trim();
   delete scopedParams.unreadTurnId;
-  activeAgentHostId = cleanAgentHostId(scopedParams.host) || activeAgentHostId;
-  if (newSessionHostSelect.options.length) newSessionHostSelect.value = activeAgentHostId;
-  syncAgentHostCapabilities();
   rememberSessionNavigation(scopedParams);
-  renderAgentHostTabs();
   window.history.pushState(null, "", sessionUrl(scopedParams));
   if (scopedParams.preview === "1") openSessionPreview(scopedParams);
   else openSocket(scopedParams);
 }
 
 function openCurrentSessionNavigation() {
-  const activeHost = cleanAgentHostId(activeSessionParams.host) || activeAgentHostId;
-  const hasCurrentSession =
-    activeHost === activeAgentHostId &&
-    Boolean(activeSessionId || activeSessionParams.sessionId || activeSessionPreviewOnly);
+  const hasCurrentSession = Boolean(
+    activeSessionId || activeSessionParams.sessionId || activeSessionPreviewOnly,
+  );
   if (hasCurrentSession) {
     showSessionScreen();
     if (activeSessionPreviewOnly) {
@@ -1904,27 +1475,23 @@ function openCurrentSessionNavigation() {
       project: activeSessionParams.cwd || ".",
       sessionId: activeSessionParams.sessionId || "",
       title: activeSessionParams.title || "",
-      transport: activeSessionParams.transport || activeTransport,
+      transport: DEFAULT_TRANSPORT,
       access: activeSessionParams.access || activeAccessMode,
       purpose: activeSessionParams.purpose || "",
     });
     return;
   }
 
-  const remembered = rememberedSessionNavigation(activeAgentHostId);
+  const remembered = rememberedSessionNavigation();
   if (!remembered) return;
   const live = liveSessionsCache.find(
-    (session) =>
-      session.sessionId === remembered.sessionId &&
-      (cleanAgentHostId(session.hostId) || "personal") === remembered.host,
+    (session) => session.sessionId === remembered.sessionId,
   );
   openSessionInCurrentPage(live ? liveSessionOpenParams(live) : remembered);
 }
 
 function openSavedSessionPreview(session) {
-  const hostId = session.hostId || activeAgentHostId;
   openSessionFromList({
-    host: hostId,
     cwd: projectForSession(session),
     sessionId: session.id,
     title: session.title || "Untitled session",
@@ -1957,7 +1524,7 @@ function sessionCard({
   const card = document.createElement("div");
   card.className = "session-card";
   card.dataset.sessionKind = kind;
-  card.dataset.hostId = cleanAgentHostId(hostId) || activeAgentHostId;
+  card.dataset.hostId = hostId || "personal";
   if (compact) card.dataset.cardLayout = "compact";
   card.tabIndex = 0;
   card.setAttribute("role", "button");
@@ -2165,11 +1732,11 @@ function sessionCard({
   return card;
 }
 
-async function setCodexSessionFavorite(sessionId, favorited, hostId = activeAgentHostId) {
+async function setCodexSessionFavorite(sessionId, favorited) {
   if (!sessionId) return;
   try {
     const response = await fetch(
-      agentHostApiUrl(`/api/codex-sessions/${encodeURIComponent(sessionId)}/favorite`, hostId),
+      `/api/codex-sessions/${encodeURIComponent(sessionId)}/favorite`,
       {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -2194,11 +1761,11 @@ async function setCodexSessionFavorite(sessionId, favorited, hostId = activeAgen
 }
 
 async function saveSessionCardTitle(session, title) {
-  const payload = await saveCodexSessionTitle(session.id, title, session.hostId);
+  const payload = await saveCodexSessionTitle(session.id, title);
   const savedTitle = String(payload.customTitle || title);
   for (const sessions of [savedSessionsCache, archivedSessionsCache]) {
     for (const candidate of sessions) {
-      if (hostSessionKey(candidate.hostId, candidate.id) !== hostSessionKey(session.hostId, session.id)) continue;
+      if (codexSessionKey(candidate.id) !== codexSessionKey(session.id)) continue;
       candidate.title = savedTitle;
       candidate.customTitle = savedTitle;
     }
@@ -2209,8 +1776,8 @@ async function saveSessionCardTitle(session, title) {
   return savedTitle;
 }
 
-async function saveCodexSessionTitle(sessionId, title, hostId = activeAgentHostId) {
-  const response = await fetch(agentHostApiUrl(`/api/codex-sessions/${encodeURIComponent(sessionId)}/title`, hostId), {
+async function saveCodexSessionTitle(sessionId, title) {
+  const response = await fetch(`/api/codex-sessions/${encodeURIComponent(sessionId)}/title`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title }),
@@ -2287,7 +1854,7 @@ async function saveCurrentSessionRename() {
         project: activeSessionParams.cwd || ".",
         sessionId,
         title: savedTitle,
-        transport: activeSessionParams.transport || activeTransport,
+        transport: DEFAULT_TRANSPORT,
         access: activeSessionParams.access || activeAccessMode,
         purpose: activeSessionParams.purpose || "",
       });
@@ -2317,7 +1884,7 @@ async function archiveCodexSession(session, archived) {
   if (!ok) return;
 
   const response = await fetch(
-    agentHostApiUrl(`/api/codex-sessions/${encodeURIComponent(session.id)}/archive`, session.hostId),
+    `/api/codex-sessions/${encodeURIComponent(session.id)}/archive`,
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -2333,10 +1900,7 @@ async function archiveCodexSession(session, archived) {
     return;
   }
   if (archived) {
-    forgetSessionNavigation({
-      host: session.hostId || activeAgentHostId,
-      sessionId: session.id,
-    });
+    forgetSessionNavigation({ sessionId: session.id });
     syncPrimaryNavigation("center");
   }
   await Promise.all([loadSavedCodexSessions(), loadArchivedCodexSessions()]);
@@ -2358,7 +1922,7 @@ async function archiveCurrentSession() {
 
   setArchiveSessionDisabled(true);
   try {
-    const response = await fetch(agentHostApiUrl(`/api/codex-sessions/${encodeURIComponent(sessionId)}/archive`), {
+    const response = await fetch(`/api/codex-sessions/${encodeURIComponent(sessionId)}/archive`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ archived: true, endLiveSession: true }),
@@ -2371,10 +1935,7 @@ async function archiveCurrentSession() {
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.error || "归档失败");
     }
-    forgetSessionNavigation({
-      host: activeSessionParams.host || activeAgentHostId,
-      sessionId,
-    });
+    forgetSessionNavigation({ sessionId });
     openNewSessionDraft({
       cwd: activeSessionParams.cwd || ".",
       access: activeAccessMode,
@@ -2400,10 +1961,7 @@ async function archiveSessionFromSwitcher(session) {
 
   try {
     const response = await fetch(
-      agentHostApiUrl(
-        `/api/codex-sessions/${encodeURIComponent(sessionId)}/archive`,
-        session.hostId || activeAgentHostId,
-      ),
+      `/api/codex-sessions/${encodeURIComponent(sessionId)}/archive`,
       {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -2418,19 +1976,10 @@ async function archiveSessionFromSwitcher(session) {
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.error || "归档失败");
     }
-    forgetSessionNavigation({
-      host: session.hostId || activeAgentHostId,
-      sessionId,
-    });
+    forgetSessionNavigation({ sessionId });
     const isCurrentSession =
-      (cleanAgentHostId(session.hostId) || "personal") ===
-        (cleanAgentHostId(activeSessionParams.host) || activeAgentHostId) &&
-      (session.id === activeSessionId || sessionId === activeSessionParams.sessionId);
+      session.id === activeSessionId || sessionId === activeSessionParams.sessionId;
     if (isCurrentSession) {
-      forgetSessionNavigation({
-        host: session.hostId || activeAgentHostId,
-        sessionId,
-      });
       openNewSessionDraft({
         cwd: activeSessionParams.cwd || ".",
         access: activeAccessMode,
@@ -2455,7 +2004,7 @@ async function endSessionFromSwitcher(session) {
 
   try {
     const response = await fetch(
-      agentHostApiUrl(`/api/sessions/${encodeURIComponent(webSessionId)}/end`, session.hostId || activeAgentHostId),
+      `/api/sessions/${encodeURIComponent(webSessionId)}/end`,
       {
         method: "POST",
       },
@@ -2469,12 +2018,9 @@ async function endSessionFromSwitcher(session) {
       throw new Error(payload.error || "结束失败");
     }
     const isCurrentSession =
-      (cleanAgentHostId(session.hostId) || "personal") ===
-        (cleanAgentHostId(activeSessionParams.host) || activeAgentHostId) &&
-      (webSessionId === activeSessionId || session.sessionId === activeSessionParams.sessionId);
+      webSessionId === activeSessionId || session.sessionId === activeSessionParams.sessionId;
     if (isCurrentSession) {
       openNewSessionAfterEnd({
-        host: session.hostId || activeAgentHostId,
         cwd: activeSessionParams.cwd || ".",
         access: activeAccessMode,
         sessionId: session.sessionId,
@@ -2482,7 +2028,6 @@ async function endSessionFromSwitcher(session) {
       });
     } else {
       forgetSessionNavigation({
-        host: session.hostId || activeAgentHostId,
         sessionId: session.sessionId,
       });
       syncPrimaryNavigation("center");
@@ -2521,15 +2066,13 @@ async function restartCurrentSession() {
   if (!window.confirm(message)) return;
 
   const restartParams = {
-    host: activeSessionParams.host || activeAgentHostId,
     cwd: activeSessionParams.cwd || ".",
     sessionId,
     title: activeSessionParams.title || "",
-    transport: activeSessionParams.transport || activeTransport,
+    transport: DEFAULT_TRANSPORT,
     access: activeSessionParams.access || activeAccessMode,
     purpose: activeSessionParams.purpose || "",
   };
-  saveActiveSessionSnapshot();
   closeSocket();
   setConnectedState("starting");
   setRestartSessionDisabled(true);
@@ -2571,7 +2114,6 @@ function empty(text) {
 function startSession(overrides = {}) {
   const sessionId = String(overrides.sessionId || "").trim();
   const params = {
-    host: overrides.host || activeSessionParams.host || activeAgentHostId,
     cwd: overrides.cwd || projectSelect.value || ".",
     mode: overrides.mode || (sessionId ? "resume-id" : "new"),
     sessionId,
@@ -2584,7 +2126,7 @@ function startSession(overrides = {}) {
 }
 
 function activateRealtimeSession() {
-  if (!activeSessionPreviewOnly || activeTransport !== "app-server" || isReadOnlySubagentPreview()) return false;
+  if (!activeSessionPreviewOnly || isReadOnlySubagentPreview()) return false;
   setUploadStatus(activeSessionParams.sessionId ? "正在恢复 Session，准备实时语音…" : "正在创建 Session，准备实时语音…");
   startSession({
     cwd: activeSessionParams.cwd || ".",
@@ -2600,7 +2142,6 @@ function activateRealtimeSession() {
 function openNewSessionDraft(overrides = {}) {
   toggleNewSessionPanel(false);
   openSessionInCurrentPage({
-    host: activeAgentHostId,
     cwd: overrides.cwd || projectSelect.value || ".",
     mode: "new",
     sessionId: "",
@@ -2644,11 +2185,8 @@ async function openInitialSessionFromUrl() {
   const access = params.get("access") === "safe" ? "safe" : "full";
   const purpose = params.get("purpose") === "think" ? "think" : "";
   const sourceSession = params.get("sourceSession") || "";
-  const host = cleanAgentHostId(params.get("host")) || activeAgentHostId;
-  activeAgentHostId = host;
   syncStartSelectionsFromUrl(params);
   const launch = {
-    host,
     cwd: params.get("cwd") || ".",
     sessionId,
     title,
@@ -2705,8 +2243,6 @@ function sessionUrl(params) {
   const url = new URL(window.location.href);
   url.search = "";
   url.hash = "";
-  const hostId = cleanAgentHostId(params.host) || activeAgentHostId;
-  if (hostId !== "personal") url.searchParams.set("host", hostId);
   for (const [key, value] of Object.entries(params)) {
     if (!["host", "unreadTurnId"].includes(key) && value) url.searchParams.set(key, value);
   }
@@ -2716,16 +2252,13 @@ function sessionUrl(params) {
 
 function openSessionPreview(params = {}) {
   realtimeController.resetPreparation();
-  saveActiveSessionSnapshot();
   saveAppReadingPosition();
   closeSocket();
   activeSessionPreviewOnly = true;
   pendingPreviewSubmission = null;
   setUploadStatus("");
-  activeTransport = DEFAULT_TRANSPORT;
   activeAccessMode = params.access === "safe" ? "safe" : "full";
   activeSessionParams = {
-    host: params.host || activeAgentHostId,
     attach: "",
     cwd: params.cwd || ".",
     mode: params.mode || (params.sessionId ? "resume-id" : "new"),
@@ -2738,11 +2271,9 @@ function openSessionPreview(params = {}) {
     preview: "1",
     new: params.sessionId ? "" : "1",
   };
-  syncAgentHostCapabilities();
   rememberSessionNavigation(activeSessionParams);
   activeSessionId = "";
   currentSessionExited = false;
-  historySyncPending = false;
   activeSessionReady = false;
   activeStartupQueueSupported = false;
   activeTurnInterruptSupported = false;
@@ -2754,7 +2285,6 @@ function openSessionPreview(params = {}) {
   activeMemoryProjectMode = "auto";
   activeMemoryProjects = [];
   activeMemoryProjectSource = "global";
-  activeOrchestrationMode = "auto";
   activeTokenUsage = null;
   lastContextNoticeKey = "";
   appTranscriptItems = [];
@@ -2785,7 +2315,6 @@ function openSessionPreview(params = {}) {
   renderEditForkBanner();
   syncAppTranscriptLatestButton();
   document.body.classList.add("app-server-session");
-  updateSessionViewLabels();
   const title = activeSessionParams.title;
   statusEls.project.textContent = title;
   statusEls.project.title = title;
@@ -2808,22 +2337,6 @@ async function openSocket(params, options = {}) {
     String(activeSessionParams.sessionId || "") === String(params.sessionId) &&
     appTranscriptSource === "disk" &&
     (appTranscriptItems.length > 0 || Boolean(cachedSessionPreview?.result));
-  activeAgentHostId = cleanAgentHostId(params.host) || activeAgentHostId;
-  params = { ...params, host: activeAgentHostId };
-  activeTransport = params.transport === "app-server" ? "app-server" : "terminal";
-  if (activeTransport === "terminal") {
-    try {
-      await ensureTerminal();
-    } catch (error) {
-      setUploadStatus(`Terminal 组件加载失败：${error.message}`, { clear: true });
-      return;
-    }
-  }
-  if (newSessionHostSelect.options.length) newSessionHostSelect.value = activeAgentHostId;
-  syncAgentHostCapabilities();
-  renderAgentHostTabs();
-  const snapshotKey = sessionSnapshotKey(params);
-  saveActiveSessionSnapshot();
   saveAppReadingPosition();
   closeSocket();
   activeSessionPreviewOnly = false;
@@ -2833,17 +2346,7 @@ async function openSocket(params, options = {}) {
   }
   activeSessionParams = { ...activeSessionParams, ...params, preview: "", new: "" };
   rememberSessionNavigation(activeSessionParams);
-  const hasSnapshot = !isReconnect && hasSessionSnapshot(snapshotKey);
-  const shouldReplay = activeTransport === "terminal" && options.replay !== false;
-  const resumesTerminalHistory =
-    Boolean(params.sessionId) || ["resume-last", "resume-picker"].includes(params.mode);
-  beginTerminalHistoryBuffer({
-    active: shouldReplay && activeTransport === "terminal",
-    forceFull: !isReconnect && resumesTerminalHistory,
-    waitForOutput: !isReconnect && resumesTerminalHistory && !params.attach,
-  });
   if (!isReconnect) {
-    if (activeTransport === "terminal") terminal?.reset();
     latestTurnState = {
       active: false,
       stopping: false,
@@ -2873,7 +2376,7 @@ async function openSocket(params, options = {}) {
     restoredAppHistoryLoading = false;
     previewHistoryCursor = "";
     previewHistoryExpanded = false;
-    appTranscriptInitialRestorePending = activeTransport === "app-server";
+    appTranscriptInitialRestorePending = true;
     appTranscriptHasUnseenContent = false;
     appTranscriptSubmitFollowActive = false;
     appTranscriptRunningRestoreFollowInitialized = false;
@@ -2886,7 +2389,6 @@ async function openSocket(params, options = {}) {
     activeMemoryProjectMode = "auto";
     activeMemoryProjects = [];
     activeMemoryProjectSource = "global";
-    activeOrchestrationMode = "auto";
     activeTokenUsage = null;
     lastContextNoticeKey = "";
     activeForkedFromId = "";
@@ -2894,26 +2396,19 @@ async function openSocket(params, options = {}) {
     activeParentThreadId = "";
     activeParentThreadTitle = "";
     hideComposerSuggestions();
-    hideTerminalSessionPreview();
-    terminalPreviewAllowed = activeTransport === "terminal" && !hasSnapshot && resumesTerminalHistory;
     sessionPreviewRequestSequence += 1;
     if (!resumesRenderedPreview) renderAppTranscript();
-    lastOutputRevision = 0;
-    queuedOutputRevision = 0;
-    if (hasSnapshot) restoreSessionSnapshot(snapshotKey);
-    if (!resumesRenderedPreview && params.sessionId && activeAgentHostId === "personal") {
+    if (!resumesRenderedPreview && params.sessionId) {
       void loadSessionPreview(params.sessionId, sessionPreviewRequestSequence);
     }
   }
-  historySyncPending = shouldReplay;
-  historySyncStartedAt = shouldReplay ? Date.now() : 0;
   activeAccessMode = params.access === "full" ? "full" : params.access === "safe" ? "safe" : "";
-  activeSessionReady = activeTransport !== "app-server";
+  activeSessionReady = false;
   activeStartupQueueSupported = false;
   activeTurnInterruptSupported = false;
   activeSessionCapabilities = {};
   syncAppSessionToolbar();
-  document.body.classList.toggle("app-server-session", activeTransport === "app-server");
+  document.body.classList.add("app-server-session");
   clearAgentRequest();
   activeSessionId = params.attach || "";
   currentSessionExited = false;
@@ -2922,8 +2417,6 @@ async function openSocket(params, options = {}) {
 
   const query = new URLSearchParams(params);
   query.set("clientId", clientId);
-  if (!shouldReplay) query.set("replay", "0");
-  if (shouldReplay && lastOutputRevision > 0) query.set("afterRevision", String(lastOutputRevision));
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const connectionStartedAt = Date.now();
   const reconnectAttempt = isReconnect ? reconnectAttempts : 0;
@@ -2944,17 +2437,7 @@ async function openSocket(params, options = {}) {
     logClientEvent("ws-open", connectionLogFields());
     void reloadAfterAgentUpgrade();
     reconnectAttempts = 0;
-    setConnectedState(
-      activeTransport === "app-server" && !activeSessionReady
-        ? "starting"
-        : historySyncPending
-          ? "loading"
-          : "connected",
-    );
-    lastSentCols = 0;
-    lastSentRows = 0;
-    fitTerminal();
-    refreshTerminalDisplay();
+    setConnectedState(!activeSessionReady ? "starting" : "connected");
     startClientHeartbeat();
   });
 
@@ -2972,15 +2455,6 @@ async function openSocket(params, options = {}) {
     }
     if (message.type === "control-ack") {
       handleControlAck(message.payload);
-      return;
-    }
-    if (message.type === "output") {
-      handleTerminalOutput(message.payload);
-      return;
-    }
-    if (message.type === "replay") {
-      if (!shouldReplay) return;
-      writeTerminalReplay(message.payload);
       return;
     }
     if (message.type === "status") {
@@ -3046,8 +2520,7 @@ async function openSocket(params, options = {}) {
         latestTurnState.stopping = false;
         syncAppSessionToolbar();
       }
-      terminal?.writeln(`\r\n${message.payload.message}\r\n`);
-      if (activeTransport === "app-server") setUploadStatus(message.payload.message);
+      setUploadStatus(message.payload.message);
       if (appCommandDialog.open && !message.payload.preservePrompt) {
         showAppCommandDialog({ title: appCommandTitle.textContent || "Command", content: message.payload.message });
       }
@@ -3132,12 +2605,8 @@ async function submitPrompt(deliveryMode = "auto", overridePrompt = null) {
 
     const prompt = isInlineReply ? overridePrompt.trim() : promptInput.value.trim();
     const attachments = isInlineReply ? [] : uploadController.getAttachments();
-    if (activeAgentHostId !== "personal" && attachments.length) {
-      setUploadStatus("公司 Session 暂不支持从 Agent Web 传附件；请把文件保留在公司 Mac 工作区。");
-      return false;
-    }
     if (!prompt && !attachments.length) return false;
-    if (!isInlineReply && !pendingEditFork && !attachments.length && activeTransport === "app-server" && runAppComposerCommand(prompt)) return false;
+    if (!isInlineReply && !pendingEditFork && !attachments.length && runAppComposerCommand(prompt)) return false;
     if (notificationTarget.app === "agent") {
       void ensureAgentPushSubscription({ requestPermission: true }).catch(logPushRegistrationError);
     }
@@ -3156,7 +2625,7 @@ async function submitPrompt(deliveryMode = "auto", overridePrompt = null) {
           data: prompt,
           attachments,
           deliveryMode,
-          skills: activeTransport === "app-server" ? extractSkillMentions(prompt) : [],
+          skills: extractSkillMentions(prompt),
           notificationApp: notificationTarget.app,
           notificationDeviceId: pushDeviceId,
         };
@@ -3227,17 +2696,6 @@ function handleControlAck(payload = {}) {
     activeMemoryProjects = normalizeSessionMemoryProjects(payload.projects);
     syncMemoryProjectLabel();
     setUploadStatus("当前 Session 的项目记忆已更新。", { clear: true });
-    return;
-  }
-  if (payload.kind === "orchestration-mode") {
-    activeOrchestrationMode = payload.mode === "manual" ? "manual" : "auto";
-    syncOrchestrationMode();
-    setUploadStatus(
-      activeOrchestrationMode === "auto"
-        ? "Auto 协作已开启；Codex 会先判断任务，只在有净收益时委派。"
-        : "已切换为手动协作；只有你明确要求时才会委派。",
-      { clear: true },
-    );
     return;
   }
   if (payload.kind === "agent-response") {
@@ -3343,19 +2801,6 @@ function clearAgentRequest() {
   agentRequestAnswer.value = "";
 }
 
-function command(value) {
-  if (activeTransport === "app-server") {
-    runAppCommand(value);
-    return;
-  }
-  send({
-    type: "command",
-    data: value,
-    notificationApp: notificationTarget.app,
-    notificationDeviceId: pushDeviceId,
-  });
-}
-
 function runAppComposerCommand(prompt) {
   const commandName = String(prompt || "").trim().split(/\s+/)[0].toLowerCase();
   if (!APP_COMMANDS.some((item) => item.name === commandName)) return false;
@@ -3414,7 +2859,6 @@ function runAppCommand(value) {
 
 function openMemoryManager(event) {
   const sessionRouting =
-    activeTransport === "app-server" &&
     activeSessionId &&
     (!sessionScreen.classList.contains("hidden") || event?.currentTarget === appSessionMemoriesButton);
   globalThis.AgentMemories?.open({
@@ -3439,18 +2883,6 @@ function updateMemoryProjectSelection(selection = {}) {
   syncMemoryProjectLabel();
   if (!send({ type: "set-memory-projects", mode, projects })) {
     setUploadStatus("连接恢复中，记忆项目尚未修改。", { clear: true });
-  }
-}
-
-function updateOrchestrationMode(mode) {
-  const nextMode = mode === "manual" ? "manual" : "auto";
-  if (nextMode === activeOrchestrationMode) return;
-  orchestrationModeAuto.disabled = true;
-  orchestrationModeManual.disabled = true;
-  if (!send({ type: "set-orchestration-mode", mode: nextMode })) {
-    orchestrationModeAuto.disabled = false;
-    orchestrationModeManual.disabled = false;
-    setUploadStatus("连接恢复中，协作模式尚未修改。", { clear: true });
   }
 }
 
@@ -3508,8 +2940,6 @@ function renderAppCommandResult(payload = {}) {
     syncContextUsage();
     maybeNotifyContextAlert({ ...activeSessionParams, tokenUsage: payload.tokenUsage });
   }
-  activeOrchestrationMode = payload.orchestrationMode === "manual" ? "manual" : "auto";
-  syncOrchestrationMode();
   const rows = [
     ["Account", formatAppAccount(payload.account)],
     ["Session", payload.title || "未命名"],
@@ -3518,7 +2948,6 @@ function renderAppCommandResult(payload = {}) {
     ["Model", [payload.model, payload.reasoningEffort].filter(Boolean).join(" · ")],
     ["Provider", payload.modelProvider || "default"],
     ["Service tier", payload.serviceTier === "priority" ? "Fast" : payload.serviceTier || "default"],
-    ["Multi-Agent", payload.orchestrationMode === "manual" ? "手动" : "Auto"],
     ["Directory", payload.cwd || payload.project || "."],
     ["Permissions", appAccessLabel(payload.access)],
     ["Approval", payload.approvalPolicy || "-"],
@@ -3558,7 +2987,6 @@ function renderAppCommandResult(payload = {}) {
 function openSubagentList() {
   agentManagerNote.textContent = "正在读取当前 Session 的子 Agent…";
   agentManagerList.replaceChildren();
-  syncOrchestrationMode();
   if (!agentManagerDialog.open) agentManagerDialog.showModal();
   requestSubagentList();
   stopAgentManagerRefresh();
@@ -3581,19 +3009,6 @@ function stopAgentManagerRefresh() {
 
 function renderAppSubagents(payload = {}) {
   const agents = Array.isArray(payload.agents) ? payload.agents : [];
-  activeOrchestrationMode = payload.orchestrationMode === "manual" ? "manual" : "auto";
-  syncOrchestrationMode();
-  const roles = Array.isArray(payload.roles) ? payload.roles : [];
-  orchestrationRoleSummary.textContent = roles.length
-    ? roles
-        .map((role) =>
-          [
-            role.name ? role.name[0].toUpperCase() + role.name.slice(1) : "Agent",
-            [shortModelName(role.model), role.reasoningEffort].filter(Boolean).join("/"),
-          ].join(" · "),
-        )
-        .join("　")
-    : "Explorer · Terra/medium　Worker · Sol/high　Reviewer · Sol/high";
   agentManagerRefresh.disabled = false;
   agentManagerNote.textContent = payload.note || "";
   if (!agents.length) {
@@ -3601,25 +3016,6 @@ function renderAppSubagents(payload = {}) {
     return;
   }
   agentManagerList.replaceChildren(...agents.map(createAgentCard));
-}
-
-function syncOrchestrationMode() {
-  const auto = activeOrchestrationMode !== "manual";
-  appSessionAgentsMode.textContent = auto ? "Auto" : "手动";
-  orchestrationModeAuto.setAttribute("aria-pressed", String(auto));
-  orchestrationModeManual.setAttribute("aria-pressed", String(!auto));
-  orchestrationModeAuto.disabled = false;
-  orchestrationModeManual.disabled = false;
-  orchestrationModeSummary.textContent = auto
-    ? "Auto 会先判断任务，只在节省主线程上下文或等待时间时委派。"
-    : "手动模式只在你明确要求时委派。";
-}
-
-function shortModelName(model) {
-  const value = String(model || "");
-  if (value.includes("terra")) return "Terra";
-  if (value.includes("sol")) return "Sol";
-  return value || "default";
 }
 
 function createAgentCard(agent) {
@@ -3776,7 +3172,7 @@ function appendThreadTreeNodes(host, children, parentId, visited) {
 
 async function openSessionShare() {
   const sessionId = String(activeSessionParams.sessionId || "").trim();
-  if (!sessionId || activeTransport !== "app-server") {
+  if (!sessionId) {
     window.alert("当前 Session 的历史尚未准备好，暂时无法创建快照。");
     return;
   }
@@ -3789,10 +3185,7 @@ async function openSessionShare() {
 
   try {
     const response = await fetch(
-      agentHostApiUrl(
-        `/api/session-shares?sessionId=${encodeURIComponent(sessionId)}`,
-        activeSessionParams.host || activeAgentHostId,
-      ),
+      `/api/session-shares?sessionId=${encodeURIComponent(sessionId)}`,
     );
     if (response.status === 401) {
       redirectToLogin();
@@ -3825,7 +3218,7 @@ async function createSessionShare() {
   clearSessionShareError();
   try {
     const response = await fetch(
-      agentHostApiUrl("/api/session-shares", activeSessionParams.host || activeAgentHostId),
+      "/api/session-shares",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -3881,10 +3274,7 @@ async function revokeSessionShare() {
   const shareId = currentSessionShare.id;
   try {
     const response = await fetch(
-      agentHostApiUrl(
-        `/api/session-shares/${encodeURIComponent(shareId)}`,
-        activeSessionParams.host || activeAgentHostId,
-      ),
+      `/api/session-shares/${encodeURIComponent(shareId)}`,
       { method: "DELETE" },
     );
     if (response.status === 401) {
@@ -4089,7 +3479,7 @@ function renderSideChatError(payload = {}) {
 }
 
 function openThreadSearch() {
-  if (activeTransport !== "app-server" || !activeSessionId) {
+  if (!activeSessionId) {
     setUploadStatus("发送消息、连接 Session 后再搜索。", { clear: true });
     return;
   }
@@ -4394,10 +3784,6 @@ function showAppCommandDialog({
 }
 
 function updateComposerSuggestions() {
-  if (activeTransport !== "app-server") {
-    hideComposerSuggestions();
-    return;
-  }
   const beforeCaret = promptInput.value.slice(0, promptInput.selectionStart ?? promptInput.value.length);
   if (/^\/[^\s]*$/.test(beforeCaret)) {
     const query = beforeCaret.toLowerCase();
@@ -4570,9 +3956,7 @@ function syncAppSessionToolbar() {
   appSessionPermissionsButton.setAttribute("aria-label", `权限：${appAccessLabel(activeAccessMode)}`);
   syncMemoryProjectLabel();
   syncContextUsage();
-  syncOrchestrationMode();
   const canInterrupt =
-    activeTransport === "app-server" &&
     activeTurnInterruptSupported &&
     latestTurnState.active &&
     !latestTurnState.stopping &&
@@ -4662,7 +4046,6 @@ function appSessionTaskStateValue() {
 
 function interruptCurrentTurn() {
   if (
-    activeTransport !== "app-server" ||
     !activeTurnInterruptSupported ||
     !latestTurnState.active ||
     latestTurnState.stopping
@@ -4733,18 +4116,8 @@ function formatUnixTime(value) {
   return Number.isNaN(date.getTime()) ? "未知" : agentDateTimeFormatter.format(date);
 }
 
-function sendTerminalKey(value) {
-  send({
-    type: "input",
-    data: value,
-    notificationApp: notificationTarget.app,
-    notificationDeviceId: pushDeviceId,
-  });
-}
-
 function detach(goHome = true) {
   void markCurrentSessionViewedOnExit();
-  saveActiveSessionSnapshot();
   closeSocket();
   if (goHome) {
     forgetSessionNavigation(activeSessionParams);
@@ -4760,11 +4133,9 @@ function detach(goHome = true) {
 function closeSocket() {
   window.clearTimeout(reconnectTimer);
   window.clearTimeout(visibleProbeTimer);
-  window.clearTimeout(terminalHistoryFlushTimer);
   window.clearTimeout(sessionPreviewRefreshTimer);
   reconnectTimer = null;
   visibleProbeTimer = null;
-  terminalHistoryFlushTimer = null;
   sessionPreviewRefreshTimer = null;
   stopClientHeartbeat();
   if (socket) {
@@ -4774,113 +4145,23 @@ function closeSocket() {
   }
 }
 
-function sessionSnapshotKey(params = activeSessionParams) {
-  const hostId = cleanAgentHostId(params.host) || activeAgentHostId;
-  const hostPrefix = hostId === "personal" ? "" : `${hostId}:`;
-  const sessionId = String(params.sessionId || "").trim();
-  if (sessionId) return `${hostPrefix}codex:${sessionId}`;
-
-  const attach = String(params.attach || activeSessionId || "").trim();
-  if (attach) return `${hostPrefix}web:${attach}`;
-
-  return "";
-}
-
-function saveActiveSessionSnapshot() {
-  if (!terminal) return;
-
-  const key = sessionSnapshotKey();
-  if (!key) return;
-
-  const text = getTerminalBufferText();
-  if (!text) return;
-
-  const snapshots = readSessionSnapshots();
-  snapshots[key] = {
-    text: text.slice(-SESSION_SNAPSHOT_MAX_CHARS),
-    revision: lastOutputRevision,
-    savedAt: Date.now(),
-  };
-  trimSessionSnapshots(snapshots);
-  writeSessionSnapshots(snapshots);
-}
-
-function restoreSessionSnapshot(key) {
-  if (!terminal || !key) return false;
-
-  const snapshot = readSessionSnapshots()[key];
-  if (!snapshot?.text) return false;
-
-  lastOutputRevision = validOutputRevision(snapshot.revision) ?? 0;
-  queuedOutputRevision = lastOutputRevision;
-  const recentText = snapshot.text.slice(-TERMINAL_RECENT_HISTORY_MAX_CHARS);
-  terminalView.classList.add("replaying");
-  terminal.write(recentText.replace(/\n/g, "\r\n"), () => {
-    terminal.scrollToBottom();
-    terminalView.classList.remove("replaying");
-    if (!textView.classList.contains("hidden")) {
-      refreshTerminalText({ follow: true });
-    }
-  });
-  return true;
-}
-
-function hasSessionSnapshot(key) {
-  if (!key) return false;
-  return Boolean(readSessionSnapshots()[key]?.text);
-}
-
-function readSessionSnapshots() {
-  try {
-    const value = localStorage.getItem(SESSION_SNAPSHOT_STORE_KEY) || sessionStorage.getItem(SESSION_SNAPSHOT_STORE_KEY);
-    if (!value) return {};
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeSessionSnapshots(snapshots) {
-  try {
-    localStorage.setItem(SESSION_SNAPSHOT_STORE_KEY, JSON.stringify(snapshots));
-  } catch {
-    try {
-      sessionStorage.setItem(SESSION_SNAPSHOT_STORE_KEY, JSON.stringify(snapshots));
-    } catch {
-      // Ignore storage failures; snapshots are only a display optimization.
-    }
-  }
-}
-
-function trimSessionSnapshots(snapshots) {
-  const entries = Object.entries(snapshots).sort((a, b) => (b[1]?.savedAt || 0) - (a[1]?.savedAt || 0));
-  for (const [key] of entries.slice(SESSION_SNAPSHOT_LIMIT)) {
-    delete snapshots[key];
-  }
-}
-
 function installClientEventLogging() {
   logClientEvent("page-load");
 
   document.addEventListener("visibilitychange", () => {
     logClientEvent(`visibility-${document.visibilityState}`);
     if (document.visibilityState === "hidden") {
-      saveActiveSessionSnapshot();
       saveAppReadingPosition();
       return;
     }
-    refreshTerminalDisplay();
     ensureVisibleConnection("visibility-visible", { probe: true });
   });
   window.addEventListener("pageshow", (event) => {
     logClientEvent("pageshow", { persisted: event.persisted });
-    refreshTerminalDisplay();
     ensureVisibleConnection("pageshow", { probe: true });
   });
   window.addEventListener("pagehide", (event) => {
     void markCurrentSessionViewedOnExit({ beacon: true });
-    saveActiveSessionSnapshot();
     saveAppReadingPosition();
     logClientEvent("pagehide", { persisted: event.persisted }, { beacon: true });
   });
@@ -4893,7 +4174,6 @@ function installClientEventLogging() {
   });
   window.addEventListener("beforeunload", () => {
     void markCurrentSessionViewedOnExit({ beacon: true });
-    saveActiveSessionSnapshot();
     saveAppReadingPosition();
     logClientEvent("beforeunload", {}, { beacon: true });
   });
@@ -4907,7 +4187,7 @@ function logClientEvent(event, fields = {}, { beacon = false } = {}) {
     socketState: socketReadyStateName(socket?.readyState),
     online: navigator.onLine,
     path: window.location.pathname,
-    hostId: activeAgentHostId,
+    hostId: "personal",
     ...fields,
   };
   const body = JSON.stringify(payload);
@@ -5027,12 +4307,11 @@ function probeVisibleConnection(reason) {
 function currentReconnectParams() {
   const params = new URLSearchParams(window.location.search);
   return {
-    host: activeSessionParams.host || params.get("host") || activeAgentHostId,
     attach: activeSessionId,
     cwd: activeSessionParams.cwd || params.get("cwd") || ".",
     sessionId: activeSessionParams.sessionId || params.get("sessionId") || "",
     title: activeSessionParams.title || params.get("title") || "",
-    transport: activeSessionParams.transport || params.get("transport") || "terminal",
+    transport: DEFAULT_TRANSPORT,
     access: activeSessionParams.access || params.get("access") || "safe",
     purpose: activeSessionParams.purpose || (params.get("purpose") === "think" ? "think" : ""),
   };
@@ -5048,10 +4327,7 @@ async function endSession() {
   if (!window.confirm(message)) return;
   try {
     const response = await fetch(
-      agentHostApiUrl(
-        `/api/sessions/${encodeURIComponent(webSessionId)}/end`,
-        activeSessionParams.host || activeAgentHostId,
-      ),
+      `/api/sessions/${encodeURIComponent(webSessionId)}/end`,
       { method: "POST" },
     );
     if (response.status === 401) {
@@ -5061,7 +4337,6 @@ async function endSession() {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || "结束失败");
     openNewSessionAfterEnd({
-      host: activeSessionParams.host || activeAgentHostId,
       cwd: activeSessionParams.cwd || ".",
       access: activeAccessMode,
       sessionId: activeSessionParams.sessionId,
@@ -5072,9 +4347,9 @@ async function endSession() {
   }
 }
 
-function openNewSessionAfterEnd({ host, cwd, access, sessionId, endedSession } = {}) {
+function openNewSessionAfterEnd({ cwd, access, sessionId, endedSession } = {}) {
   if (endedSession) applyControlSessionEvent(endedSession);
-  forgetSessionNavigation({ host, sessionId });
+  forgetSessionNavigation({ sessionId });
   openNewSessionDraft({
     cwd: cwd || ".",
     access: ["safe", "full"].includes(access) ? access : activeAccessMode,
@@ -5226,47 +4501,31 @@ function setUploadStatus(message, { clear = false, actionLabel = "", onAction = 
   }
 }
 
-function sendResize() {
-  if (!terminal || !terminal.cols || !terminal.rows) return;
-  if (terminal.cols === lastSentCols && terminal.rows === lastSentRows) return;
-  lastSentCols = terminal.cols;
-  lastSentRows = terminal.rows;
-  send({ type: "resize", cols: terminal.cols, rows: terminal.rows });
-}
-
 function renderStatus(status) {
   activeSessionPreviewOnly = false;
-  activeAgentHostId = cleanAgentHostId(status.hostId) || activeAgentHostId;
-  if (newSessionHostSelect.options.length) newSessionHostSelect.value = activeAgentHostId;
-  syncAgentHostCapabilities();
-  renderAgentHostTabs();
   activeSessionId = status.id || activeSessionId;
   activeSessionParams = {
-    host: activeAgentHostId,
     attach: activeSessionId,
     cwd: status.project || ".",
     sessionId: status.sessionId || activeSessionParams.sessionId || "",
     title: status.title || displayProject(status.project),
-    transport: status.transport || "terminal",
+    transport: "app-server",
     access: status.access || "safe",
     purpose: status.purpose === "think" ? "think" : "",
   };
   rememberSessionNavigation(activeSessionParams);
-  activeTransport = status.transport === "app-server" ? "app-server" : "terminal";
   activeAccessMode = status.access === "full" ? "full" : "safe";
   activeMemoryProjectMode = status.memoryProjectMode === "manual" ? "manual" : "auto";
   activeMemoryProjects = normalizeSessionMemoryProjects(status.memoryProjects);
   activeMemoryProjectSource = ["manual", "prompt", "retained", "cwd", "title", "global"].includes(status.memoryProjectSource)
     ? status.memoryProjectSource
     : "global";
-  activeOrchestrationMode = status.orchestrationMode === "manual" ? "manual" : "auto";
   activeTokenUsage = status.tokenUsage || null;
   activeSessionReady = status.ready !== false;
   activeStartupQueueSupported = Boolean(status.capabilities?.startupQueue);
   activeTurnInterruptSupported = Boolean(status.capabilities?.interruptTurn);
   activeSessionCapabilities = status.capabilities || {};
   if (
-    activeTransport === "app-server" &&
     appTranscriptInitialRestorePending &&
     !appTranscriptRunningRestoreFollowInitialized
   ) {
@@ -5286,28 +4545,26 @@ function renderStatus(status) {
     projects: activeMemoryProjects,
     source: activeMemoryProjectSource,
   });
-  document.body.classList.toggle("app-server-session", activeTransport === "app-server");
-  updateSessionViewLabels();
+  document.body.classList.add("app-server-session");
   currentSessionExited = Boolean(status.exited);
   if (status.exited) {
     realtimeController.failPreparation("Session 创建失败，请稍后重试。");
   }
   const liveIndex = liveSessionsCache.findIndex(
     (session) =>
-      (cleanAgentHostId(session.hostId) || "personal") === activeAgentHostId &&
-      (session.id === status.id || (status.sessionId && session.sessionId === status.sessionId)),
+      session.id === status.id || (status.sessionId && session.sessionId === status.sessionId),
   );
   if (liveIndex >= 0) {
-    liveSessionsCache[liveIndex] = { ...liveSessionsCache[liveIndex], ...status, hostId: activeAgentHostId };
+    liveSessionsCache[liveIndex] = { ...liveSessionsCache[liveIndex], ...status };
   } else if (!status.exited && status.id) {
-    liveSessionsCache.unshift({ ...status, hostId: activeAgentHostId });
+    liveSessionsCache.unshift(status);
   }
   syncPrimaryNavigation(sessionScreen.classList.contains("hidden") ? "center" : "session");
   updateControlCenterSummary();
   const sessionLabel = status.title || displayProject(status.project);
   statusEls.project.textContent = sessionLabel;
   statusEls.project.title = sessionLabel;
-  setConnectedState(status.exited ? "exited" : !activeSessionReady ? "starting" : historySyncPending ? "loading" : "connected");
+  setConnectedState(status.exited ? "exited" : !activeSessionReady ? "starting" : "connected");
   setDocumentTitle(status.title || displayProject(status.project));
   const previousTranscriptState = transcriptTurnStateKey();
   renderTurnState(status.turnState);
@@ -5321,14 +4578,12 @@ function renderStatus(status) {
   void voiceInputController.offerStoredRecovery();
   syncPrimarySessionView();
   if (
-    activeTransport === "app-server" &&
     appTranscriptItems.length &&
     previousTranscriptState !== transcriptTurnStateKey()
   ) {
     renderAppTranscript({ follow: isAppTranscriptAtBottom() });
   }
   if (
-    activeTransport === "app-server" &&
     status.exited &&
     status.sessionId &&
     Number(status.exitCode) === 0
@@ -5336,7 +4591,7 @@ function renderStatus(status) {
     enterStoppedSessionPreview(status);
     return;
   }
-  if (activeTransport === "app-server" && activeSessionReady && promptInput.value.includes("$")) {
+  if (activeSessionReady && promptInput.value.includes("$")) {
     updateComposerSuggestions();
   }
   syncSessionUrl(status);
@@ -5454,21 +4709,14 @@ function setConnectedState(state) {
         ? "仅查看 · 发送时恢复"
         : "发送第一条消息时创建",
   };
-  const transport = activeTransport === "terminal" ? "Terminal · " : "";
-  const access = activeTransport === "terminal" && activeAccessMode ? ` · ${appAccessLabel(activeAccessMode)}` : "";
+  const access = activeAccessMode ? ` · ${appAccessLabel(activeAccessMode)}` : "";
   const stateLabel = connectionStates[state] || state;
-  const host = agentHostLabel(activeSessionParams.host || activeAgentHostId);
-  statusEls.connection.textContent = `${host} · ${transport}${stateLabel}${access}`;
-  const terminalCanAcceptInput =
-    activeTransport === "terminal" &&
-    ["connected", "loading"].includes(state) &&
-    socket?.readyState === WebSocket.OPEN;
+  statusEls.connection.textContent = `${stateLabel}${access}`;
   const appServerCanQueueStartup =
-    activeTransport === "app-server" &&
     activeStartupQueueSupported &&
     ["starting", "loading", "connected"].includes(state) &&
     socket?.readyState === WebSocket.OPEN;
-  const connected = ((state === "connected" || terminalCanAcceptInput) && activeSessionReady) || appServerCanQueueStartup;
+  const connected = (state === "connected" && activeSessionReady) || appServerCanQueueStartup;
   const canCompose = !readOnlySubagentPreview && (connected || activeSessionPreviewOnly);
   composer.classList.toggle("hidden", readOnlySubagentPreview);
   promptInput.disabled = !canCompose;
@@ -5477,37 +4725,23 @@ function setConnectedState(state) {
   fileInput.disabled = !canCompose;
   sendPromptButton.disabled = !canCompose;
   queuePromptButton.disabled = !connected || activeSessionPreviewOnly;
-  textTabButton.disabled = !connected;
-  pageUpButton.disabled = !connected;
-  pageDownButton.disabled = !connected;
-  keyUpButton.disabled = !connected;
-  keyDownButton.disabled = !connected;
-  keyEnterButton.disabled = !connected;
-  keyEscButton.disabled = !connected;
-  sendStatusButton.disabled = !canCompose;
-  sendPermissionsButton.disabled = !canCompose;
-  appSessionPermissionsButton.disabled = activeTransport !== "app-server" || !canCompose;
-  appSessionContextButton.disabled = activeTransport !== "app-server" || !canCompose;
+  appSessionPermissionsButton.disabled = !canCompose;
+  appSessionContextButton.disabled = !canCompose;
   appSessionAgentsButton.disabled =
-    activeTransport !== "app-server" || !connected || !activeSessionCapabilities.subagents;
-  orchestrationModeAuto.disabled = activeTransport !== "app-server" || !connected;
-  orchestrationModeManual.disabled = activeTransport !== "app-server" || !connected;
+    !connected || !activeSessionCapabilities.subagents;
   appSessionTreeButton.disabled =
-    activeTransport !== "app-server" || !connected || !activeSessionCapabilities.threadTree;
-  appSessionShareButton.disabled = activeTransport !== "app-server" || !activeSessionParams.sessionId;
+    !connected || !activeSessionCapabilities.threadTree;
+  appSessionShareButton.disabled = !activeSessionParams.sessionId;
   appSessionSideChatButton.disabled =
-    activeTransport !== "app-server" || !connected || !activeSessionCapabilities.sideChat;
+    !connected || !activeSessionCapabilities.sideChat;
   realtimeController.setLaunchable(
-    activeTransport === "app-server" && activeSessionPreviewOnly && !readOnlySubagentPreview,
+    activeSessionPreviewOnly && !readOnlySubagentPreview,
   );
   realtimeController.setEnabled(
-    activeTransport === "app-server" &&
-      connected &&
-      activeSessionReady &&
-      Boolean(activeSessionCapabilities.realtimeV3),
+    connected && activeSessionReady && Boolean(activeSessionCapabilities.realtimeV3),
   );
-  searchCurrentSessionButton.disabled = activeTransport !== "app-server" || !connected;
-  mobileSearchCurrentSessionButton.disabled = activeTransport !== "app-server" || !connected;
+  searchCurrentSessionButton.disabled = !connected;
+  mobileSearchCurrentSessionButton.disabled = !connected;
   for (const control of [
     disconnectButton,
     mobileDisconnectButton,
@@ -5533,7 +4767,6 @@ function setConnectedState(state) {
 
 function showStartScreen() {
   void markCurrentSessionViewedOnExit();
-  saveActiveSessionSnapshot();
   stopAppTranscriptSubmitFollow();
   stopLiveSessionPreviewRefresh();
   rememberSessionNavigation(activeSessionParams);
@@ -5562,22 +4795,18 @@ function showSessionScreen() {
   startScreen.classList.add("hidden");
   sessionScreen.classList.remove("hidden");
   setSessionPageMode(true);
-  document.body.classList.toggle("app-server-session", activeTransport === "app-server");
+  document.body.classList.add("app-server-session");
   syncPrimaryNavigation("session");
-  closeTextView();
   window.clearInterval(sessionsTimer);
   window.clearInterval(sessionCatalogTimer);
   void loadLiveSessions();
   sessionsTimer = window.setInterval(loadLiveSessions, LIVE_SESSIONS_FALLBACK_MS);
-  fitTerminal();
 }
 
 function syncPrimaryNavigation(screen) {
   const onControlCenter = screen === "center";
-  const remembered = rememberedSessionNavigation(activeAgentHostId);
-  const activeHost = cleanAgentHostId(activeSessionParams.host) || activeAgentHostId;
+  const remembered = rememberedSessionNavigation();
   const hasCurrentSession =
-    activeHost === activeAgentHostId &&
     Boolean(activeSessionId || activeSessionParams.sessionId || activeSessionPreviewOnly);
   navControlCenterButton.classList.toggle("active", onControlCenter);
   navControlCenterButton.toggleAttribute("aria-current", onControlCenter);
@@ -5600,20 +4829,15 @@ function syncSessionUrl(status) {
     (status.sessionId ? url.searchParams.get("sessionId") === status.sessionId : !url.searchParams.has("sessionId")) &&
     url.searchParams.get("cwd") === cwd &&
     url.searchParams.get("title") === title &&
-    (status.transport === "app-server"
-      ? url.searchParams.get("transport") === "app-server"
-      : !url.searchParams.has("transport")) &&
     (status.access === "full" ? url.searchParams.get("access") === "full" : !url.searchParams.has("access")) &&
     (status.purpose === "think" ? url.searchParams.get("purpose") === "think" : !url.searchParams.has("purpose"));
   if (alreadySynced) return;
 
   url.search = "";
-  if (activeAgentHostId !== "personal") url.searchParams.set("host", activeAgentHostId);
   url.searchParams.set("attach", status.id);
   url.searchParams.set("cwd", cwd);
   if (status.sessionId) url.searchParams.set("sessionId", status.sessionId);
   if (title) url.searchParams.set("title", title);
-  if (status.transport === "app-server") url.searchParams.set("transport", "app-server");
   if (status.access === "full") url.searchParams.set("access", "full");
   if (status.purpose === "think") url.searchParams.set("purpose", "think");
   appendNotificationTarget(url);
@@ -5624,7 +4848,6 @@ function syncPreviewSessionUrl() {
   if (!activeSessionPreviewOnly || sessionScreen.classList.contains("hidden")) return;
   const url = new URL(window.location.href);
   url.search = "";
-  if (activeAgentHostId !== "personal") url.searchParams.set("host", activeAgentHostId);
   url.searchParams.set("preview", "1");
   url.searchParams.set("cwd", activeSessionParams.cwd || ".");
   if (activeSessionParams.sessionId) {
@@ -5639,94 +4862,6 @@ function syncPreviewSessionUrl() {
   if (activeSessionParams.sourceSession) url.searchParams.set("sourceSession", activeSessionParams.sourceSession);
   appendNotificationTarget(url);
   window.history.replaceState(null, "", url.toString());
-}
-
-function fitTerminal({ delay = 0 } = {}) {
-  if (!terminal || !fitAddon) return;
-
-  window.clearTimeout(fitTimer);
-  if (delay > 0) {
-    fitTimer = window.setTimeout(() => fitTerminal(), delay);
-    return;
-  }
-
-  if (fitFrame) cancelAnimationFrame(fitFrame);
-  fitFrame = requestAnimationFrame(() => {
-    fitFrame = null;
-    if (sessionScreen.classList.contains("hidden") || textView.classList.contains("hidden") === false) return;
-    fitAddon.fit();
-    sendResize();
-  });
-}
-
-function scrollTerminalPage(direction) {
-  if (activeTransport === "app-server" && !appServerView.classList.contains("hidden")) {
-    const overlap = Math.min(160, appServerView.clientHeight * PAGE_SCROLL_OVERLAP_RATIO);
-    appServerView.scrollBy({ top: direction * Math.max(1, appServerView.clientHeight - overlap), behavior: "smooth" });
-    return;
-  }
-  if (!terminal) return;
-  terminal.scrollLines(direction * pageScrollLines());
-}
-
-function pageScrollLines() {
-  const rows = terminal?.rows || 30;
-  const overlap = Math.max(
-    PAGE_SCROLL_MIN_OVERLAP,
-    Math.min(PAGE_SCROLL_MAX_OVERLAP, Math.round(rows * PAGE_SCROLL_OVERLAP_RATIO)),
-  );
-  return Math.max(1, rows - overlap);
-}
-
-function scrollTerminalToBottom() {
-  if (activeTransport === "app-server" && !appServerView.classList.contains("hidden")) {
-    appServerView.scrollTo({ top: appServerView.scrollHeight, behavior: "smooth" });
-    return;
-  }
-  terminal?.scrollToBottom();
-}
-
-function installPageDownLongPress() {
-  pageDownButton.addEventListener("pointerdown", (event) => {
-    if (event.pointerType === "mouse" && event.button !== 0) return;
-    window.clearTimeout(pageDownLongPressTimer);
-    pageDownLongPressFired = false;
-    pageDownLongPressTimer = window.setTimeout(() => {
-      pageDownLongPressFired = true;
-      scrollTerminalToBottom();
-    }, PAGE_DOWN_LONG_PRESS_MS);
-  });
-
-  for (const eventName of ["pointerup", "pointercancel", "pointerleave"]) {
-    pageDownButton.addEventListener(eventName, () => {
-      window.clearTimeout(pageDownLongPressTimer);
-      pageDownLongPressTimer = null;
-    });
-  }
-}
-
-function getTerminalBufferText() {
-  if (!terminal) return "";
-
-  const buffer = terminal.buffer.active;
-  const lines = [];
-  for (let i = 0; i < buffer.length; i += 1) {
-    const line = buffer.getLine(i);
-    const text = line?.translateToString(true) || "";
-    if (line?.isWrapped && lines.length) {
-      lines[lines.length - 1] += text;
-    } else {
-      lines.push(text);
-    }
-  }
-  return lines.join("\n").trimEnd();
-}
-
-function refreshTerminalDisplay() {
-  if (!terminal || sessionScreen.classList.contains("hidden") || !textView.classList.contains("hidden")) return;
-  resetSessionDocumentScroll();
-  fitTerminal();
-  requestAnimationFrame(() => terminal?.refresh(0, Math.max(0, terminal.rows - 1)));
 }
 
 function setSessionPageMode(active) {
@@ -5744,294 +4879,9 @@ function resetSessionDocumentScroll() {
   window.scrollTo({ top: 0, left: 0, behavior: "auto" });
 }
 
-function handleTerminalOutput(payload = {}) {
-  if (activeTransport === "terminal" && !terminalSessionPreview.classList.contains("hidden")) {
-    terminalOutputWhilePreviewChars += String(payload.raw || "").length;
-    if (terminalOutputWhilePreviewChars > 1_000) hideTerminalSessionPreview();
-  }
-  const revision = validOutputRevision(payload.revision);
-  if (revision !== null) {
-    if (revision <= queuedOutputRevision) return;
-    if (!historySyncPending && queuedOutputRevision > 0 && revision > queuedOutputRevision + 1) {
-      logClientEvent("output-gap", {
-        expectedRevision: queuedOutputRevision + 1,
-        receivedRevision: revision,
-      });
-      openSocket(currentReconnectParams(), { reconnect: true });
-      return;
-    }
-    queuedOutputRevision = revision;
-  }
-  if (terminalHistoryBuffering && activeTransport === "terminal") {
-    bufferTerminalHistory(payload.raw || "", { revision, forceFull: terminalHistoryForceFull });
-    return;
-  }
-  writeTerminalOutput(payload.raw || "", { revision });
-}
-
-function writeTerminalOutput(raw, { replay = false, revision = null, onComplete } = {}) {
-  if (!terminal) return;
-
-  const shouldFollow = replay || isTerminalAtBottom();
-  const previousViewportY = terminal.buffer.active.viewportY;
-  terminal?.write(raw, () => {
-    if (revision !== null) lastOutputRevision = Math.max(lastOutputRevision, revision);
-    if (shouldFollow) {
-      terminal.scrollToBottom();
-    } else {
-      terminal.scrollToLine(previousViewportY);
-    }
-    if (!textView.classList.contains("hidden")) {
-      refreshTerminalText({ follow: shouldFollow });
-    }
-    onComplete?.();
-  });
-}
-
-function writeTerminalReplay(payload = {}) {
-  if (!terminal) return;
-
-  const mode = payload.mode === "delta" ? "delta" : "full";
-  const revision = validOutputRevision(payload.revision);
-  const raw = String(payload.raw || "");
-
-  if (terminalHistoryBuffering && activeTransport === "terminal") {
-    bufferTerminalHistory(raw, { revision, forceFull: mode === "full" });
-    return;
-  }
-
-  if (mode === "delta") {
-    if (revision !== null) queuedOutputRevision = Math.max(queuedOutputRevision, revision);
-    if (!raw) {
-      if (revision !== null) lastOutputRevision = Math.max(lastOutputRevision, revision);
-      finishHistorySync(mode, raw.length);
-      return;
-    }
-    writeTerminalOutput(raw, {
-      replay: true,
-      revision,
-      onComplete: () => finishHistorySync(mode, raw.length),
-    });
-    return;
-  }
-
-  queuedOutputRevision = revision ?? 0;
-  terminal.write(`\x1bc${raw}`, () => {
-    lastOutputRevision = revision ?? 0;
-    terminal.scrollToBottom();
-    if (!textView.classList.contains("hidden")) {
-      refreshTerminalText({ follow: true });
-    }
-    finishHistorySync(mode, raw.length);
-  });
-}
-
-function beginTerminalHistoryBuffer({ active, forceFull = false, waitForOutput = false } = {}) {
-  window.clearTimeout(terminalHistoryFlushTimer);
-  terminalHistoryFlushTimer = null;
-  terminalHistoryBuffering = Boolean(active);
-  terminalHistoryForceFull = Boolean(forceFull);
-  terminalHistoryWaitForOutput = Boolean(waitForOutput);
-  terminalHistoryChunks = [];
-  terminalHistoryChars = 0;
-  terminalHistoryRevision = null;
-  terminalHistoryUiReady = false;
-}
-
-function bufferTerminalHistory(raw, { revision = null, forceFull = false } = {}) {
-  terminalHistoryForceFull ||= Boolean(forceFull);
-  if (revision !== null) {
-    terminalHistoryRevision = Math.max(terminalHistoryRevision ?? 0, revision);
-    queuedOutputRevision = Math.max(queuedOutputRevision, revision);
-  }
-
-  if (raw) {
-    if (terminalHistoryUiReady) {
-      logClientEvent("terminal-history-late-output", {
-        waitedMs: historySyncStartedAt ? Date.now() - historySyncStartedAt : 0,
-      });
-      terminalHistoryUiReady = false;
-    }
-    terminalHistoryWaitForOutput = false;
-    terminalHistoryChunks.push(raw);
-    terminalHistoryChars += raw.length;
-    trimTerminalHistoryBuffer();
-  }
-
-  window.clearTimeout(terminalHistoryFlushTimer);
-  if (terminalHistoryWaitForOutput && !terminalHistoryChars) {
-    terminalHistoryFlushTimer = window.setTimeout(flushTerminalHistoryBuffer, TERMINAL_HISTORY_EMPTY_READY_MS);
-    return;
-  }
-  terminalHistoryFlushTimer = window.setTimeout(flushTerminalHistoryBuffer, raw ? TERMINAL_HISTORY_QUIET_MS : 120);
-}
-
-function trimTerminalHistoryBuffer() {
-  let trimmed = false;
-  while (terminalHistoryChars > TERMINAL_RECENT_HISTORY_MAX_CHARS && terminalHistoryChunks.length > 1) {
-    terminalHistoryChars -= terminalHistoryChunks.shift().length;
-    trimmed = true;
-  }
-  if (terminalHistoryChars > TERMINAL_RECENT_HISTORY_MAX_CHARS && terminalHistoryChunks.length === 1) {
-    terminalHistoryChunks[0] = terminalHistoryChunks[0].slice(-TERMINAL_RECENT_HISTORY_MAX_CHARS);
-    terminalHistoryChars = terminalHistoryChunks[0].length;
-    trimmed = true;
-  }
-  if (trimmed) terminalHistoryForceFull = true;
-}
-
-function flushTerminalHistoryBuffer() {
-  window.clearTimeout(terminalHistoryFlushTimer);
-  terminalHistoryFlushTimer = null;
-  if (!terminalHistoryBuffering || !terminal) return;
-
-  const raw = terminalHistoryChunks.join("");
-  const rawChars = terminalHistoryChars;
-  const revision = terminalHistoryRevision;
-  const mode = terminalHistoryForceFull ? "recent" : "delta";
-
-  if (!raw && terminalHistoryWaitForOutput) {
-    exposeTerminalWhileHistoryIsPending();
-    return;
-  }
-
-  terminalHistoryBuffering = false;
-  terminalHistoryWaitForOutput = false;
-  terminalHistoryChunks = [];
-  terminalHistoryChars = 0;
-  terminalHistoryRevision = null;
-
-  if (!raw) {
-    if (revision !== null) lastOutputRevision = Math.max(lastOutputRevision, revision);
-    finishHistorySync(mode, 0);
-    return;
-  }
-
-  terminalView.classList.add("replaying");
-  const output = terminalHistoryForceFull ? `\x1bc${raw}` : raw;
-  terminalHistoryForceFull = false;
-  terminal.write(output, () => {
-    if (revision !== null) lastOutputRevision = Math.max(lastOutputRevision, revision);
-    terminal.scrollToBottom();
-    terminalView.classList.remove("replaying");
-    if (!textView.classList.contains("hidden")) refreshTerminalText({ follow: true });
-    finishHistorySync(mode, rawChars);
-  });
-}
-
-function exposeTerminalWhileHistoryIsPending() {
-  historySyncPending = false;
-  terminalHistoryUiReady = true;
-  window.clearTimeout(terminalHistoryFlushTimer);
-  terminalHistoryFlushTimer = window.setTimeout(disarmDelayedTerminalHistory, TERMINAL_DELAYED_HISTORY_GUARD_MS);
-  setConnectedState(currentSocketConnectionState());
-  logClientEvent("terminal-ui-ready", {
-    waitingForDelayedHistory: true,
-    outputRevision: lastOutputRevision,
-    durationMs: historySyncStartedAt ? Date.now() - historySyncStartedAt : 0,
-  });
-}
-
-function disarmDelayedTerminalHistory() {
-  terminalHistoryFlushTimer = null;
-  terminalHistoryBuffering = false;
-  terminalHistoryWaitForOutput = false;
-  terminalHistoryForceFull = false;
-  terminalHistoryUiReady = false;
-  historySyncStartedAt = 0;
-  logClientEvent("terminal-history-guard-expired");
-}
-
-function finishHistorySync(mode, rawChars) {
-  historySyncPending = false;
-  terminalHistoryBuffering = false;
-  terminalHistoryWaitForOutput = false;
-  terminalHistoryForceFull = false;
-  terminalHistoryUiReady = false;
-  window.clearTimeout(terminalHistoryFlushTimer);
-  terminalHistoryFlushTimer = null;
-  terminalView.classList.remove("replaying");
-  setConnectedState(currentSocketConnectionState());
-  logClientEvent("history-sync-complete", {
-    replayMode: mode,
-    rawChars,
-    outputRevision: lastOutputRevision,
-    durationMs: historySyncStartedAt ? Date.now() - historySyncStartedAt : 0,
-  });
-  historySyncStartedAt = 0;
-  if (activeTransport === "terminal" && rawChars > 1_000) hideTerminalSessionPreview();
-  saveActiveSessionSnapshot();
-}
-
-function currentSocketConnectionState() {
-  if (socket?.readyState !== WebSocket.OPEN) return "detached";
-  if (activeTransport === "app-server" && !activeSessionReady) return "starting";
-  return "connected";
-}
-
-function validOutputRevision(value) {
-  const revision = Number(value);
-  return Number.isSafeInteger(revision) && revision >= 0 ? revision : null;
-}
-
-function isTerminalAtBottom() {
-  if (!terminal) return true;
-  const buffer = terminal.buffer.active;
-  return buffer.viewportY >= buffer.baseY - 1;
-}
-
-function openTextView() {
-  if (!terminal) return;
-
-  terminalView.classList.add("hidden");
-  appServerView.classList.add("hidden");
-  textView.classList.remove("hidden");
-  terminalTabButton.classList.remove("active");
-  textTabButton.classList.add("active");
-  refreshTerminalText({ follow: true });
-}
-
-function refreshTerminalText({ follow = false } = {}) {
-  const wasAtBottom =
-    terminalText.scrollHeight <= terminalText.clientHeight ||
-    terminalText.scrollTop + terminalText.clientHeight >= terminalText.scrollHeight - 24;
-  terminalText.value = getTerminalBufferText();
-  if (!follow && !wasAtBottom) return;
-  requestAnimationFrame(() => {
-    terminalText.scrollTop = terminalText.scrollHeight;
-  });
-}
-
-function closeTextView() {
-  if (!terminalView || !appServerView || !textView) return;
-
-  textView.classList.add("hidden");
-  terminalView.classList.toggle("hidden", activeTransport === "app-server");
-  appServerView.classList.toggle("hidden", activeTransport !== "app-server");
-  textTabButton.classList.remove("active");
-  terminalTabButton.classList.add("active");
-  if (activeTransport === "app-server") {
-    requestAnimationFrame(() => {
-      appServerView.scrollTop = appServerView.scrollHeight;
-    });
-  } else {
-    fitTerminal();
-  }
-}
-
-function updateSessionViewLabels() {
-  const isAppServer = activeTransport === "app-server";
-  terminalTabButton.textContent = isAppServer ? "对话" : "Terminal";
-  textTabButton.textContent = isAppServer ? "原始" : "Text";
-  terminalTabButton.setAttribute("aria-label", isAppServer ? "查看整理后的对话" : "查看终端");
-  textTabButton.setAttribute("aria-label", isAppServer ? "查看 Session 原始文本" : "查看纯文本");
-}
-
 function syncPrimarySessionView() {
-  if (!textView.classList.contains("hidden")) return;
-  terminalView.classList.toggle("hidden", activeTransport === "app-server");
-  appServerView.classList.toggle("hidden", activeTransport !== "app-server");
-  if (activeTransport === "app-server" && !appTranscriptItems.length) renderAppTranscript();
+  appServerView.classList.remove("hidden");
+  if (!appTranscriptItems.length) renderAppTranscript();
 }
 
 function replaceAppTranscript(payload = {}) {
@@ -6441,7 +5291,7 @@ function renderAppTranscript({ follow = false } = {}) {
       sessionPreviewLoading &&
       !sessionPreviewLiveActive
     ) {
-      title.textContent = `正在加载${agentHostLabel(activeSessionParams.host || activeAgentHostId)} Session…`;
+      title.textContent = "正在加载 Session…";
       note.textContent = "这里只读取会话记录，不会恢复运行；加载完成前仍可返回中控。";
     } else if (activeSessionPreviewOnly && activeSessionParams.sessionId && sessionPreviewError) {
       title.textContent = "暂时无法加载会话记录";
@@ -6534,12 +5384,7 @@ async function loadSessionPreview(sessionId, requestSequence) {
     if (activeSessionParams.sourceSession) {
       previewPath.searchParams.set("sourceSession", activeSessionParams.sourceSession);
     }
-    const response = await fetch(
-      agentHostApiUrl(
-        `${previewPath.pathname}${previewPath.search}`,
-        activeSessionParams.host || activeAgentHostId,
-      ),
-    );
+    const response = await fetch(`${previewPath.pathname}${previewPath.search}`);
     const data = await response.json().catch(() => ({}));
     if (!response.ok && response.status !== 404) {
       throw new Error(data.error || "Session 记录暂时无法读取。");
@@ -6554,13 +5399,11 @@ async function loadSessionPreview(sessionId, requestSequence) {
         result: String(preview.result || ""),
         completedAt: String(preview.completedAt || ""),
       };
-      if (activeTransport === "app-server" && appTranscriptSource !== "app-server") {
+      if (appTranscriptSource !== "app-server") {
         appTranscriptSource = "disk";
       }
     }
-    if (activeTransport === "terminal") {
-      renderTerminalSessionPreview();
-    } else if (appTranscriptSource !== "app-server") {
+    if (appTranscriptSource !== "app-server") {
       const keepEarlier = previewHistoryExpanded && appTranscriptSource === "live-preview";
       if (!keepEarlier) previewHistoryCursor = String(data.conversation?.nextCursor || "");
       if (data.live && data.transcript && Array.isArray(data.transcript.items)) {
@@ -6679,19 +5522,6 @@ function diskConversationItems(conversation = {}) {
     }
   }
   return items;
-}
-
-function renderTerminalSessionPreview() {
-  if (!terminalPreviewAllowed || !cachedSessionPreview?.result) return;
-  terminalOutputWhilePreviewChars = 0;
-  terminalSessionPreviewResult.textContent = cachedSessionPreview.result;
-  terminalSessionPreview.classList.remove("hidden");
-}
-
-function hideTerminalSessionPreview() {
-  terminalPreviewAllowed = false;
-  terminalOutputWhilePreviewChars = 0;
-  terminalSessionPreview.classList.add("hidden");
 }
 
 function isProcessTranscriptItem(item) {
@@ -7268,7 +6098,6 @@ async function forkFromTurn(item) {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || "无法创建分支");
     const url = sessionUrl({
-      host: payload.hostId || activeAgentHostId,
       cwd: payload.project || activeSessionParams.cwd || ".",
       sessionId: payload.threadId,
       title: payload.title || "Codex 分支",
@@ -7282,7 +6111,6 @@ async function forkFromTurn(item) {
       setUploadStatus("分支已创建。", {
         actionLabel: "打开新 Session",
         onAction: () => openSessionTab({
-          host: payload.hostId || activeAgentHostId,
           cwd: payload.project || activeSessionParams.cwd || ".",
           sessionId: payload.threadId,
           title: payload.title || "Codex 分支",
@@ -7447,7 +6275,6 @@ function isAppTranscriptAtBottom() {
 }
 
 function startAppTranscriptSubmitFollow() {
-  if (activeTransport !== "app-server") return;
   appTranscriptSubmitFollowActive = true;
   scrollAppTranscriptToBottom();
 }
@@ -7457,7 +6284,7 @@ function stopAppTranscriptSubmitFollow() {
 }
 
 function followAppTranscriptAfterViewportChange() {
-  if (!appTranscriptSubmitFollowActive || activeTransport !== "app-server") return;
+  if (!appTranscriptSubmitFollowActive) return;
   followAppTranscriptIfNeeded(true);
 }
 
@@ -7521,7 +6348,7 @@ async function loadEarlierPreviewHistory() {
     const url = new URL(`/api/session-preview/${encodeURIComponent(sessionId)}`, window.location.origin);
     url.searchParams.set("before", cursor);
     if (activeSessionParams.sourceSession) url.searchParams.set("sourceSession", activeSessionParams.sourceSession);
-    const response = await fetch(agentHostApiUrl(`${url.pathname}${url.search}`, activeSessionParams.host || activeAgentHostId));
+    const response = await fetch(`${url.pathname}${url.search}`);
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || "更早记录暂时无法读取。");
     if (!activeSessionPreviewOnly || activeSessionParams.sessionId !== sessionId || previewHistoryCursor !== cursor) return;
@@ -7550,13 +6377,9 @@ async function markCurrentSessionViewedOnExit({ beacon = false } = {}) {
   if (!sessionId || !turnId) return;
 
   activeSessionUnreadTurnId = "";
-  const endpoint = agentHostApiUrl(`/api/codex-sessions/${encodeURIComponent(sessionId)}/viewed`);
+  const endpoint = `/api/codex-sessions/${encodeURIComponent(sessionId)}/viewed`;
   const body = JSON.stringify({ turnId });
-  const live = liveSessionsCache.find(
-    (session) =>
-      session.sessionId === sessionId &&
-      (cleanAgentHostId(session.hostId) || "personal") === activeAgentHostId,
-  );
+  const live = liveSessionsCache.find((session) => session.sessionId === sessionId);
   if (live && live.lastCompletedTurnId === turnId) {
     live.lastViewedTurnId = turnId;
     live.hasUnreadResult = false;
@@ -7598,7 +6421,7 @@ function markAppTranscriptUnseen() {
 function syncAppTranscriptLatestButton() {
   appTranscriptLatestButton.classList.toggle(
     "hidden",
-    !appTranscriptHasUnseenContent || activeTransport !== "app-server" || isAppTranscriptAtBottom(),
+    !appTranscriptHasUnseenContent || isAppTranscriptAtBottom(),
   );
 }
 
@@ -7608,12 +6431,10 @@ function scheduleAppReadingPositionSave() {
 }
 
 function appReadingPositionKey() {
-  const hostId = cleanAgentHostId(activeSessionParams.host) || activeAgentHostId;
-  const hostPrefix = hostId === "personal" ? "" : `${hostId}:`;
   const threadId = String(activeSessionParams.sessionId || "").trim();
-  if (threadId) return `${hostPrefix}thread:${threadId}`;
+  if (threadId) return `thread:${threadId}`;
   const webSessionId = String(activeSessionId || activeSessionParams.attach || "").trim();
-  return webSessionId ? `${hostPrefix}web:${webSessionId}` : "";
+  return webSessionId ? `web:${webSessionId}` : "";
 }
 
 function captureAppTranscriptAnchor() {
@@ -7630,7 +6451,7 @@ function captureAppTranscriptAnchor() {
 }
 
 function saveAppReadingPosition() {
-  if (activeTransport !== "app-server" || !appTranscriptItems.length) return;
+  if (!appTranscriptItems.length) return;
   const key = appReadingPositionKey();
   if (!key) return;
   const anchor = captureAppTranscriptAnchor();
@@ -7720,170 +6541,13 @@ function trimAppReadingPositions(positions) {
   for (const [key] of entries.slice(APP_READING_POSITION_LIMIT)) delete positions[key];
 }
 
-async function ensureTerminal() {
-  if (terminal) return;
-  await loadTerminalAssets();
-
-  terminal = new Terminal({
-    cursorBlink: true,
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-    fontSize: 13,
-    scrollback: 12000,
-    theme: {
-      background: "#080a0f",
-      foreground: "#e8ebf0",
-      cursor: "#ffffff",
-      selectionBackground: "#334155",
-    },
-  });
-  fitAddon = new FitAddon.FitAddon();
-  terminal.loadAddon(fitAddon);
-  terminal.open(document.querySelector("#terminal"));
-  terminal.onData((data) => {
-    send({ type: "input", data });
-  });
-  installTerminalTouchScroll();
-}
-
-function loadTerminalAssets() {
-  if (globalThis.Terminal && globalThis.FitAddon?.FitAddon) return Promise.resolve();
-  if (terminalAssetsPromise) return terminalAssetsPromise;
-
-  terminalAssetsPromise = Promise.all([
-    loadStylesheetOnce("/vendor/xterm-css/xterm.css?v=20260625-5", "xterm-styles"),
-    loadClassicScriptOnce("/vendor/xterm/xterm.js?v=20260625-5", "xterm-script")
-      .then(() => loadClassicScriptOnce("/vendor/xterm-fit/addon-fit.js?v=20260625-5", "xterm-fit-script")),
-  ]).then(() => {
-    if (!globalThis.Terminal || !globalThis.FitAddon?.FitAddon) {
-      throw new Error("xterm did not initialize");
-    }
-  }).catch((error) => {
-    terminalAssetsPromise = null;
-    throw error;
-  });
-  return terminalAssetsPromise;
-}
-
-function loadStylesheetOnce(href, id) {
-  const existing = document.getElementById(id);
-  if (existing) return existing.dataset.loaded === "true"
-    ? Promise.resolve()
-    : new Promise((resolve, reject) => {
-        existing.addEventListener("load", resolve, { once: true });
-        existing.addEventListener("error", reject, { once: true });
-      });
-  return new Promise((resolve, reject) => {
-    const link = document.createElement("link");
-    link.id = id;
-    link.rel = "stylesheet";
-    link.href = href;
-    link.addEventListener("load", () => {
-      link.dataset.loaded = "true";
-      resolve();
-    }, { once: true });
-    link.addEventListener("error", () => reject(new Error(`Failed to load ${href}`)), { once: true });
-    document.head.append(link);
-  });
-}
-
-function loadClassicScriptOnce(src, id) {
-  const existing = document.getElementById(id);
-  if (existing) return existing.dataset.loaded === "true"
-    ? Promise.resolve()
-    : new Promise((resolve, reject) => {
-        existing.addEventListener("load", resolve, { once: true });
-        existing.addEventListener("error", reject, { once: true });
-      });
-  return new Promise((resolve, reject) => {
-    const script = document.createElement("script");
-    script.id = id;
-    script.src = src;
-    script.addEventListener("load", () => {
-      script.dataset.loaded = "true";
-      resolve();
-    }, { once: true });
-    script.addEventListener("error", () => reject(new Error(`Failed to load ${src}`)), { once: true });
-    document.body.append(script);
-  });
-}
-
-function installTerminalTouchScroll() {
-  const terminalElement = document.querySelector("#terminal");
-  if (!terminalElement) return;
-
-  terminalElement.addEventListener(
-    "touchstart",
-    (event) => {
-      terminalTouchY = event.touches[0]?.clientY ?? null;
-    },
-    { passive: true },
-  );
-
-  terminalElement.addEventListener(
-    "touchmove",
-    (event) => {
-      if (terminalTouchY === null || !terminal) return;
-      const nextY = event.touches[0]?.clientY ?? terminalTouchY;
-      const delta = terminalTouchY - nextY;
-      terminalTouchY = nextY;
-
-      const lineHeight = terminal.options.fontSize * 1.35;
-      const lines = Math.trunc(delta / lineHeight);
-      if (lines !== 0) {
-        terminal.scrollLines(lines);
-        event.preventDefault();
-      }
-    },
-    { passive: false },
-  );
-
-  terminalElement.addEventListener("touchend", () => {
-    terminalTouchY = null;
-  });
-}
-
 async function apiJson(url) {
-  return apiJsonForHost(url, activeAgentHostId);
-}
-
-async function apiJsonForHost(url, hostId, options = {}) {
-  const requestTimeoutMs =
-    Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
-      ? options.timeoutMs
-      : isRemoteAgentHost(hostId)
-        ? REMOTE_AGENT_REQUEST_TIMEOUT_MS
-        : 0;
-  const controller = requestTimeoutMs > 0 ? new AbortController() : null;
-  const timeout = controller
-    ? window.setTimeout(() => controller.abort(), requestTimeoutMs)
-    : null;
-  try {
-    const response = await fetch(
-      agentHostApiUrl(url, hostId),
-      controller ? { signal: controller.signal } : undefined,
-    );
-    if (response.status === 401) {
-      redirectToLogin();
-      return null;
-    }
-    return await response.json();
-  } catch (error) {
-    if (controller?.signal.aborted) {
-      const timeoutError = new Error(`远端 Host 请求超过 ${requestTimeoutMs}ms`);
-      timeoutError.name = "AgentHostTimeoutError";
-      timeoutError.code = "AGENT_HOST_TIMEOUT";
-      throw timeoutError;
-    }
-    throw error;
-  } finally {
-    if (timeout !== null) window.clearTimeout(timeout);
+  const response = await fetch(url);
+  if (response.status === 401) {
+    redirectToLogin();
+    return null;
   }
-}
-
-function agentHostApiUrl(value, hostId = activeAgentHostId) {
-  const url = new URL(value, window.location.origin);
-  url.searchParams.set("host", cleanAgentHostId(hostId) || activeAgentHostId);
-  return `${url.pathname}${url.search}${url.hash}`;
+  return await response.json();
 }
 
 function redirectToLogin(loginUrl = "") {
@@ -7924,7 +6588,7 @@ function clearSessionUrl() {
   if (!window.location.search) return;
 
   const url = new URL(window.location.href);
-  for (const key of ["attach", "cwd", "sessionId", "title", "purpose", "preview", "new", "transport", "access", "sourceSession"]) {
+  for (const key of ["attach", "cwd", "sessionId", "title", "purpose", "preview", "new", "host", "transport", "access", "sourceSession"]) {
     url.searchParams.delete(key);
   }
   if (url.toString() !== window.location.href) {
@@ -7932,10 +6596,9 @@ function clearSessionUrl() {
   }
 }
 
-function rememberedSessionNavigation(hostId = activeAgentHostId) {
-  const host = cleanAgentHostId(hostId) || "personal";
-  const stored = readSessionNavigationStore()[host];
-  return normalizeSessionNavigation({ ...stored, host });
+function rememberedSessionNavigation() {
+  const stored = readSessionNavigationStore()["personal"];
+  return normalizeSessionNavigation({ ...stored, host: "personal" });
 }
 
 function rememberSessionNavigation(params = {}) {
@@ -7949,7 +6612,7 @@ function rememberSessionNavigation(params = {}) {
 function forgetSessionNavigation(params = {}) {
   const sessionId = String(params.sessionId || "").trim();
   if (!sessionId) return;
-  const host = cleanAgentHostId(params.host) || activeAgentHostId || "personal";
+  const host = "personal";
   const stored = readSessionNavigationStore();
   const current = normalizeSessionNavigation({ ...stored[host], host });
   if (current?.sessionId !== sessionId) return;
@@ -7962,7 +6625,7 @@ function normalizeSessionNavigation(params = {}) {
   if (!sessionId || sessionId.length > 120) return null;
   const rawSourceSession = String(params.sourceSession || "").trim();
   const sourceSession = /^[a-z0-9-]{8,80}$/i.test(rawSourceSession) ? rawSourceSession : "";
-  const host = cleanAgentHostId(params.host) || "personal";
+  const host = "personal";
   const title = String(params.title || "Untitled session").replace(/\s+/g, " ").trim().slice(0, 240);
   const cwd = String(params.cwd || ".").trim().slice(0, 1_000) || ".";
   return {
@@ -7974,7 +6637,7 @@ function normalizeSessionNavigation(params = {}) {
     access: params.access === "full" ? "full" : "safe",
     purpose: params.purpose === "think" ? "think" : "",
     sourceSession,
-    preview: sourceSession || host === "personal" ? "1" : "",
+    preview: "1",
   };
 }
 
@@ -7993,11 +6656,6 @@ function writeSessionNavigationStore(stored) {
   } catch {
     // Navigation persistence is optional; the current in-memory Session remains usable.
   }
-}
-
-function cleanAgentHostId(value) {
-  const id = String(value || "").trim();
-  return /^[a-z][a-z0-9-]{0,31}$/.test(id) ? id : "";
 }
 
 function escapeHtml(value) {

@@ -31,8 +31,11 @@ test("the default Agent home is a two-destination Session control center", () =>
   assert.match(app, /if \(sessionCatalogRefreshPromise\) return sessionCatalogRefreshPromise/);
   assert.match(app, /sessionCatalogTimer = window\.setInterval\(refreshSessionCatalogs, SESSION_CATALOG_FALLBACK_MS\)/);
   assert.match(app, /sessionsTimer = window\.setInterval\(loadLiveSessions, LIVE_SESSIONS_FALLBACK_MS\)/);
-  assert.match(app, /previousSessions: savedSessionsCache,[\s\S]*onPartial: renderSavedCodexSessions/);
-  assert.match(app, /Keep the last successful data for this host while it is temporarily unavailable/);
+  assert.match(
+    app,
+    /loadSessionsAcrossHosts\("\/api\/codex-sessions", \{\s*previousSessions: savedSessionsCache,?\s*\}\)[\s\S]*renderSavedCodexSessions\(sessions\)/,
+  );
+  assert.match(app, /Keep the last successful data while the list is temporarily unavailable/);
 });
 
 test("control center cards derive attention and progress from real Session state", () => {
@@ -99,9 +102,8 @@ test("desktop and Pad retain the compact switcher while phones open it as a draw
     styles,
     /@media \(min-width: 721px\) and \(max-width: 1100px\)[\s\S]*grid-template-columns: 176px minmax\(0, 1fr\)/,
   );
-  assert.match(page, /id="session-switcher-host-tabs"[\s\S]*aria-label="会话账号筛选"/);
-  assert.match(app, /function renderSessionSwitcherHostTabs\(\)/);
-  assert.match(app, /sessionSwitcherAccountFilter = filter\.id/);
+  assert.doesNotMatch(page, /session-switcher-host-tabs/);
+  assert.doesNotMatch(app, /renderSessionSwitcherHostTabs|sessionSwitcherAccountFilter/);
   assert.match(
     styles,
     /@media \(max-width: 720px\)[\s\S]*\.app-primary-nav \{[\s\S]*grid-template-columns: repeat\(2, 1fr\)/,
@@ -129,7 +131,7 @@ test("Session navigation and menus remain reversible in one page", () => {
   assert.doesNotMatch(app, /function shouldOpenSessionInCurrentPage/);
   assert.match(
     app,
-    /function showSessionScreen\(\)[\s\S]*document\.body\.classList\.toggle\("app-server-session", activeTransport === "app-server"\)/,
+    /function showSessionScreen\(\)[\s\S]*document\.body\.classList\.add\("app-server-session"\)/,
   );
   assert.match(
     app,

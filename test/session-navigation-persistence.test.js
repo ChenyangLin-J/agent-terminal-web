@@ -55,7 +55,6 @@ test("the current Session navigation survives an Agent Web restart", async (t) =
     CODEX_HOME: codexHome,
     WORKSPACE_ROOT: workspaceRoot,
     AGENT_NATIVE_THREAD_CATALOG: "0",
-    AGENT_SHARED_APP_SERVER: "0",
     PRIVATE_AUTH_VERIFY_URL: `http://127.0.0.1:${authServer.address().port}`,
   };
   let agent = await startAgent(environment);
@@ -110,6 +109,7 @@ test("the current Session navigation survives an Agent Web restart", async (t) =
   const draftUrl = new URL(page.url());
   assert.equal(draftUrl.searchParams.get("preview"), "1");
   assert.equal(draftUrl.searchParams.has("sessionId"), false);
+  await page.waitForFunction(() => document.activeElement?.id === "prompt");
   assert.equal(await page.evaluate(() => document.activeElement?.id), "prompt");
   assert.equal(await page.locator(".session-switcher-item.active").count(), 0);
   assert.match(await page.locator("#connection").innerText(), /发送第一条消息时创建/);

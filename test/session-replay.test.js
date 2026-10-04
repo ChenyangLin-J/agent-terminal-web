@@ -9,8 +9,9 @@ import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const threadId = "019f9db5-cdfd-7c10-b477-4859c23313be";
 
-test("reconnecting clients receive only terminal output after their saved revision", async (t) => {
+test("reconnecting clients receive only Session output after their saved revision", async (t) => {
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "agent-session-replay-"));
   const workspaceRoot = path.join(temporaryRoot, "workspace");
   const codexHome = path.join(temporaryRoot, "codex");
@@ -20,9 +21,27 @@ test("reconnecting clients receive only terminal output after their saved revisi
   await writeFile(
     fakeCodex,
     `#!/usr/bin/env node
-setTimeout(() => process.stdout.write("first-marker\\r\\n"), 80);
-setTimeout(() => process.stdout.write("second-marker\\r\\n"), 400);
-setInterval(() => {}, 1000);
+const readline = require("node:readline");
+const input = readline.createInterface({ input: process.stdin });
+const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+input.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") {
+    send({ id: message.id, result: { userAgent: "fake" } });
+  } else if (message.method === "thread/start" || message.method === "thread/resume") {
+    send({ id: message.id, result: { thread: { id: "${threadId}", turns: [] } } });
+    setTimeout(() => {
+      send({ method: "turn/started", params: { threadId: "${threadId}", turn: { id: "turn-1", status: "inProgress" } } });
+      send({ method: "item/agentMessage/delta", params: { threadId: "${threadId}", turnId: "turn-1", itemId: "item-1", delta: "first-marker" } });
+    }, 80);
+    setTimeout(() => {
+      send({ method: "item/agentMessage/delta", params: { threadId: "${threadId}", turnId: "turn-1", itemId: "item-2", delta: "second-marker" } });
+      send({ method: "turn/completed", params: { threadId: "${threadId}", turn: { id: "turn-1", status: "completed" } } });
+    }, 400);
+  } else if (message.id !== undefined) {
+    send({ id: message.id, result: {} });
+  }
+});
 `,
   );
   await chmod(fakeCodex, 0o755);
@@ -43,7 +62,8 @@ setInterval(() => {}, 1000);
       PORT: String(agentPort),
       CODEX_HOME: codexHome,
       WORKSPACE_ROOT: workspaceRoot,
-      CODEX_COMMAND: fakeCodex,
+      CODEX_APP_SERVER_COMMAND: fakeCodex,
+      AGENT_NATIVE_THREAD_CATALOG: "0",
       PRIVATE_AUTH_VERIFY_URL: `http://127.0.0.1:${authPort}`,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -58,12 +78,13 @@ setInterval(() => {}, 1000);
   await waitFor(() => output.includes("Agent Terminal Web:"), 3000);
 
   const first = await connect(
-    `ws://127.0.0.1:${agentPort}/terminal?cwd=.&transport=terminal&access=safe&clientId=first-client`,
+    `ws://127.0.0.1:${agentPort}/terminal?cwd=.&transport=app-server&access=safe&clientId=first-client`,
   );
   const status = await first.next((message) => message.type === "status");
   await first.next((message) => message.type === "replay");
   const firstOutput = await first.next(
     (message) => message.type === "output" && message.payload.raw.includes("first-marker"),
+    5_000,
   );
   const savedRevision = firstOutput.payload.revision;
   first.ws.close();

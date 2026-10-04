@@ -4,28 +4,34 @@ import test from "node:test";
 
 const serverSource = await readFile(new URL("../server.js", import.meta.url), "utf8");
 
-test("catalog metadata uses the shared App Server by default", () => {
+test("catalog metadata uses a cached thread-scoped client over the shared App Server connection", () => {
   assert.match(
     serverSource,
-    /if \(SHARED_APP_SERVER_ENABLED\) \{\s*const client = await sharedCatalogAppServer\(\);\s*return run\(client\)/,
+    /async function withSharedAppServer\(run\) \{\s*const client = await sharedCatalogAppServer\(\);\s*return run\(client\);/,
   );
+  assert.match(serverSource, /async function sharedCatalogAppServer\(\)/);
   assert.match(
     serverSource,
-    /SHARED_APP_SERVER_ENABLED\s*\?\s*createAgentAppServerClient\(WORKSPACE_ROOT,/,
+    /const client = createAgentAppServerClient\(WORKSPACE_ROOT, `catalog-\$\{cryptoRandomId\(\)\}`\)/,
   );
+  assert.match(serverSource, /connection: sharedAgentAppServerConnection\(\)/);
   assert.match(serverSource, /const THREAD_CATALOG_CACHE_MS = Math\.max/);
   assert.match(serverSource, /AGENT_THREAD_CATALOG_CACHE_MS\) \|\| 2 \* 60_000/);
-  assert.match(serverSource, /cachedThreadCatalogPage\(\{ archived, agentHost \}\)/);
+  assert.match(serverSource, /cachedThreadCatalogPage\(\{ archived \}\)/);
   assert.match(serverSource, /if \(cached\?\.promise\) return cached\.promise/);
   assert.match(serverSource, /thread-catalog-stale-fallback/);
 });
 
-test("the rollback-only hidden Catalog disables MCP and stops when idle", () => {
-  assert.match(
+test("catalog metadata never spawns a dedicated MCP-free App Server process", () => {
+  assert.doesNotMatch(serverSource, /AGENT_SHARED_APP_SERVER|SHARED_APP_SERVER_ENABLED/);
+  assert.doesNotMatch(serverSource, /AGENT_CATALOG_IDLE_MS|CATALOG_APP_SERVER_IDLE_MS/);
+  assert.doesNotMatch(serverSource, /scheduleCatalogAppServerIdleStop|catalog-app-server-stopped/);
+  assert.doesNotMatch(
     serverSource,
     /args:\s*\["app-server",\s*"-c",\s*"mcp_servers=\{\}"\]/,
   );
-  assert.match(serverSource, /AGENT_CATALOG_IDLE_MS/);
-  assert.match(serverSource, /scheduleCatalogAppServerIdleStop\(\)/);
-  assert.match(serverSource, /catalog-app-server-stopped/);
+  assert.match(
+    serverSource,
+    /new CodexAppServerConnection\(\{[\s\S]*command: process\.env\.CODEX_APP_SERVER_COMMAND \|\| "codex"/,
+  );
 });

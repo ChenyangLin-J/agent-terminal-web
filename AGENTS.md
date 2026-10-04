@@ -25,8 +25,8 @@
   `legacy` forces every Session back to the old kernel, overriding the
   persisted `runtimeKernel`. Removing the variable is not a rollback: Sessions
   already marked `platform` keep using Platform.
-- SSH hosts and `AGENT_SHARED_APP_SERVER=0` always use the old kernel. The
-  persisted and reported `runtimeKernel` must be the kernel actually in use.
+- The persisted and reported `runtimeKernel` must be the kernel actually in
+  use.
 
 ## Shared MCP architecture
 
@@ -50,9 +50,6 @@
   clients over that connection. Keep event and approval routing isolated by
   `threadId`, unsubscribe released threads, and never close the shared process
   when one Session detaches.
-- `AGENT_SHARED_APP_SERVER=0` is a rollback-only path. In that legacy mode, the
-  hidden Catalog App Server remains metadata-only, uses `mcp_servers={}`, and
-  is reclaimed after an idle interval.
 - When updating `@playwright/mcp`, regenerate
   `config/playwright-mcp-tools.json` with
   `npm run update:playwright-tools`, then verify that tool listing remains

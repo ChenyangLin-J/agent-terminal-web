@@ -28,8 +28,7 @@ test("App Server resume restores structured history without terminal replay", as
   assert.match(server, /return commandDisplayText\(item\.cmd \|\| item\.command\)/);
 
   assert.match(page, /id="app-server-view"/);
-  assert.match(app, /terminalTabButton\.textContent = isAppServer \? "对话" : "Terminal"/);
-  assert.match(app, /textTabButton\.textContent = isAppServer \? "原始" : "Text"/);
+  assert.doesNotMatch(app, /terminalTabButton|textTabButton|activeTransport|loadTerminalAssets/);
   assert.match(app, /`已加载最近 \$\{restoredAppTurnCount\} 轮`/);
   assert.match(app, /`加载更早 \$\{APP_INITIAL_TURN_LIMIT\} 轮`/);
   assert.match(server, /async function loadEarlierAppServerHistory\(session\)/);
@@ -37,7 +36,7 @@ test("App Server resume restores structured history without terminal replay", as
   assert.match(server, /prependAppServerTranscript\(session, turns\)/);
   assert.match(
     app,
-    /fetch\([\s\S]*agentHostApiUrl\([\s\S]*`\/api\/session-preview\/\$\{encodeURIComponent\(sessionId\)\}`/,
+    /const previewPath = new URL\(`\/api\/session-preview\/\$\{encodeURIComponent\(sessionId\)\}`[\s\S]*fetch\(`\$\{previewPath\.pathname\}\$\{previewPath\.search\}`\)/,
   );
   assert.match(server, /extractSessionConversationFromJsonl\(file, \{[\s\S]*limit: APP_INITIAL_TURN_LIMIT/);
   assert.match(app, /function handleAppTranscriptScroll\(\)[\s\S]*requestEarlierAppHistory\(\)/);
@@ -48,18 +47,17 @@ test("App Server resume restores structured history without terminal replay", as
   assert.match(app, /title\.textContent = "上次完成"/);
   assert.match(app, /"startup-queue": "已排队；会话恢复后会自动开始。"/);
   assert.match(server, /pendingStartupPrompts: \[\]/);
-  assert.match(server, /capabilities: \{[\s\S]*startupQueue: session\.transport === APP_SERVER_TRANSPORT/);
+  assert.match(server, /capabilities: \{[\s\S]*startupQueue: true/);
   assert.match(server, /void drainAppServerStartupPrompts\(session\)/);
   assert.match(server, /kind: "startup-submit"/);
   assert.match(app, /payload\.kind === "startup-submit"/);
   assert.match(
     server,
-    /if \(!USE_TMUX_SESSIONS\) \{[\s\S]*transport: APP_SERVER_TRANSPORT,[\s\S]*args: \["app-server"\]/,
+    /transport: APP_SERVER_TRANSPORT,[\s\S]*args: \["app-server"\]/,
   );
+  assert.doesNotMatch(server, /USE_TMUX_SESSIONS|transport=terminal|node-pty/);
   assert.match(app, /const normalizedItems = allItems\.map\(normalizeClientTranscriptItem\)/);
   assert.match(app, /appTranscriptItems = normalizedItems/);
-  assert.match(app, /const shouldReplay = activeTransport === "terminal" && options\.replay !== false/);
-  assert.match(app, /function loadTerminalAssets\(\)/);
   assert.doesNotMatch(page, /<script src="\/vendor\/xterm/);
   assert.doesNotMatch(page, /<link rel="stylesheet" href="\/vendor\/xterm-css/);
   assert.match(app, /APP_READING_POSITION_STORE_KEY/);
@@ -67,8 +65,8 @@ test("App Server resume restores structured history without terminal replay", as
   assert.match(app, /function restoreAppTranscriptAnchor\(position\)/);
   assert.match(app, /pendingAppReadingRestore/);
   assert.match(app, /id="app-transcript-latest"|appTranscriptLatestButton/);
-  assert.match(page, /id="terminal-session-preview"/);
-  assert.match(app, /function renderTerminalSessionPreview\(\)/);
+  assert.doesNotMatch(page, /terminal-session-preview|view-tabs/);
+  assert.doesNotMatch(app, /renderTerminalSessionPreview/);
   assert.match(styles, /\.app-transcript-user/);
   assert.match(styles, /\.app-transcript-assistant/);
   assert.match(styles, /\.app-transcript-command/);
@@ -102,8 +100,6 @@ test("App Server resume restores structured history without terminal replay", as
   assert.doesNotMatch(styles, /\.app-server-session #prompt/);
   assert.doesNotMatch(styles, /\.app-server-session \.composer(?:\s|\{|:)/);
   assert.match(app, /statusEls\.project\.textContent = sessionLabel/);
-  assert.match(app, /activeTransport === "terminal" \? "Terminal · " : ""/);
-  assert.match(styles, /\.app-server-session \.view-tabs \{[\s\S]*display: none/);
   assert.match(styles, /\.app-server-session \.turn-ledger \{[\s\S]*display: none !important/);
   assert.match(styles, /@keyframes app-activity-wave/);
   assert.match(styles, /\.app-transcript-commentary/);

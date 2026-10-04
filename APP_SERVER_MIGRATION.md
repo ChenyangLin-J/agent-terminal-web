@@ -1,11 +1,11 @@
 # Codex App Server mode
 
-Agent Terminal provides two per-session engines:
+Agent Terminal runs every Session on the `App Server` engine, which uses JSON-RPC
+so a follow-up can be attached to an exact Codex turn. The former `Terminal`
+(PTY) engine has been removed; legacy Sessions resume as App Server Sessions by
+their persisted Codex thread id.
 
-- `App Server` is the default and uses JSON-RPC so a follow-up can be attached to an exact Codex turn.
-- `Terminal` remains available for the full interactive Codex CLI in a PTY.
-
-Select the engine on the session start screen. Home and other callers can also open an App Server session with:
+Home and other callers can open an App Server session with:
 
 ```text
 /?new=1&cwd=.&transport=app-server
@@ -20,8 +20,6 @@ create thread-scoped clients over that connection. Each client tracks its own
 
 The shared connection remains alive for the Agent Web process lifetime. Closing
 one web Session unsubscribes its thread without terminating other Sessions.
-`AGENT_SHARED_APP_SERVER=0` temporarily restores the previous per-Session
-process model when an operational rollback is needed.
 
 - `新任务` calls `turn/start`.
 - `追加当前` calls `turn/steer` with `expectedTurnId`; it cannot silently steer a different turn.
@@ -39,20 +37,18 @@ process model when an operational rollback is needed.
 - The latest completed and viewed turn ids are persisted separately so the
   control center can distinguish `新结果` from a viewed, idle Session.
 
-The browser renders agent text, reasoning summaries, command output, file changes, turn state, and errors as readable terminal output. Command and file approvals, permission requests, and text questions appear as an explicit decision card. Voice input, uploads, push notifications, session titles, archive, Text view, and Home deep links continue to use the shared web UI.
+The browser renders agent text, reasoning summaries, command output, file changes, turn state, and errors as readable transcript output. Command and file approvals, permission requests, and text questions appear as an explicit decision card. Voice input, uploads, push notifications, session titles, archive, and Home deep links continue to use the shared web UI.
 
 ## Current limits
 
-- Raw terminal keystrokes and CLI slash commands are available only in Terminal mode.
 - App Server mode shows the structured events needed by the current workflow, not every experimental event type.
 - Multi-question tool prompts use a compact text answer field rather than a dedicated form for every question.
-- Terminal remains available as a manual fallback for workflows that need the full interactive CLI.
 
 ## Verification
 
 Automated tests cover exact-turn steering, rejected late steering, immediate
 completion races, queue ordering, shared-process counts, concurrent thread
-isolation, approval routing, unsubscribe behavior, the engine switch, and
+isolation, approval routing, unsubscribe behavior, and
 approval UI wiring. Release verification starts two concurrent ephemeral
 threads on one real App Server process and confirms that each receives only its
 own final response. Browser checks cover mobile layout, approval interaction,

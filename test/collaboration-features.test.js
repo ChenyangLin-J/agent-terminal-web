@@ -19,8 +19,6 @@ test("Agent Web exposes dedicated Multi-Agent, thread tree, side chat, and Realt
     "app-session-side-chat",
     "app-session-realtime",
     "agent-manager-dialog",
-    "orchestration-mode-auto",
-    "orchestration-mode-manual",
     "thread-tree-dialog",
     "side-chat-dialog",
     "realtime-dialog",
@@ -28,9 +26,11 @@ test("Agent Web exposes dedicated Multi-Agent, thread tree, side chat, and Realt
   ]) {
     assert.match(page, new RegExp(`id="${id}"`));
   }
+  assert.match(page, /id="app-session-agents-mode">管理</);
+  assert.doesNotMatch(page, /orchestration-mode|collaboration-panel/);
   assert.match(page, /agent-realtime\.js\?v=20260807-webrtc-1[\s\S]*app\.js\?v=20260914-auto-memory-1/);
   assert.match(client, /type: "subagent-stop"/);
-  assert.match(client, /type: "set-orchestration-mode"/);
+  assert.doesNotMatch(client, /set-orchestration-mode|orchestrationMode/);
   assert.match(client, /type: "session-tree"/);
   assert.match(client, /type: "side-chat-submit"/);
   assert.match(client, /realtimeController\.handleMessage/);
@@ -41,7 +41,7 @@ test("Agent Web exposes dedicated Multi-Agent, thread tree, side chat, and Realt
   );
   assert.match(
     client,
-    /realtimeController\.setLaunchable\([\s\S]{0,180}activeTransport === "app-server" && activeSessionPreviewOnly && !readOnlySubagentPreview/,
+    /realtimeController\.setLaunchable\(\s*activeSessionPreviewOnly && !readOnlySubagentPreview/,
   );
   assert.match(client, /connected &&[\s\S]*activeSessionReady &&[\s\S]*activeSessionCapabilities\.realtimeV3/);
   assert.match(realtime, /function setLaunchable\(value\)/);

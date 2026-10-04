@@ -26,17 +26,14 @@ The production route is reverse proxied by Caddy. Authentication is delegated to
 ## What It Does
 
 - 手机优先：打开后先进入登录和 session 选择页。
-- 新会话默认使用 `App Server` 与“全部允许”权限，也可手动切换为 `Terminal` 或“按需确认”。
+- 新会话使用 `App Server`，默认“全部允许”权限，也可选择“按需确认”。
 - App Server 用结构化 turn 处理“追加当前”和“下一轮”，避免分开发的 prompt 互相替换或串轮。
 - Prompt 使用网页原生 textarea，适合语音输入后再点按修改文本。
-- Terminal 模式由 `node-pty` 启动 `codex` CLI；App Server 模式通过 JSON-RPC 启动或恢复 thread。
-- Codex 使用 `--no-alt-screen` 启动，方便保留手机滚动输出。
+- App Server 模式通过 JSON-RPC 启动或恢复 thread。
 - 浏览器断开后，后端 session 默认保留 1 小时，可从选择页重连。
 - 可以启动新会话，也可以从网页上的 saved sessions 列表点选恢复旧会话。
 - 默认工作区限制在当前 workspace 下。
 - 回答中的 workspace Markdown 文件可直接在手机阅读页中打开、编辑并安全保存；文件已被其他程序更新时不会静默覆盖。
-- 顶部有 `Terminal` / `Text` tab；`Text` 会把终端 buffer 转成手机上容易选择的普通文本。
-- Terminal 模式下，`Codex /status`、`/permissions` 等按钮会直接把对应 slash command 发给 Codex CLI。
 - App Server 模式下，命令或文件操作需要确认时会显示允许一次、本次会话允许、拒绝三个快捷操作。
 - Start 页和 App Server 会话工具栏提供“记忆”入口；也可输入 `/memories`。
 
@@ -257,10 +254,9 @@ by all Agent sessions. Browser calls are serialized because they mutate one shar
 state. The provider exits after five minutes without a tool call, while Browser Hand-off
 uses its own no-client idle policy so an active human takeover is preserved.
 
-Agent Web normally initializes one App Server connection on demand. Main Sessions, Side
+Agent Web initializes one App Server connection on demand. Main Sessions, Side
 Chats, and native thread catalog operations reuse that process while keeping turn state,
-events, and approvals isolated by `threadId`. Set `AGENT_SHARED_APP_SERVER=0` only for an
-operational rollback to the legacy per-Session and idle Catalog process model. See
+events, and approvals isolated by `threadId`. See
 [`docs/shared-mcp-providers.md`](docs/shared-mcp-providers.md) for the lifecycle and the
 required checklist for future local MCP providers.
 
@@ -271,18 +267,3 @@ http://127.0.0.1:3060/api/verify
 https://auth.chenyanglin.com/login
 ```
 
-## Multiple execution hosts
-
-Agent Web can separate personal and company Sessions by execution host. The
-personal tab uses the server-local Codex; an optional company tab starts the
-Mac's own Codex App Server over SSH stdio. Authentication, native Sessions,
-files, Skills, plugins, and MCP configuration remain on their owning host.
-
-Remote hosts are configured outside the repository in:
-
-```text
-~/.config/agent-terminal-web/hosts.json
-```
-
-See [`docs/multi-host.md`](docs/multi-host.md) for the isolation boundary,
-configuration shape, supported workflows, and readiness checks.

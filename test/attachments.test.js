@@ -168,5 +168,5 @@ test("attachment submissions use native App Server inputs and validated upload p
   assert.match(server, /isPathInside\(uploadsRoot, filePath\)/);
   assert.match(server, /\{ type: "localImage", path: attachment\.path \}/);
   assert.match(server, /\{ type: "mention", name: attachment\.originalName, path: attachment\.path \}/);
-  assert.match(server, /terminalPromptWithAttachments\(prompt\.text, attachments\)/);
+  assert.match(server, /appServerPromptInput\(value, skills, attachments\)/);
 });

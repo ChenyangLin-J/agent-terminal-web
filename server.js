@@ -3814,9 +3814,15 @@ function mediaSessionArchiveStillDue(record) {
     if (session.hostId !== record.hostId || session.sessionId !== record.sessionId || session.exited) continue;
     if (!session.ready || sessionHasActiveWork(session) || session.turnState?.interrupted) return false;
   }
-  return !Object.values(readPersistedWebSessions()).some((session) =>
-    (session.hostId || PERSONAL_AGENT_HOST.id) === record.hostId &&
-    session.sessionId === record.sessionId && (session.turnState?.active || session.turnState?.interrupted));
+  return !Object.values(readPersistedWebSessions()).some((session) => {
+    if ((session.hostId || PERSONAL_AGENT_HOST.id) !== record.hostId ||
+        session.sessionId !== record.sessionId ||
+        (!session.turnState?.active && !session.turnState?.interrupted)) return false;
+    const activityAt = Date.parse(session.lastActivityAt || session.startedAt || "");
+    // An older runtime may still say "active" even though a later runtime has
+    // completed this thread. The native latest turn is also verified below.
+    return !Number.isFinite(activityAt) || activityAt >= record.completedAt;
+  });
 }
 
 async function autoArchiveMediaSession(record) {

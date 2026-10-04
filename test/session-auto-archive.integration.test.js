@@ -177,6 +177,27 @@ test("restart recovery archives expired media threads and protects favorites, ac
   assert.equal(new MediaSessionAutoArchiveStore(h.storeFile).get({ hostId: "personal", sessionId: ids[0] }).completedAt, null);
 });
 
+test("older active or interrupted runtime records cannot block a later completed extraction", async (t) => {
+  const h = await harness(t, async ({ store, codexHome, workspaceRoot }) => {
+    const completedAt = Date.now() - 5000;
+    for (const id of ids.slice(0, 3)) track(store, id, { completed: completedAt });
+    const runtime = (id, activityAt, turnState) => ({
+      id, hostId: "personal", sessionId: ids[id === "old-active" ? 0 : id === "old-interrupted" ? 1 : 2],
+      cwd: workspaceRoot, access: "safe", transport: "app-server",
+      lastActivityAt: new Date(activityAt).toISOString(), turnState,
+    });
+    await writeFile(path.join(codexHome, "agent-web-sessions.json"), JSON.stringify({
+      "old-active": runtime("old-active", completedAt - 1000, { active: true }),
+      "old-interrupted": runtime("old-interrupted", completedAt - 1000, { interrupted: true }),
+      "new-active": runtime("new-active", completedAt + 1000, { active: true }),
+    }));
+  });
+  await waitFor(async () => (await h.archives())[ids[0]] && (await h.archives())[ids[1]]);
+  assert.equal((await h.archives())[ids[2]], undefined, h.output());
+  const calls = await h.calls();
+  assert.equal(calls.some((call) => call.method === "thread/archive" && call.params.threadId === ids[2]), false);
+});
+
 test("a real submitted extraction survives follow-ups and archives only after the latest completion", async (t) => {
   const h = await harness(t);
   const client = await h.connect();

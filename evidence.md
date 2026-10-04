@@ -4,13 +4,13 @@
 
 状态：待执行。以下记录 Terminal 与远端主机功能移除版本的部署方案、验收要求和回读格式，不代表功能已经移除或部署已经通过。
 
-编写日期：2026-10-04。编写时仓库代码基线为 `ecaf541`；该 checkout 仍保留 `/api/hosts` 路由。部署时需另行记录包含功能移除实现的目标 commit，不能把本方案的文档提交当作实现提交。
+编写日期：2026-10-04。目标实现 commit 为 `310d2c21977853df32e9ce012b1d4d57a225791f`（`310d2c2`），即 GitHub `main` 已合入的 PR #8：移除 Terminal/PTY、multi-host、orchestration 与 focus mode。部署时记录实际部署 commit，并确认其包含此目标实现；本方案的文档提交不等于实现已经部署。
 
 所有部署和回退命令均由 **VPS 的外部 SSH 终端或外部运维流程** 执行。不得在 Agent Web 内的 Codex Session 中停止或重启 `agent-terminal-web.service`；重启会断开当前及其他活动网页会话。
 
 ### ① 部署前：在 VPS 上留基线
 
-先确认工作区没有需要保留的未提交改动；如有，先妥善保存，再部署，不覆盖或清理其他任务的文件。
+先确认工作区没有需要保留的未提交改动；如有，先妥善保存，再部署，不覆盖或清理其他任务的文件。若本地与远端分支已分叉，`git pull --ff-only` 会失败；须先审查并整合需要保留的本地提交，不通过强制重置绕过，也不在整合完成前继续部署。
 
 ```bash
 cd ~/workspace/agent-terminal-web
@@ -99,7 +99,8 @@ git checkout "$OLD_COMMIT" && npm ci && systemctl --user restart agent-terminal-
 | 部署时间 | 待填写 |
 | 部署前仓库 commit | 待填写 |
 | 已确认可用的回退 commit | 待填写 |
-| 目标实现 commit | 待填写 |
+| 目标实现 commit | `310d2c21977853df32e9ce012b1d4d57a225791f`（PR #8 merge） |
+| 实际部署 commit 及包含目标实现的确认 | 待填写 |
 | 部署后服务状态与启动日志 | 待填写 |
 | #1 服务启动 | 待验证 |
 | #2 登录与中控 | 待验证；附截图或描述 |

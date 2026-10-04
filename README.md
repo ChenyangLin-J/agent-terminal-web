@@ -44,6 +44,8 @@ The production route is reverse proxied by Caddy. Authentication is delegated to
 
 Agent Web 使用轻量的本地 Markdown 记忆与审核层；不使用向量数据库或知识图谱。入口包含三个视图：
 
+后台会读取 Codex 当前及近期归档会话的用户消息和最终答复；兼容旧版事件格式与新版消息格式。会话完成后检查是否有值得跨 Session 保留的信息，符合低风险规则的个人记忆自动写入，其余候选进入审核。
+
 - `个人记忆`：按 Markdown 文档展示 Obsidian 中的 Core、Now 与 Topics。
 - `项目规则`：直接展示 workspace 一级项目目录中现有的 `AGENTS.md`。
 - `变更记录`：少量待确认候选置顶，自动应用与已处理记录接在后面；每条显示北京时间的提出、写入或处理时间，以及修改前后内容和来源证据。Codex 原生记忆的已检查记录不代表正式记忆被修改。

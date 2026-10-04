@@ -78,6 +78,29 @@ test("worker reads only user and final-answer events after its watermark", () =>
   assert.match(prompt, /mergePendingId/);
 });
 
+test("worker reads current Codex message records without treating injected instructions as user preferences", () => {
+  const raw = [
+    responseMessage("2026-10-04T10:00:00Z", "user", null, [
+      { type: "input_text", text: "# AGENTS.md instructions for /workspace\nRule text" },
+      { type: "input_text", text: "<environment_context>\nContext text" },
+    ]),
+    responseMessage("2026-10-04T10:00:01Z", "user", null, [
+      { type: "input_text", text: "我希望记录长期偏好" },
+    ]),
+    responseMessage("2026-10-04T10:00:02Z", "assistant", "commentary", [
+      { type: "output_text", text: "正在检查" },
+    ]),
+    responseMessage("2026-10-04T10:00:03Z", "assistant", "final_answer", [
+      { type: "output_text", text: "已核对。" },
+    ]),
+  ].join("\n");
+  const conversation = conversationFromRollout(raw);
+  assert.deepEqual(conversation.fresh.map((item) => item.text), ["我希望记录长期偏好", "已核对。"]);
+  assert.equal(hasCompletedFreshTurn(conversation), true);
+  assert.equal(shouldProcessConversation({ title: "记忆偏好" }, conversation), true);
+  assert.equal(conversationFromRollout(raw, "2026-10-04T10:00:03Z").fresh.length, 0);
+});
+
 test("worker ignores synthetic probes and records usage without imposing a cap", () => {
   const conversation = { recent: [], fresh: [{ role: "user", text: "Reply exactly DONE" }] };
   assert.equal(shouldProcessConversation({ title: "Reply exactly DONE" }, conversation), false);
@@ -95,4 +118,8 @@ test("worker ignores synthetic probes and records usage without imposing a cap",
 
 function event(timestamp, payload) {
   return JSON.stringify({ timestamp, type: "event_msg", payload });
+}
+
+function responseMessage(timestamp, role, phase, content) {
+  return JSON.stringify({ timestamp, type: "response_item", payload: { type: "message", role, phase, content } });
 }

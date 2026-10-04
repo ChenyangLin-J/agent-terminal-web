@@ -529,21 +529,9 @@ async function originalThreadEvidence(threadId) {
   }
   if (!thread?.rolloutPath) return null;
   const raw = await fs.readFile(thread.rolloutPath, "utf8").catch(() => "");
-  const userMessages = [];
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const event = JSON.parse(line);
-      if (event?.type === "event_msg" && event.payload?.type === "user_message") {
-        const message = String(event.payload.message || "").trim();
-        if (message && !message.startsWith("# AGENTS.md instructions") && !message.startsWith("<environment_context>")) {
-          userMessages.push(message);
-        }
-      }
-    } catch {
-      // Ignore malformed or non-JSON rollout lines.
-    }
-  }
+  const userMessages = conversationFromRollout(raw).fresh
+    .filter((message) => message.role === "user")
+    .map((message) => message.text);
   return {
     threadId: String(thread.id),
     title: String(thread.title || "未命名 Session"),
@@ -557,17 +545,19 @@ function listEligibleThreads() {
   const sessionSettings = readAgentSessionSettings();
   const db = new DatabaseSync(database, { readOnly: true });
   try {
+    // Recover recently archived sessions without replaying the full historical archive.
+    const recentArchivedCutoffMs = Date.now() - 7 * 24 * 60 * 60_000;
     return db
       .prepare(`
         SELECT id, title, source, cwd, rollout_path AS rolloutPath,
                COALESCE(updated_at_ms, updated_at * 1000) AS updatedAtMs
         FROM threads
-        WHERE archived = 0
+        WHERE (archived = 0 OR COALESCE(updated_at_ms, updated_at * 1000) >= ?)
           AND source IN ('cli', 'vscode')
           AND agent_role IS NULL
         ORDER BY COALESCE(updated_at_ms, updated_at * 1000) ASC
       `)
-      .all()
+      .all(recentArchivedCutoffMs)
       .map((row) => {
         const routing = sessionSettings[row.id] || {};
         return {

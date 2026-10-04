@@ -62,7 +62,10 @@ reconcile a result through its own endpoint using the original request ID.
 Validation uses an isolated state/workspace, fake App Server protocol and no
 production credentials. It covers admission, idempotency, restart recovery,
 source authors/timestamps and a complete opening-to-Home-reply flow while one
-shared App Server remains alive. Neither service was deployed or restarted.
+shared App Server remains alive. The fixture tests do not activate production. Home was subsequently reloaded
+and the shared gateway token is configured in the private environment file;
+Agent Web still needs an external restart with no active Turns to load this
+code and token. That restart is never performed by an Agent Web Session.
 
 Home conversation responses for opening threads replace their initial machine
 prompt and JSON with the natural opening text. Session titles use the opening's

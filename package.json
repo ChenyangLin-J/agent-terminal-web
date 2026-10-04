@@ -19,7 +19,7 @@
     "acorn": "^8.17.0",
     "busboy": "^1.6.0",
     "express": "^5.2.1",
-    "markdown-it": "^14.3.0",
+    "markdown-it": "^14.3.2",
     "node-pty": "^1.1.0",
     "ws": "^8.18.3"
   },
@@ -28,6 +28,7 @@
   },
   "overrides": {
     "@modelcontextprotocol/sdk": "$@modelcontextprotocol/sdk",
-    "@hono/node-server": "2.0.12"
+    "@hono/node-server": "2.0.12",
+    "hono": "4.13.8"
   }
 }

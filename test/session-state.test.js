@@ -228,31 +228,6 @@ test("threadless shared App Server notifications cannot refresh every Session ti
   );
 });
 
-test("the control center separates execution, reading, and resource state", async () => {
-  const [app, page] = await Promise.all([
-    readFile(new URL("../public/app.js", import.meta.url), "utf8"),
-    readFile(new URL("../public/index.html", import.meta.url), "utf8"),
-  ]);
-  assert.match(page, /data-summary-filter="pending"[\s\S]*待处理[\s\S]*新结果/);
-  assert.match(page, /data-summary-filter="ready"[\s\S]*空闲[\s\S]*已查看 · 暂无下一步/);
-  assert.match(app, /session\?\.hasUnreadResult[\s\S]*kind: "unread"[\s\S]*label: "新结果"/);
-  assert.match(app, /kind: "ready", state: "waiting", label: "空闲"/);
-  assert.match(app, /unreadTurnId: session\.hasUnreadResult \? session\.lastCompletedTurnId \|\| "" : ""/);
-  assert.match(
-    app,
-    /function openSessionInCurrentPage\(params\) \{\s*void markCurrentSessionViewedOnExit\(\);/,
-  );
-  assert.match(app, /function showStartScreen\(\) \{\s*void markCurrentSessionViewedOnExit\(\);/);
-  assert.match(app, /pagehide[\s\S]*markCurrentSessionViewedOnExit\(\{ beacon: true \}\)/);
-  assert.doesNotMatch(app, /scheduleLatestResultViewedCheck|markLatestResultViewed/);
-  const showSessionScreen = app.slice(
-    app.indexOf("function showSessionScreen()"),
-    app.indexOf("function syncPrimaryNavigation"),
-  );
-  assert.doesNotMatch(showSessionScreen, /markCurrentSessionViewedOnExit/);
-  assert.match(app, /\/api\/codex-sessions\/\$\{encodeURIComponent\(sessionId\)\}\/viewed/);
-});
-
 async function listen(server) {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   return server.address().port;

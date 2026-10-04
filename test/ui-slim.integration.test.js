@@ -33,6 +33,9 @@ for (const kernel of ["legacy", "all"]) {
         turnState: { active: false, requirements: [], queuedTurns: [] },
       },
     }));
+    const stored = JSON.parse(await readFile(path.join(codexHome, 'agent-web-sessions.json'), 'utf8'));
+    stored['reference-target'] = { ...stored['old-terminal'], id: 'reference-target', sessionId: '22222222-2222-4222-8222-222222222222', title: 'Reference target', args: ['resume', '22222222-2222-4222-8222-222222222222'] };
+    await writeFile(path.join(codexHome, 'agent-web-sessions.json'), JSON.stringify(stored));
     await writeFile(fakeCodex, `#!/usr/bin/env node
 const fs = require('node:fs');
 const readline = require('node:readline');
@@ -57,6 +60,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     result = { turn };
     setTimeout(() => send({ method: 'turn/started', params: { threadId: message.params.threadId, turn } }), 10);
     setTimeout(() => {
+      send({ method: 'item/completed', params: { threadId: message.params.threadId, turnId: turn.id, item: { id: 'user-' + turn.id, type: 'userMessage', content: message.params.input } } });
       const item = { id: 'answer-' + turn.id, type: 'agentMessage', text: 'continued answer', phase: 'final_answer' };
       send({ method: 'item/completed', params: { threadId: message.params.threadId, turnId: turn.id, item } });
       send({ method: 'turn/completed', params: { threadId: message.params.threadId, turn: { ...turn, status: 'completed', items: [item] } } });
@@ -126,8 +130,18 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       JSON.stringify(message.payload).includes("historic answer"));
     assert.match(JSON.stringify(transcript.payload), /historic question/);
 
+    const targetClient = await connect(`ws://127.0.0.1:${agentPort}/terminal?attach=reference-target`);
+    t.after(() => targetClient.ws.close());
+    await targetClient.next(message => message.type === 'status' && message.payload.ready);
+    const reference = { hostId: 'agent-web', threadId: '22222222-2222-4222-8222-222222222222', label: 'Forged label' };
+    const resolved = await fetch(`${origin}/api/platform/session-references/resolve`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sourceThreadId: threadId, references: [reference] }) }).then(response => response.json());
+    assert.equal(resolved.references[0].label, 'Reference target');
+    for (const invalid of [{ ...reference, threadId }, { ...reference, hostId: 'foreign-host' }]) {
+      client.ws.send(JSON.stringify({ type: 'submit', data: 'must not run', references: [invalid] }));
+      await client.next(message => message.type === 'error' && message.payload.preservePrompt);
+    }
     for (const turn of [1, 2]) {
-      client.ws.send(JSON.stringify({ type: "submit", data: `follow-up ${turn}`, deliveryMode: "queue" }));
+      client.ws.send(JSON.stringify({ type: "submit", data: `follow-up ${turn}`, references: [reference], deliveryMode: "queue" }));
       await client.next((message) => message.type === "control-ack" && message.payload.kind === "submit");
       await client.next((message) => message.type === "status" &&
         message.payload.turnState?.lastCompletedTurnId === `continued-turn-${turn}` &&
@@ -135,7 +149,19 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     }
     const calls = (await readFile(callsFile, "utf8")).trim().split("\n").map(JSON.parse);
     assert.ok(calls.some((call) => call.method === "thread/resume" && call.params.threadId === threadId));
-    assert.equal(calls.filter((call) => call.method === "turn/start").length, 2);
+    const nativeTurns = calls.filter(call => call.method === 'turn/start');
+    assert.equal(nativeTurns.length, 2);
+    for (const turn of nativeTurns) {
+      const envelope = turn.params.input.find(part => part.text?.includes('<agent-workbench-session-references>'));
+      assert.ok(envelope, 'authorized references reach native Runtime input');
+      assert.match(envelope.text, /historic answer/);
+      assert.doesNotMatch(envelope.text, /Forged label/);
+    }
+    const snapshot = await fetch(`${origin}/api/platform/sessions/old-terminal`).then(response => response.json());
+    const lastUser = snapshot.transcript.items.filter(item => item.type === 'user').at(-1);
+    assert.equal(lastUser.text, 'follow-up 2');
+    assert.equal(lastUser.references[0].threadId, reference.threadId);
+    assert.equal('context' in lastUser.references[0], false);
     assert.equal(calls.filter((call) => call.method === "initialize").length, 1,
       "restoration and continued turns reuse one shared App Server process");
     const persisted = JSON.parse(await readFile(path.join(codexHome, "agent-web-sessions.json"), "utf8"));

@@ -35,11 +35,7 @@ test("systemctl guard blocks destructive Agent Web service actions", async () =>
 });
 
 test("interrupted App Server turns remain visible and can be continued", async () => {
-  const [server, app, styles] = await Promise.all([
-    readFile(new URL("../server.js", import.meta.url), "utf8"),
-    readFile(new URL("../public/app.js", import.meta.url), "utf8"),
-    readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
-  ]);
+  const server = await readFile(new URL("../server.js", import.meta.url), "utf8");
 
   assert.match(server, /interruptedTurnStateAfterProcessLoss\(record\.turnState, record\.lastActivityAt\)/);
   assert.match(server, /state\.turnId !== state\.lastCompletedTurnId/);
@@ -49,10 +45,5 @@ test("interrupted App Server turns remain visible and can be continued", async (
   assert.match(server, /session\.interruptedResumePending = false/);
   assert.match(server, /function interruptedContinuationPrompt\(state\)/);
   assert.match(server, /不要停止或重启 agent-terminal-web\.service/);
-  assert.match(app, /function createInterruptedTurnNotice\(\)/);
-  assert.match(app, /action\.textContent = resumeInterruptedPending \? "正在继续…" : "继续完成"/);
-  assert.match(app, /send\(\{ type: "resume-interrupted" \}\)/);
-  assert.match(app, /isInterruptedTurn \? "中断" : isStoppedTurn \? "已终止" : "完成"/);
-  assert.match(styles, /\.app-interrupted-turn/);
-  assert.match(styles, /\.app-process-group\.is-interrupted/);
+
 });

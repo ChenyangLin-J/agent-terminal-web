@@ -220,47 +220,23 @@ input.on("line", (line) => {
     desktopPage.goto(sessionUrl),
     mobilePage.goto(sessionUrl),
   ]);
-  await Promise.all([
-    desktopPage.locator("#connection").filter({ hasText: "已连接" }).waitFor({ timeout: 1_000 }),
-    mobilePage.locator("#connection").filter({ hasText: "已连接" }).waitFor({ timeout: 1_000 }),
-  ]);
-  await Promise.all([
-    desktopPage.locator("#connection").filter({ hasText: "仅查看" }).waitFor({ timeout: 3_000 }),
-    mobilePage.locator("#connection").filter({ hasText: "仅查看" }).waitFor({ timeout: 3_000 }),
-  ]);
+  await Promise.all([desktopPage.locator('.cwu-composer textarea').waitFor(), mobilePage.locator('.cwu-composer textarea').waitFor()]);
+  await Promise.all([desktopPage.waitForURL(url => url.searchParams.get('preview') === '1'), mobilePage.waitForURL(url => url.searchParams.get('preview') === '1')]);
   for (const page of [desktopPage, mobilePage]) {
-    const url = new URL(page.url());
-    assert.equal(url.searchParams.get("preview"), "1");
-    assert.equal(url.searchParams.has("attach"), false);
-    assert.equal(await page.locator("#prompt").isEnabled(), true);
-    assert.equal(await page.locator("#send-prompt").isEnabled(), true);
+    assert.equal(new URL(page.url()).searchParams.get('attach'), viewedReady.payload.id, 'released preview retains UI identity for draft/reference recovery');
+    assert.equal(await page.locator('.cwu-composer textarea').isEnabled(), true);
   }
-  const mobilePromptFontSize = await mobilePage.locator("#prompt").evaluate(
-    (element) => Number.parseFloat(getComputedStyle(element).fontSize),
-  );
+  const mobilePromptFontSize = await mobilePage.locator('.cwu-composer textarea').evaluate(element => Number.parseFloat(getComputedStyle(element).fontSize));
   assert.ok(mobilePromptFontSize >= 16);
-  await desktopPage.locator("#prompt").fill("发送时重新恢复");
-  await desktopPage.locator("#send-prompt").click();
-  await desktopPage.locator("#connection").filter({ hasText: "已连接" }).waitFor({ timeout: 2_000 });
-  const resumedUrl = new URL(desktopPage.url());
-  assert.equal(resumedUrl.searchParams.has("preview"), false);
-  assert.ok(resumedUrl.searchParams.get("attach"));
-  desktopPage.once("dialog", (dialog) => dialog.accept());
-  await desktopPage.locator("#kill-session").click();
-  await desktopPage
-    .locator("#connection")
-    .filter({ hasText: "发送第一条消息时创建" })
-    .waitFor({ timeout: 2_000 });
-  const endedUrl = new URL(desktopPage.url());
-  assert.equal(endedUrl.searchParams.get("preview"), "1");
-  assert.equal(endedUrl.searchParams.get("new"), "1");
-  assert.equal(endedUrl.searchParams.has("attach"), false);
-  assert.equal(endedUrl.searchParams.has("sessionId"), false);
-  assert.equal(await desktopPage.locator("#prompt").isEnabled(), true);
-  assert.equal(
-    await desktopPage.locator("#session-switcher-list").getByText("Idle preview", { exact: true }).count(),
-    0,
-  );
+  await desktopPage.locator('.cwu-composer textarea').fill('发送时重新恢复');
+  await desktopPage.locator('.cwu-composer button[type=submit]').click();
+  await desktopPage.waitForURL(url => Boolean(url.searchParams.get('attach')) && !url.searchParams.has('preview'), { timeout: 5000 });
+  assert.equal(new URL(desktopPage.url()).searchParams.has('preview'), false);
+  desktopPage.once('dialog', dialog => dialog.accept());
+  await desktopPage.locator('.cwu-product-session-tools summary').click();
+  await desktopPage.getByRole('button', { name: '结束当前 Session', exact: true }).click();
+  await desktopPage.waitForURL(url => url.searchParams.get('new') === '1', { timeout: 5000 });
+  assert.equal(await desktopPage.locator('.cwu-composer textarea').isEnabled(), true);
   viewedClient.ws.close();
 });
 

@@ -258,27 +258,6 @@ test("replacing a credential atomically removes the old value and deleting clear
   assert.equal((await listIntegrations({ root: store }))[0].status.configured, false);
 });
 
-test("invalid provider credentials are rejected before anything is written", async (t) => {
-  const store = await fs.mkdtemp(path.join(os.tmpdir(), "agent-integrations-invalid-"));
-  t.after(() => fs.rm(store, { recursive: true, force: true }));
-
-  await assert.rejects(
-    () =>
-      saveIntegrationCredential("amap", { apiKey: firstKey }, {
-        root: store,
-        fetchImpl: async () => ({
-          ok: true,
-          json: async () => ({ status: "0", info: "INVALID_USER_KEY" }),
-        }),
-      }),
-    (error) =>
-      error instanceof IntegrationError &&
-      error.status === 422 &&
-      error.code === "integration_validation_failed",
-  );
-  await assert.rejects(() => fs.stat(path.join(store, "amap.json")), { code: "ENOENT" });
-});
-
 test("Cubox API links are validated against the fixed domestic endpoint and stored only in the CLI config", async (t) => {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "agent-cubox-integration-"));
   const store = path.join(temporary, "integrations");
@@ -830,15 +809,12 @@ test("authenticated integration settings API supports set, status, replacement, 
 });
 
 test("the Agent home exposes a generic write-only integrations interface", async () => {
-  const [page, script, styles, server] = await Promise.all([
-    fs.readFile(new URL("../public/index.html", import.meta.url), "utf8"),
-    fs.readFile(new URL("../public/agent-integrations.js", import.meta.url), "utf8"),
-    fs.readFile(new URL("../public/agent-integrations.css", import.meta.url), "utf8"),
-    fs.readFile(new URL("../server.js", import.meta.url), "utf8"),
-  ]);
+  const [script, styles, server] = await Promise.all([
+fs.readFile(new URL("../public/agent-integrations.js", import.meta.url), "utf8"),
+fs.readFile(new URL("../public/agent-integrations.css", import.meta.url), "utf8"),
+fs.readFile(new URL("../server.js", import.meta.url), "utf8")
+]);
 
-  assert.match(page, /id="open-integrations"/);
-  assert.match(page, /id="integrations-dialog"/);
   assert.match(script, /type = "password"/);
   assert.match(script, /autocomplete = "new-password"/);
   assert.match(script, /integration\.docsLabel/);

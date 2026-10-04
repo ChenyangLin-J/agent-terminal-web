@@ -1,4 +1,7 @@
+import { createSessionReferenceEnvelopeInput, normalizeSessionReferences, parseSessionReferenceEnvelopes, requireReferences, resolveAgentWebReferences, sessionReferenceKey } from './lib/session-references.js';
+import { registerPlatformSessionRoutes } from './lib/platform-session-routes.js';
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http from "node:http";
@@ -8,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import busboy from "busboy";
 import express from "express";
 import { WebSocketServer } from "ws";
+import { isIdempotentSessionMessage, rememberSessionOperationReceipt, restoreSessionOperationReceipts, serializableSessionOperationReceipts, settleSessionOperationReceipt, isValidOperationReceiptKey } from "./lib/session-operation-receipts.js";
 import {
   CodexAppServerClient,
   CodexAppServerConnection,
@@ -31,8 +35,9 @@ import { readProjectRuleDocuments } from "./lib/project-rule-documents.js";
 import { orderKnowledgeChanges } from "./lib/knowledge-change-order.js";
 import { memoryCitationFromToolItem } from "./lib/memory-access-citations.js";
 import { createPersonalMemoryScheduler } from "./lib/personal-memory-scheduler.js";
-import { readKnowledgeChanges } from "../memory-system/lib/change-ledger.js";
-import { resolveKnowledgeChange } from "../memory-system/lib/knowledge-actions.js";
+import { loadMemorySystemLibrary } from "./lib/memory-system-library.js";
+const { readKnowledgeChanges } = await loadMemorySystemLibrary("change-ledger.js");
+const { resolveKnowledgeChange } = await loadMemorySystemLibrary("knowledge-actions.js");
 import {
   gardenLinkForLocalMarkdown,
   isPathInside,
@@ -1144,6 +1149,40 @@ app.get("/api/sessions", (_req, res) => {
   });
 });
 
+async function readSessionReferenceTarget(threadId) {
+  if (!isValidSessionId(threadId)) return null;
+  const live = [...sessions.values()].find(item => item.sessionId === threadId && !item.exited);
+  const archived = Boolean(readSessionArchiveSync()[threadId]);
+  if (live) return { threadId, title: live.title, archived, lastActivityAt: live.lastActivityAt,
+    messages: (live.appTranscript || []).filter(item => item.type === 'user' || (item.type === 'assistant' && item.phase === 'final_answer')).map(item => ({ role: item.type === 'user' ? 'user' : 'assistant', text: item.text })) };
+  const file = await findCodexSessionFile(threadId);
+  if (!file) return null;
+  const conversation = await extractSessionConversationFromJsonl(file, { limit: 3 });
+  const messages = (conversation.turns || []).flatMap(turn => [
+    ...(turn.user ? [{ role: 'user', text: turn.user }] : []),
+    ...(turn.assistant || []).filter(item => !item.phase || item.phase === 'final_answer').map(item => ({ role: 'assistant', text: item.text })),
+  ]);
+  const metadata = (await listCodexSessions({ archived })).find(item => item.id === threadId);
+  return { threadId, archived: archived || Boolean(metadata?.archived), title: metadata?.title || messages.find(item => item.role === 'user')?.text?.slice(0, 80), updatedAt: metadata?.updatedAt, messages };
+}
+
+async function resolveSessionReferences(sourceThreadId, values) {
+  return resolveAgentWebReferences(sourceThreadId, values, readSessionReferenceTarget);
+}
+
+registerPlatformSessionRoutes(app, {
+  sessions, restore: restorePersistedSession, records: readPersistedWebSessions,
+  create: createAppServerSession, findReusable: findReusableSession,
+  resolvePath: resolveWorkspacePath, access: normalizeAccessMode, title: cleanTitle, purpose: normalizeSessionPurpose,
+  snapshot: platformSessionSnapshot, persist: persistWebSession,
+  listWebSessions: () => [...[...sessions.values()].filter((session) => !session.exited).map(publicSession), ...listDetachedSessions()],
+  listCodexSessions, searchSessions: searchCodexSessions, favoriteIds: favoriteSessionIdsForHost,
+  status: appServerStatus, models: appServerModels,
+  resolveReferences: resolveSessionReferences,
+  validThread: isValidSessionId, validTurn: isCodexTurnId, readProcess: loadHistoricalSessionProcess,
+  broadcast: (session) => broadcast(session, 'status', publicSession(session)),
+});
+
 app.post("/api/sessions/:id/restart", (req, res) => {
   const id = String(req.params.id || "").trim();
   if (!isValidWebSessionId(id)) {
@@ -1373,11 +1412,23 @@ app.post("/api/sessions/:id/fork", async (req, res) => {
     return;
   }
 
+  const key = String(req.body?.idempotencyKey || '');
+  if (key && !isValidOperationReceiptKey(key)) return res.status(400).json({ error: 'Invalid operation ID.' });
+  const fingerprint = operationPayloadFingerprint({ type: 'fork', lastTurnId });
+  const previous = key && session.operationReceipts?.get(key);
+  if (previous) {
+    if (previous.fingerprint !== fingerprint) return res.status(409).json({ error: 'Operation ID already belongs to another request.' });
+    if (previous.state === 'failed') return res.status(409).json({ error: previous.failure });
+    return res.json({ ...(previous.result || {}), pending: previous.state === 'pending', idempotent: true });
+  }
+  if (key) rememberSessionOperationReceipt(session, key, { kind: 'fork', fingerprint }, () => persistRestorableWebSession(session));
   try {
     const result = await forkAppServerSessionInBackground(session, lastTurnId);
+    if (key) settleSessionOperationReceipt(session, key, { result }, () => persistRestorableWebSession(session));
     res.set("Cache-Control", "private, no-store");
     res.json(result);
   } catch (error) {
+    if (key) settleSessionOperationReceipt(session, key, { error }, () => persistRestorableWebSession(session));
     logAgentEvent("thread-fork-failed", {
       webSessionId: session.id,
       codexSessionId: session.sessionId,
@@ -1795,7 +1846,7 @@ wss.on("connection", async (ws, req) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`Agent Terminal Web: http://${HOST}:${PORT}`);
+  console.log(`Agent Terminal Web: http://${HOST}:${server.address().port}`);
   console.log(`Workspace root: ${WORKSPACE_ROOT}`);
   console.log(`Detached session TTL: ${Math.round(SESSION_TTL_MS / 60000)} minutes`);
   void seedExistingMediaSessions().then(sweepMediaSessionArchives).catch(logMediaSessionArchiveError);
@@ -2212,6 +2263,10 @@ function createAppServerSession(cwd, launch, restored = {}) {
     interruptedResumePending: false,
     turnInterruptPending: false,
     pendingServerRequests: new Map(),
+    // Receipt metadata is persisted with the Web Session so a browser retry
+    // after an unknown network result cannot create a second Turn.
+    operationReceipts: restoreSessionOperationReceipts(restored.operationReceipts),
+    uiRevision: Number(restored.uiRevision || 0),
     pendingStartupPrompts: [],
     pendingPersonalMemoryCitations: [],
     personalMemoryCitationsByTurn: new Map(),
@@ -2343,6 +2398,7 @@ async function initializeAppServerSession(session, launch) {
     });
     rememberAgentSessionMemoryRouting(session);
     session.ready = true;
+    renewSessionRetention(session);
     session.released = false;
     session.releaseReason = "";
     appendSessionOutput(session, "\r\n\x1b[36mApp Server ready. Follow-ups are bound to an exact turn.\x1b[0m\r\n");
@@ -2448,6 +2504,8 @@ function restorePersistedSession(id) {
       memoryProjectSource: record.memoryProjectSource,
       runtimeKernel: record.runtimeKernel,
       turnState: interruptedTurnStateAfterProcessLoss(record.turnState, record.lastActivityAt),
+      operationReceipts: record.operationReceipts,
+      uiRevision: record.uiRevision,
     },
   );
 }
@@ -2584,29 +2642,67 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
       return;
     }
 
+    const operationKey = String(message.idempotencyKey || "");
+    const reply = (type, payload = {}) => {
+      const value = operationKey ? { ...payload, idempotencyKey: operationKey } : payload;
+      if (operationKey && type === "control-ack") settleSessionOperationReceipt(session, operationKey, { result: value }, () => persistRestorableWebSession(session));
+      if (operationKey && ["error", "side-chat-error", "realtime-error"].includes(type)) {
+        value.receiptState = "failed";
+        settleSessionOperationReceipt(session, operationKey, { error: value.message || type }, () => persistRestorableWebSession(session));
+      }
+      send(ws, type, value);
+    };
+
+    // A server receipt, rather than a browser-only UUID, makes retries after
+    // an unknown result safe across reconnects and process restoration.
+    if (isIdempotentSessionMessage(message)) {
+      const key = String(message.idempotencyKey || "");
+      if (key) {
+        if (!isValidOperationReceiptKey(key)) { reply("error", { message: "Invalid operation ID." }); return; }
+        const previous = session.operationReceipts?.get(key);
+        if (previous) {
+          if (previous.fingerprint && previous.fingerprint !== operationPayloadFingerprint(message)) {
+            send(ws, "error", { message: "同一个操作 ID 的内容不一致，请生成新的操作 ID。", idempotencyKey: key, receiptState: "failed" });
+            return;
+          }
+          if (previous.state === "failed") { reply("error", { message: previous.failure || "Operation was rejected.", receiptState: "failed" }); return; }
+          send(ws, "control-ack", { ...(previous.result || {}), kind: previous.kind, idempotencyKey: key, replayed: true, pending: previous.state === "pending", idempotent: true, receivedAt: previous.receivedAt });
+          return;
+        }
+        rememberSessionOperationReceipt(session, key, { kind: message.type, fingerprint: operationPayloadFingerprint(message) }, () => persistRestorableWebSession(session));
+      }
+    }
+
+    if (message.expectedTurnId && ['interrupt-turn', 'agent-response', 'resume-interrupted'].includes(message.type) && message.expectedTurnId !== session.turnState.turnId) {
+      reply('error', { message: 'The requested Turn is no longer current.' }); return;
+    }
     if (message.type === "client-ping") {
-      send(ws, "client-pong", { sentAt: message.sentAt || null, receivedAt: Date.now() });
+      reply("client-pong", { sentAt: message.sentAt || null, receivedAt: Date.now() });
       return;
     }
 
-    if (session.exited) return;
+    if (session.exited) { reply("error", { message: "Session is no longer available." }); return; }
 
     if (message.type === "input" && typeof message.data === "string") {
-      send(ws, "error", { message: "Raw terminal keys are unavailable in App Server mode." });
+      reply("error", { message: "Raw terminal keys are unavailable in App Server mode." });
       return;
     }
 
     if (message.type === "submit" && typeof message.data === "string") {
       if (realtimeBusy(session.realtime)) {
-        send(ws, "error", { message: "实时语音正在使用当前 Session，请先结束语音对话。", preservePrompt: true });
+        reply("error", { message: "实时语音正在使用当前 Session，请先结束语音对话。", preservePrompt: true });
         return;
       }
       const normalized = message.data.trim();
       let attachments;
+      let references;
       try {
         attachments = normalizeSubmittedAttachments(message.attachments);
+        const requestedReferences = requireReferences(message.references);
+        references = await resolveSessionReferences(session.sessionId, requestedReferences);
+        if (references.length !== requestedReferences.length) throw new Error('有 Session 引用已不可用，请移除后再发送。');
       } catch (error) {
-        send(ws, "error", { message: error.message, preservePrompt: true });
+        reply("error", { message: error.message, preservePrompt: true });
         return;
       }
       if (normalized || attachments.length) {
@@ -2617,13 +2713,17 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
           attachmentCount: attachments.length,
           attachmentBytes: attachments.reduce((total, attachment) => total + attachment.size, 0),
         });
-        if (!session.title) session.title = cleanTitle(requirementText) || "New Codex session";
+        if (!session.title || ['新对话', 'New Codex session'].includes(session.title)) session.title = cleanTitle(requirementText) || "New Codex session";
         const prompt = prepareSessionPrompt(session, normalized);
         const skillNames = requestedAppSkillNames(prompt.text, message.skills);
         rememberMediaSessionPrompt(session, requirementText, skillNames);
         if (prompt.activatesThink) session.thinkSkillActivationPending = true;
         rememberSubmittedAttachments(session, attachments);
         if (!session.ready) {
+          if (operationKey) {
+            reply('error', { message: 'Session 仍在启动，请稍后重试。', preservePrompt: true });
+            return;
+          }
           session.pendingStartupPrompts.push({
             text: prompt.text,
             requirementText,
@@ -2631,8 +2731,9 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
             deliveryMode: message.deliveryMode,
             activatesThink: prompt.activatesThink,
             skillNames,
+            references,
           });
-          send(ws, "control-ack", {
+          reply("control-ack", {
             kind: "submit",
             receivedAt: Date.now(),
             deliveryMode: "startup-queue",
@@ -2642,10 +2743,10 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
         }
         await mediaSessionArchiveOperations.get(agentSessionSettingsKey(session.sessionId))?.catch(() => {});
         if (session.exited) {
-          send(ws, "error", { message: "Session 已归档，请恢复后重试。", preservePrompt: true });
+          reply("error", { message: "Session 已归档，请恢复后重试。", preservePrompt: true });
           return;
         }
-        void submitAppServerPrompt(session, prompt.text, message.deliveryMode, skillNames, attachments, requirementText)
+        void submitAppServerPrompt(session, prompt.text, message.deliveryMode, skillNames, attachments, requirementText, { references })
           .then((submission) => {
             if (prompt.activatesThink) {
               session.thinkSkillActivated = true;
@@ -2654,7 +2755,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
             session.lastActivityAt = new Date().toISOString();
             persistRestorableWebSession(session);
             broadcast(session, "status", publicSession(session));
-            send(ws, "control-ack", {
+            reply("control-ack", {
               kind: "submit",
               receivedAt: Date.now(),
               deliveryMode: submission.deliveryMode,
@@ -2664,22 +2765,22 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
           })
           .catch((error) => {
             if (prompt.activatesThink) session.thinkSkillActivationPending = false;
-            send(ws, "error", { message: `Prompt was not sent: ${error.message}`, preservePrompt: true });
+            reply("error", { message: `Prompt was not sent: ${error.message}`, preservePrompt: true });
           });
-      }
+      } else { reply("error", { message: "Message cannot be empty.", preservePrompt: true }); }
       return;
     }
 
     if (message.type === "load-app-history") {
-      void loadEarlierAppServerHistory(session).catch((error) => {
-        send(ws, "error", { message: `Earlier history was not loaded: ${error.message}` });
+      void loadEarlierAppServerHistory(session).then(() => reply('control-ack', { kind: 'load-app-history' })).catch((error) => {
+        reply("error", { message: `Earlier history was not loaded: ${error.message}` });
       });
       return;
     }
 
     if (message.type === "edit-and-fork") {
       if (session.turnState.active || session.appServer.activeTurnId) {
-        send(ws, "error", { message: "当前任务仍在处理，完成后才能编辑历史消息并分支。", preservePrompt: true });
+        reply("error", { message: "当前任务仍在处理，完成后才能编辑历史消息并分支。", preservePrompt: true });
         return;
       }
       const editedText = String(message.data || "").trim();
@@ -2688,18 +2789,22 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
         (item) => item.type === "user" && item.turnId === beforeTurnId && item.id === String(message.itemId || ""),
       );
       if (!sourceItem || !isCodexTurnId(beforeTurnId)) {
-        send(ws, "error", { message: "找不到要编辑的历史消息，请刷新后重试。", preservePrompt: true });
+        reply("error", { message: "找不到要编辑的历史消息，请刷新后重试。", preservePrompt: true });
         return;
       }
       let attachments;
+      let references;
       try {
         attachments = normalizeEditForkAttachments(message.attachments, sourceItem);
+        const requestedReferences = requireReferences(message.references ?? sourceItem.references);
+        references = await resolveSessionReferences(session.sessionId, requestedReferences);
+        if (references.length !== requestedReferences.length) throw new Error('有 Session 引用已不可用，请移除后再发送。');
       } catch (error) {
-        send(ws, "error", { message: error.message, preservePrompt: true });
+        reply("error", { message: error.message, preservePrompt: true });
         return;
       }
       if (!editedText && !attachments.length) {
-        send(ws, "error", { message: "编辑后的消息不能为空。", preservePrompt: true });
+        reply("error", { message: "编辑后的消息不能为空。", preservePrompt: true });
         return;
       }
 
@@ -2710,10 +2815,11 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
         beforeTurnId,
         editedText,
         attachments,
+        references,
         sourceTitle: session.title,
       })
         .then((result) => {
-          send(ws, "control-ack", {
+          reply("control-ack", {
             kind: "edit-and-fork",
             receivedAt: Date.now(),
             ...result,
@@ -2721,7 +2827,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
           });
         })
         .catch((error) => {
-          send(ws, "error", {
+          reply("error", {
             message: error.branchCreated
               ? `编辑分支已在 Codex 中创建，但当前窗口切换或消息提交失败：${error.message}`
               : `编辑分支没有创建：${error.message}`,
@@ -2736,7 +2842,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
 
     if (message.type === "subagents-list") {
       void sendAppServerSubagents(session, ws).catch((error) => {
-        send(ws, "error", { message: `子 Agent 列表暂时不可用：${error.message}` });
+        reply("error", { message: `子 Agent 列表暂时不可用：${error.message}` });
       });
       return;
     }
@@ -2744,54 +2850,54 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
     if (message.type === "subagent-stop") {
       void stopAppServerSubagent(session, String(message.threadId || ""))
         .then((result) => {
-          send(ws, "control-ack", { kind: "subagent-stop", receivedAt: Date.now(), ...result });
+          reply("control-ack", { kind: "subagent-stop", receivedAt: Date.now(), ...result });
           return sendAppServerSubagents(session, ws);
         })
-        .catch((error) => send(ws, "error", { message: `子 Agent 没有停止：${error.message}` }));
+        .catch((error) => reply("error", { message: `子 Agent 没有停止：${error.message}` }));
       return;
     }
 
     if (message.type === "session-tree") {
       void sendAppServerThreadTree(session, ws).catch((error) => {
-        send(ws, "error", { message: `Session 关系图暂时不可用：${error.message}` });
+        reply("error", { message: `Session 关系图暂时不可用：${error.message}` });
       });
       return;
     }
 
     if (message.type === "side-chat-open") {
-      send(ws, "side-chat-state", publicSideChatState(session.sideChat));
+      reply("side-chat-state", publicSideChatState(session.sideChat));
       return;
     }
 
     if (message.type === "side-chat-submit") {
       const text = String(message.data || "").trim();
       if (!text) {
-        send(ws, "error", { message: "临时侧问不能为空。" });
+        reply("error", { message: "临时侧问不能为空。" });
         return;
       }
       renewSessionRetention(session);
       void submitSideChatPrompt(session, text)
-        .then((result) => send(ws, "control-ack", { kind: "side-chat-submit", receivedAt: Date.now(), ...result }))
-        .catch((error) => send(ws, "side-chat-error", { message: `临时侧问失败：${error.message}` }));
+        .then((result) => reply("control-ack", { kind: "side-chat-submit", receivedAt: Date.now(), ...result }))
+        .catch((error) => reply("side-chat-error", { message: `临时侧问失败：${error.message}` }));
       return;
     }
 
     if (message.type === "side-chat-stop") {
       void stopSideChat(session)
-        .then(() => send(ws, "control-ack", { kind: "side-chat-stop", receivedAt: Date.now() }))
-        .catch((error) => send(ws, "side-chat-error", { message: `临时侧问没有停止：${error.message}` }));
+        .then(() => reply("control-ack", { kind: "side-chat-stop", receivedAt: Date.now() }))
+        .catch((error) => reply("side-chat-error", { message: `临时侧问没有停止：${error.message}` }));
       return;
     }
 
     if (message.type === "side-chat-close") {
       closeSideChat(session);
-      send(ws, "control-ack", { kind: "side-chat-close", receivedAt: Date.now() });
+      reply("control-ack", { kind: "side-chat-close", receivedAt: Date.now() });
       return;
     }
 
     if (message.type === "realtime-voices") {
       void sendRealtimeVoices(session, ws).catch((error) => {
-        send(ws, "realtime-error", { message: `实时语音列表不可用：${error.message}` });
+        reply("realtime-error", { message: `实时语音列表不可用：${error.message}` });
       });
       return;
     }
@@ -2799,8 +2905,8 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
     if (message.type === "realtime-start") {
       renewSessionRetention(session);
       void startRealtimeConversation(session, { voice: message.voice, transport: message.transport })
-        .then(() => send(ws, "control-ack", { kind: "realtime-start", receivedAt: Date.now() }))
-        .catch((error) => failRealtimeConversation(session, error));
+        .then(() => reply("control-ack", { kind: "realtime-start", receivedAt: Date.now() }))
+        .catch((error) => { failRealtimeConversation(session, error); reply("realtime-error", { message: error.message }); });
       return;
     }
 
@@ -2817,18 +2923,18 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
 
     if (message.type === "realtime-stop") {
       void stopRealtimeConversation(session)
-        .then(() => send(ws, "control-ack", { kind: "realtime-stop", receivedAt: Date.now() }))
-        .catch((error) => failRealtimeConversation(session, error));
+        .then(() => reply("control-ack", { kind: "realtime-stop", receivedAt: Date.now() }))
+        .catch((error) => { failRealtimeConversation(session, error); reply("realtime-error", { message: error.message }); });
       return;
     }
 
     if (message.type === "resume-interrupted") {
       if (session.interruptedResumePending) {
-        send(ws, "error", { message: "The interrupted turn is already being continued." });
+        reply("error", { message: "The interrupted turn is already being continued." });
         return;
       }
       if (!session.turnState.interrupted || session.turnState.active) {
-        send(ws, "error", { message: "This session no longer has an interrupted turn to continue." });
+        reply("error", { message: "This session no longer has an interrupted turn to continue." });
         return;
       }
       const continuation = interruptedContinuationPrompt(session.turnState);
@@ -2839,7 +2945,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
           session.lastActivityAt = new Date().toISOString();
           persistRestorableWebSession(session);
           broadcast(session, "status", publicSession(session));
-          send(ws, "control-ack", {
+          reply("control-ack", {
             kind: "resume-interrupted",
             receivedAt: Date.now(),
             deliveryMode: submission.deliveryMode,
@@ -2847,7 +2953,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
           });
         })
         .catch((error) => {
-          send(ws, "error", { message: `Interrupted turn was not continued: ${error.message}` });
+          reply("error", { message: `Interrupted turn was not continued: ${error.message}` });
         })
         .finally(() => {
           session.interruptedResumePending = false;
@@ -2857,12 +2963,12 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
 
     if (message.type === "interrupt-turn") {
       if (session.turnInterruptPending || session.turnState.stopping) {
-        send(ws, "control-ack", { kind: "interrupt-turn", receivedAt: Date.now() });
+        reply("control-ack", { kind: "interrupt-turn", receivedAt: Date.now() });
         return;
       }
       const turnId = session.appServer.activeTurnId || session.turnState.turnId;
       if (!session.turnState.active || !turnId) {
-        send(ws, "error", { message: "There is no active task to interrupt." });
+        reply("error", { message: "There is no active task to interrupt." });
         return;
       }
       session.turnInterruptPending = true;
@@ -2873,21 +2979,21 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
       void session.appServer
         .interruptTurn()
         .then(() => {
-          send(ws, "control-ack", { kind: "interrupt-turn", receivedAt: Date.now(), turnId });
+          reply("control-ack", { kind: "interrupt-turn", receivedAt: Date.now(), turnId });
         })
         .catch((error) => {
           session.turnInterruptPending = false;
           session.turnState.stopping = false;
           persistRestorableWebSession(session);
           broadcast(session, "status", publicSession(session));
-          send(ws, "error", { message: `Current task was not interrupted: ${error.message}` });
+          reply("error", { message: `Current task was not interrupted: ${error.message}` });
         });
       return;
     }
 
     if (message.type === "skills-list") {
       void sendAppServerSkills(session, ws, { forceReload: Boolean(message.forceReload) }).catch((error) => {
-        send(ws, "error", { message: `Skills were not loaded: ${error.message}` });
+        reply("error", { message: `Skills were not loaded: ${error.message}` });
       });
       return;
     }
@@ -2899,7 +3005,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
       session.lastActivityAt = new Date().toISOString();
       persistRestorableWebSession(session);
       broadcast(session, "status", publicSession(session));
-      send(ws, "control-ack", {
+      reply("control-ack", {
         kind: "access",
         access: session.access,
         receivedAt: Date.now(),
@@ -2917,21 +3023,21 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
           session.lastActivityAt = new Date().toISOString();
           persistRestorableWebSession(session);
           broadcast(session, "status", publicSession(session));
-          send(ws, "control-ack", {
+          reply("control-ack", {
             kind: "memory-projects",
             mode: session.memoryProjectMode,
             projects: session.memoryProjects,
             receivedAt: Date.now(),
           });
         })
-        .catch((error) => send(ws, "error", { message: `记忆项目没有修改：${error.message}` }));
+        .catch((error) => reply("error", { message: `记忆项目没有修改：${error.message}` }));
       return;
     }
 
     if (message.type === "command" && typeof message.data === "string") {
       renewSessionRetention(session);
-      void handleAppServerCommand(session, ws, message.data).catch((error) => {
-        send(ws, "error", { message: `Command failed: ${error.message}` });
+      void handleAppServerCommand(session, ws, message.data).then(() => reply('control-ack', { kind: 'command' })).catch((error) => {
+        reply("error", { message: `Command failed: ${error.message}` });
       });
       return;
     }
@@ -2949,9 +3055,9 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
       try {
         renewSessionRetention(session);
         handleAppServerResponse(session, message);
-        send(ws, "control-ack", { kind: "agent-response", receivedAt: Date.now() });
+        reply("control-ack", { kind: "agent-response", receivedAt: Date.now() });
       } catch (error) {
-        send(ws, "error", { message: error.message });
+        reply("error", { message: error.message });
       }
       return;
     }
@@ -3260,7 +3366,7 @@ function expireAppServerRuntimeLease(session) {
     scheduleAppServerRuntimeLease(session);
     return;
   }
-  if (sessionHasActiveWork(session)) {
+  if (!session.ready || sessionHasActiveWork(session)) {
     const activeRecheckMs = Math.min(60_000, Math.max(100, Math.floor(SESSION_TTL_MS / 4)));
     session.runtimeLeaseTimer = setTimeout(() => expireAppServerRuntimeLease(session), activeRecheckMs);
     session.runtimeLeaseTimer.unref?.();
@@ -3438,6 +3544,7 @@ async function handleUpload(req, res) {
 }
 
 function normalizeSubmittedAttachments(value) {
+  if (value == null || (Array.isArray(value) && value.length === 0)) return [];
   if (value === undefined || value === null) return [];
   if (!Array.isArray(value)) throw new Error("附件信息无效，请重新上传。");
   if (value.length > MAX_UPLOAD_FILES) throw new Error(`最多同时发送 ${MAX_UPLOAD_FILES} 个附件。`);
@@ -4089,7 +4196,9 @@ async function submitAppServerPrompt(
   skillNames = [],
   attachments = [],
   requirementText = text,
+  options = {},
 ) {
+  const { references = [] } = options;
   await mediaSessionArchiveOperations.get(agentSessionSettingsKey(session.sessionId))?.catch(() => {});
   if (!session.ready || session.exited) throw new Error("App Server is still starting or has exited.");
   const state = session.turnState;
@@ -4097,7 +4206,10 @@ async function submitAppServerPrompt(
   const wantsQueue = requestedMode === "queue";
   const skills = await resolveAppServerSkills(session, skillNames);
   const activeSkills = skills.map((skill) => skill.name);
-  const input = (value) => appServerPromptInput(value, skills, attachments);
+  const referenceInput = createSessionReferenceEnvelopeInput(references.map(item => item.reference), {
+    contextByKey: new Map(references.map(item => [sessionReferenceKey(item.reference), item.context])),
+  });
+  const input = (value) => [...appServerPromptInput(value, skills, attachments), ...(referenceInput ? [referenceInput] : [])];
   const personalMemory = await appServerPersonalMemory(session, requirementText);
   let lateSteer = false;
 
@@ -4113,6 +4225,7 @@ async function submitAppServerPrompt(
         clientUserMessageId: requirement.id,
       })
       .catch((error) => {
+        if (error.code === 'QUEUED_TURN_CANCELLED') return;
         removeQueuedPersonalMemoryCitation(session, requirement.id);
         requirement.status = "failed";
         if (!appServer.activeTurnId) state.active = false;
@@ -4195,6 +4308,7 @@ async function drainAppServerStartupPrompts(session) {
         prompt.skillNames,
         prompt.attachments,
         prompt.requirementText,
+        { references: prompt.references || [] },
       );
       if (prompt.activatesThink) {
         session.thinkSkillActivated = true;
@@ -4222,6 +4336,17 @@ function publicAppTranscript(session) {
     hasEarlierTurns: Boolean(session.restoredHistoryHasMore),
     loadingEarlier: Boolean(session.restoredHistoryLoading),
     items: session.appTranscript.map((item) => ({ ...item })),
+  };
+}
+
+function platformSessionSnapshot(session) {
+  return {
+    session: publicSession(session),
+    transcript: publicAppTranscript(session),
+    pendingRequests: [...session.pendingServerRequests.values()].map(publicAppServerRequest),
+    revision: session.uiRevision || 0,
+    sideChat: publicSideChatState(session.sideChat),
+    realtime: publicRealtimeState(session.realtime),
   };
 }
 
@@ -4445,7 +4570,7 @@ async function forkAppServerSessionInBackground(session, lastTurnId) {
   };
 }
 
-async function editAndForkAppServerSession(session, { beforeTurnId, editedText, attachments, sourceTitle }) {
+async function editAndForkAppServerSession(session, { beforeTurnId, editedText, attachments, references = [], sourceTitle }) {
   const sourceThreadId = session.sessionId;
   const title = branchThreadTitle(sourceTitle, "编辑分支");
   let forkedThreadId = "";
@@ -4524,6 +4649,7 @@ async function editAndForkAppServerSession(session, { beforeTurnId, editedText, 
       skillNames,
       attachments,
       requirementText,
+      { references },
     );
     session.lastActivityAt = new Date().toISOString();
     persistRestorableWebSession(session);
@@ -5381,6 +5507,7 @@ function normalizeAppTranscriptItem(item) {
     agentPath: String(item.agentPath || ""),
     activityKind: String(item.activityKind || ""),
     attachments: normalizeTranscriptAttachments(item.attachments),
+    references: normalizeSessionReferences(item.references),
     memoryCitation: normalizeMemoryCitation(item.memoryCitation),
   };
 }
@@ -5433,7 +5560,7 @@ function appTranscriptFromThreadItem(session, item, context = {}) {
   const base = { id: item.id, ...context };
   if (item.type === "userMessage") {
     const message = appServerUserMessageContent(session, item.content);
-    return { ...base, type: "user", label: "你", text: message.text, attachments: message.attachments };
+    return { ...base, type: "user", label: "你", text: message.text, attachments: message.attachments, references: message.references };
   }
   if (item.type === "agentMessage") {
     const turnId = String(context.turnId || session.turnState.turnId || "");
@@ -5546,7 +5673,8 @@ function appServerUserMessageContent(session, content) {
       attachments.push(appServerMessageAttachment(session, entry));
     } else if (entry?.type === "skill") text.push(`Skill：${entry.name || entry.path || ""}`);
   }
-  return { text: text.filter(Boolean).join("\n"), attachments };
+  const parsed = parseSessionReferenceEnvelopes(text.filter(Boolean).join("\n"));
+  return { text: parsed.text, references: parsed.references, attachments };
 }
 
 async function sessionShareSnapshot(session) {
@@ -6326,6 +6454,12 @@ function publicTurnState(state) {
   };
 }
 
+function operationPayloadFingerprint(message) {
+  const canonical = (value) => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
+    ? Object.fromEntries(Object.keys(value).filter((key) => key !== 'idempotencyKey').sort().map((key) => [key, canonical(value[key])])) : value;
+  return createHash('sha256').update(JSON.stringify(canonical(message))).digest('hex');
+}
+
 function appendBuffers(session, raw) {
   const revision = session.outputRevision + 1;
   const bytes = Buffer.byteLength(raw, "utf8");
@@ -6413,6 +6547,7 @@ function publicSession(session) {
     memoryProjectSource: normalizeMemoryProjectSource(session.memoryProjectSource),
     model: String(session.appModel || ""),
     reasoningEffort: String(session.appReasoningEffort || ""),
+    serviceTier: session.appServiceTier === 'priority' ? 'priority' : 'default',
     tokenUsage: publicAppTokenUsage(session.appTokenUsage),
     startedAt: session.startedAt,
     lastActivityAt: session.lastActivityAt,
@@ -6561,6 +6696,8 @@ function persistWebSession(session) {
         ? session.releaseReason
         : "",
     turnState: publicTurnState(session.turnState),
+    operationReceipts: serializableSessionOperationReceipts(session.operationReceipts),
+    uiRevision: session.uiRevision || 0,
   };
   writePersistedWebSessions(records);
 }
@@ -7843,6 +7980,10 @@ function send(ws, type, payload) {
 }
 
 function broadcast(session, type, payload) {
+  if (['status', 'app-transcript', 'app-transcript-upsert', 'app-transcript-delta', 'agent-request', 'agent-request-resolved', 'side-chat-state', 'realtime-state', 'app-history-state'].includes(type)) {
+    session.uiRevision = (session.uiRevision || 0) + 1;
+    payload = { ...payload, sessionRevision: session.uiRevision };
+  }
   for (const client of session.clients) send(client, type, payload);
   if (type === "status") queueSessionControlEvent(session);
 }

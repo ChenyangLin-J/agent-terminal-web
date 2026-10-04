@@ -69,50 +69,32 @@ test("the current Session navigation survives an Agent Web restart", async (t) =
   await page.goto(
     `http://127.0.0.1:${agentPort}/?preview=1&cwd=.&sessionId=${threadId}&title=${encodeURIComponent("Remember this Session")}&access=safe`,
   );
-  await page.locator("#nav-current-session:not([disabled])").waitFor();
-  const switcherToggle = page.locator("#session-switcher-toggle");
-  const switcherOpen = page.locator("#session-switcher-open");
-  assert.equal(await switcherToggle.getAttribute("aria-expanded"), "true");
-  let sessionScreenClass = await page.locator("#session-screen").getAttribute("class");
-  assert.doesNotMatch(sessionScreenClass, /session-switcher-collapsed/);
-  await switcherToggle.click();
-  assert.equal(await switcherToggle.getAttribute("aria-expanded"), "false");
-  assert.equal(await page.evaluate(() => localStorage.getItem("agent_terminal_session_switcher_collapsed")), "1");
-  sessionScreenClass = await page.locator("#session-screen").getAttribute("class");
-  assert.match(sessionScreenClass, /session-switcher-collapsed/);
-  await switcherOpen.click();
-  assert.equal(await switcherToggle.getAttribute("aria-expanded"), "true");
-  assert.equal(await page.evaluate(() => localStorage.getItem("agent_terminal_session_switcher_collapsed")), "0");
-  await page.locator("#nav-control-center").click();
-  await page.locator("#start-screen:not(.hidden)").waitFor();
-  assert.equal(new URL(page.url()).searchParams.has("sessionId"), false);
-  assert.equal(await page.locator("#nav-current-session").isEnabled(), true);
+  await page.locator('.cwu-session-header').getByRole('heading', { name: 'Remember this Session' }).waitFor();
+  const toggle = page.locator('.cwu-browser-list-toggle');
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+  await toggle.click();
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(await page.evaluate(() => localStorage.getItem('agent-workbench.sidebar-collapsed')), '1');
 
-  await stopAgent(agent);
-  agent = null;
+  await stopAgent(agent); agent = null;
   agent = await startAgent(environment);
   await page.reload();
-  await page.locator("#start-screen:not(.hidden)").waitFor();
-
-  const currentNavigation = page.locator("#nav-current-session");
-  assert.equal(await currentNavigation.isEnabled(), true);
-  assert.equal(await currentNavigation.getAttribute("title"), "回到 Remember this Session");
-  await currentNavigation.click();
-  await page.waitForURL((url) => url.searchParams.get("sessionId") === threadId);
-  assert.equal(new URL(page.url()).searchParams.get("preview"), "1");
-  await page.locator("#connection").waitFor();
-  assert.match(await page.locator("#connection").innerText(), /仅查看/);
-  assert.equal(await page.locator("#session-switcher-toggle").getAttribute("aria-expanded"), "true");
-
-  await page.locator("#session-switcher-new").click();
-  await page.waitForURL((url) => url.searchParams.get("new") === "1");
+  await page.locator('.cwu-composer textarea').waitFor();
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(new URL(page.url()).searchParams.get('sessionId'), threadId);
+  await toggle.click();
+  await page.getByRole('button', { name: '新建对话', exact: true }).click();
+  await page.locator('.cwu-session-header').getByRole('heading', { name: '新对话', exact: true }).waitFor();
+  await page.waitForURL(url => url.searchParams.get('new') === '1');
   const draftUrl = new URL(page.url());
-  assert.equal(draftUrl.searchParams.get("preview"), "1");
-  assert.equal(draftUrl.searchParams.has("sessionId"), false);
-  await page.waitForFunction(() => document.activeElement?.id === "prompt");
-  assert.equal(await page.evaluate(() => document.activeElement?.id), "prompt");
-  assert.equal(await page.locator(".session-switcher-item.active").count(), 0);
-  assert.match(await page.locator("#connection").innerText(), /发送第一条消息时创建/);
+  assert.equal(draftUrl.searchParams.has('sessionId'), false);
+  const composer = page.locator('.cwu-composer textarea');
+  await composer.fill('刷新后仍保留的草稿');
+  await page.reload();
+  await page.waitForFunction(() => document.querySelector('.cwu-composer textarea')?.value === '刷新后仍保留的草稿');
+  const sessions = await (await fetch(`http://127.0.0.1:${agentPort}/api/sessions`)).json();
+  assert.equal(sessions.sessions.length, 1, 'Opening and refreshing a draft must not create a runtime');
+
 });
 
 async function startAgent(environment) {

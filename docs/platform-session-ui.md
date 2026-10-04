@@ -1,0 +1,72 @@
+# Agent Web Session UI ownership
+
+Agent Web consumes Platform's `SessionApplication`, Session Host controller, Composer utilities, and Side Chat/Subagent/Realtime panels. Minimal Host uses the same application. The old DOM Session list, transcript, input, queue, request UI and connection presentation are removed from this repository.
+
+## Modules
+
+| Module | Responsibility |
+| --- | --- |
+| `public/platform-agent-web-entry.jsx` | Public application assembly, URL navigation, capabilities and callbacks |
+| `public/platform-agent-web-adapter.js` | Agent Web API/event projection, lazy drafts and historical preview; no Session rendering |
+| `public/agent-web-connection.js` | Agent Web WebSocket lifecycle, bounded reconnect and operation responses |
+| `public/platform-agent-web-resources.js` | Upload and authorized local-resource URLs |
+| `public/platform-agent-web-voice.js` | Existing recording factory, transcription endpoint and recovery context |
+| `public/platform-agent-web-notifications.js` | Product notification target and explicit push subscription |
+| `public/platform-agent-web-product-controller.js` | Product account/service operations |
+| `public/platform-agent-web-product-extensions.jsx`, `.css` | Memory, integrations, workspaces, updates, sharing and Session tools |
+| `lib/platform-session-routes.js` | Authenticated HTTP projection for the shared Host Kit |
+| `lib/session-references.js` | Native Session reference validation, canonical metadata and bounded public context |
+| `lib/session-operation-receipts.js` | Bounded durable operation receipts, hashes and public results |
+| `lib/memory-system-library.js` | Product memory dependency location |
+
+Platform owns common interaction and presentation, selection protection, snapshot/event recovery, retry identity, and UI state. Agent Web owns its server/API/WS protocol, Runtime choice, authentication, native thread identity, persistence, memory, integrations, local-file access, notification service and deployment. Product endpoints and recording/account services must not be embedded in Platform components.
+
+Historical process details are read lazily through the authenticated product projection, including previews with no live Runtime. Reading a completed record never resumes a Codex thread. Editing a user message forwards its existing authorized attachments to the product's Edit/Fork validation.
+
+Session rows supply the same reference contract as Personal Workbench: sidebar drag and `@` search produce removable Composer chips. Agent Web reauthorizes `agent-web + native threadId` against its current account's live or stored Codex history before submission, rejects self/foreign/archived/missing targets, and includes bounded recent public context in the model input. Messages persist the public pointer and hide the input envelope; edit/queue preserve it. Opening a message reference navigates to the target. Released Sessions retain their selected UI identity in the URL so refresh recovers the same draft/reference state.
+
+The private `submitAppServerPrompt` helper receives an options object after `requirementText`. Resolved references use `options.references`; direct, startup-queued and edit/fork submissions use the same field. Product gateway admission controls can share this object without interpreting their options as a reference array.
+
+Account usage remains a product-owned dialog. Opening it reads the existing `/usage` response automatically and presents available quota windows, remaining percentage and reset time; refresh uses the same read operation. Missing quota data stays unknown. Slash-command usage results use this presentation too, while the Composer's context usage remains a separate shared control.
+
+The Session menu exposes one Related Sessions entry with Side Chat, Subagent and Thread Relations tabs. Agent Web supports one Side Chat, so the shared panel's internal selector is omitted. Thread Relations reads the existing `session-tree` response on entry and renders named parent/branch/agent rows with read-only navigation. Realtime has a separate dialog showing the shared inline controls immediately, including voice choices and visible permission/connection errors.
+
+Existing `server.js` remains the integration point for Runtime lifecycle and product services. New shared-UI routes and receipt logic are separate modules. A later backend refactor can extract lifecycle, transcript projection, approvals and persistence in independent steps while preserving those contracts; moving product scheduling or memory policy into Platform would blur this boundary.
+
+## Build and candidate verification
+
+Agent Web pins Platform v0.33.0, which exports `./session-host` and the shared Session application. A normal install, build and test use the published package:
+
+```bash
+npm ci --include=dev
+npm run build:session-app
+npm test
+```
+
+For later unreleased Platform changes, an explicit local candidate remains available without rewriting the formal pin:
+
+```bash
+AGENT_PLATFORM_CANDIDATE=/absolute/path/to/platform-candidate npm run build:session-app
+AGENT_PLATFORM_CANDIDATE=/absolute/path/to/platform-candidate \
+AGENT_MEMORY_SYSTEM_ROOT=/absolute/path/to/memory-system npm test
+```
+
+Ordinary `npm run build:session-app` resolves only public package exports. The build unifies React and React DOM resolution with the consumer to avoid a second renderer instance. Generated JS/CSS/fonts live under ignored `public/generated/`; a fresh deployment must build them before starting the server. Missing resources produce a visible load error.
+
+`AGENT_MEMORY_SYSTEM_ROOT` is optional; without it the existing sibling memory-system path remains the default. Candidate server data, workspace, uploads and Codex state must be isolated. `scripts/testing/candidate-preview.mjs` provides synthetic Codex responses and local authentication for UI tests; it never proves real model or microphone behavior.
+
+For interactive verification, run the same script with `--real`, an absolute isolated `CANDIDATE_PREVIEW_ROOT`, `AGENT_MEMORY_SYSTEM_ROOT` and `AGENT_PLATFORM_CANDIDATE`. It uses the installed Codex binary and a permission-restricted copy of the current user's `auth.json` (override with `AGENT_PREVIEW_AUTH_SOURCE`). Session history, configuration, uploads and product state stay in the preview root. Its local authentication helper is only for a loopback preview, not a deployable authentication service. Use `AGENT_PREVIEW_PORT` to retain a preview port when reloading an idle owned candidate. Synthetic native IDs are unique across preview restarts so saved fixtures do not collide. Stop the owning preview process to close its child server and helper. Shared recording scripts must be available in the preview's `workspace/shared-web` for microphone input.
+
+Use the project-owned `scripts/testing/session-ui.flow.mjs` with `tools/workspace-playwright/pw record` to produce desktop/mobile videos and ordered frames. Browser regressions also cover lazy draft/restart recovery, runtime lease expiry and read-only child previews. Platform owns the shared component and input-state tests; Agent Web retains backend authorization, upload validation, thread, memory, integration and service safety tests.
+
+`scripts/testing/session-chrome.flow.mjs` verifies the fixed sidebar toggle, contiguous list/detail layout, and account dialog against an existing Session in the isolated real preview. It reads usage without submitting a model Turn and records both desktop and mobile results.
+
+`scripts/testing/session-tools.flow.mjs` covers the three related tabs, real relation/voice metadata, direct realtime opening, close/reopen and simulated microphone denial. It never captures physical audio or starts a model Turn; this is separate from physical voice acceptance.
+
+`scripts/testing/session-references.flow.mjs` records synthetic desktop drag/mobile `@` selection, removal, draft switching, submit and reference navigation. `session-references-real.flow.mjs` uses existing authorized real Sessions to verify drag/selection, resolution, refresh recovery and removal without a new model Turn. Native legacy/Platform input and public transcript persistence are verified separately in the isolated migration integration test.
+
+## Removed duplicate implementation and rollback
+
+Removed Session assets: `public/app.js`, `styles.css`, `thinking-session.css`, `agent-upload.js`, `agent-voice-input.js`, `agent-realtime.js`, and the old Codex-update widget assets. Product memory/integration dialogs, the local Markdown reader/editor, icons and service worker remain. Private DOM/stylesheet regex tests are retired or narrowed to their surviving backend contracts; UI behavior is covered by Platform and recorded application flows.
+
+Rollback uses the pre-change Agent Web commit `88221caca542641db2fbb010629b085c4c90194d` and its Platform v0.32.0 pin. Restore the complete prior frontend with that checkout; do not retain two selectable Session implementations. Added receipt fields are backward-compatible metadata. Deployment must preserve unrelated local work and stored Session identities, build the generated assets, and use an external restart only when no Turn is running. The exact release and production readback belong in the owning Change.

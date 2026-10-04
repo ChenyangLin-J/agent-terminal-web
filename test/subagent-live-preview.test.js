@@ -203,24 +203,21 @@ input.on("line", (line) => {
   );
   await page.getByText("Reading live child output", { exact: true }).waitFor();
   await page.getByText("node inspect.js", { exact: true }).waitFor();
-  await page.getByText("只读 · 子 Agent 运行中 · 自动更新", { exact: true }).waitFor();
-  assert.match(await page.locator("#connection").innerText(), /子 Agent · 只读/);
-  assert.equal(new URL(page.url()).searchParams.get("sourceSession"), ready.payload.id);
-  assert.equal(await page.locator("#composer").evaluate((element) => element.classList.contains("hidden")), true);
-  assert.equal(await page.locator("#prompt").isDisabled(), true);
-  assert.equal(await page.locator("#voice-input").isDisabled(), true);
-  assert.equal(await page.locator("#attach-file").isDisabled(), true);
-  assert.equal(await page.locator("#app-session-realtime").isDisabled(), true);
-  assert.equal(await page.evaluate(() => activateRealtimeSession()), false);
-  await page.evaluate(() => submitPrompt("auto"));
-  assert.equal(await page.locator("#upload-status").textContent(), "子 Agent 预览为只读，不会恢复或发送消息。");
-  assert.equal(output.includes("CHILD_RESUME_ATTEMPT"), false);
+  await page.getByText('子 Agent · 只读 · 运行中 · 自动更新', { exact: true }).waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('sourceSession'), ready.payload.id);
+  assert.equal(await page.locator('.cwu-composer textarea').isDisabled(), true);
+  assert.equal(await page.getByRole('button', { name: '语音输入', exact: true }).isDisabled(), true);
+  assert.equal(output.includes('CHILD_RESUME_ATTEMPT'), false);
 
-  const requestsBeforeLeaving = occurrences(output, "CHILD_LIST");
-  await page.locator("#nav-control-center").click();
-  assert.equal(await page.evaluate(() => sessionPreviewRefreshTimer === null), true);
-  await page.locator("#nav-current-session").click();
-  await waitFor(() => occurrences(output, "CHILD_LIST") > requestsBeforeLeaving, 2_000);
+  await page.getByRole('button', { name: '新建对话', exact: true }).click();
+  await page.locator('.cwu-session-header').getByRole('heading', { name: '新对话', exact: true }).waitFor();
+  await new Promise(resolve => setTimeout(resolve, 100));
+  const afterLeaving = occurrences(output, 'CHILD_LIST');
+  await new Promise(resolve => setTimeout(resolve, 2200));
+  assert.equal(occurrences(output, 'CHILD_LIST'), afterLeaving, 'Leaving a preview releases its polling');
+  await page.goto(`http://127.0.0.1:${agentPort}/?sessionId=${childThreadId}&sourceSession=${ready.payload.id}`);
+  await waitFor(() => occurrences(output, 'CHILD_LIST') > afterLeaving, 3000);
+
 });
 
 async function connect(url) {

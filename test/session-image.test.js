@@ -23,11 +23,7 @@ test("viewed images resolve only from exact Agent transcript items", () => {
 });
 
 test("App Server image cards link through the authenticated session image route", async () => {
-  const [server, app, styles] = await Promise.all([
-    readFile(new URL("../server.js", import.meta.url), "utf8"),
-    readFile(new URL("../public/app.js", import.meta.url), "utf8"),
-    readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
-  ]);
+  const server = await readFile(new URL("../server.js", import.meta.url), "utf8");
 
   assert.match(server, /app\.use\("\/api", requireAuth\)[\s\S]*app\.get\("\/api\/session-image\/:sessionId\/:itemId"/);
   assert.match(server, /presentation\.kind !== "inline" \|\| !presentation\.mime\.startsWith\("image\/"\)/);
@@ -35,10 +31,7 @@ test("App Server image cards link through the authenticated session image route"
   assert.match(server, /loadHistoricalSessionProcess\(session, turnId\)/);
   assert.match(server, /indexFile: sessionProcessIndexFile\(session\.sessionId\)/);
   assert.match(server, /session\.historyProcessCache\.set\(turnId, items\)/);
-  assert.match(app, /item\.type === "tool" && item\.label === "查看图片" && activeSessionId/);
-  assert.match(app, /`\/api\/session-image\/\$\{encodeURIComponent\(activeSessionId\)\}\/\$\{encodeURIComponent\(item\.id\)\}`/);
-  assert.match(app, /\?turnId=\$\{encodeURIComponent\(item\.turnId\)\}/);
-  assert.match(styles, /\.app-transcript-image-link/);
+
   const resolver = await readFile(new URL("../lib/session-image.js", import.meta.url), "utf8");
   assert.match(resolver, /session\?\.historyProcessCache instanceof Map/);
 });

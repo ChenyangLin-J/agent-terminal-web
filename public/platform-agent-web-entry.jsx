@@ -46,13 +46,16 @@ const detail = (state) => state.session ? {
     messageEdit: !state.session.readOnly, messageFork: !state.session.readOnly, sessionStatus: false, technicalDetails: true,
   },
   actions: {
-    onSubmit: ({ prompt, mode, attachments }) => execute(mode === 'queue' ? 'queue' : 'send', { text: prompt, attachments: attachments.map(normalizeUploadedAttachment) }),
+    onSubmit: ({ prompt, mode, attachments, references }) => execute(mode === 'queue' ? 'queue' : 'send', { text: prompt, references, attachments: attachments.map(normalizeUploadedAttachment) }),
+    onSearchSessionReferences: ({ query }) => adapter.searchSessionReferences(state.selectedId, query),
+    onResolveSessionReferences: ({ references }) => adapter.resolveSessionReferences(state.session.threadId || '', references),
+    onOpenSessionReference: (reference) => controller.select(adapter.openSessionReference(reference)),
     onInterrupt: ({ turnId } = {}) => execute('stop', { expectedTurnId: turnId || state.session.activeTurnId }),
     onResume: ({ turnId } = {}) => execute('resume', { expectedTurnId: turnId || state.session.activeTurnId }),
     onLoadEarlier: () => controller.loadHistory(),
     onLoadTechnicalDetails: (turnId) => execute('loadTechnicalDetails', { turnId }),
     onRespondToRequest: ({ token, decision, answers }) => execute(decision === 'decline' ? 'decline' : 'respond', { requestId: token, expectedTurnId: state.session.activeTurnId, decision, answers }),
-    onEditMessage: ({ prompt, turnId, messageId, attachments }) => execute('editFork', { text: prompt, turnId, itemId: messageId, attachments: (attachments || []).map(normalizeUploadedAttachment) }),
+    onEditMessage: ({ prompt, turnId, messageId, attachments, references }) => execute('editFork', { text: prompt, references, turnId, itemId: messageId, attachments: (attachments || []).map(normalizeUploadedAttachment) }),
     onForkMessage: async ({ turnId, messageId }) => {
       const result = await execute('fork', { turnId, itemId: messageId });
       await controller.refreshSessions();
@@ -90,7 +93,7 @@ controller.subscribe(() => {
   if (!selectedId || !session) return;
   const url = new URL(location.href);
   for (const key of ['new', 'preview', 'attach', 'sessionId', 'draftId']) url.searchParams.delete(key);
-  if (session.released) { url.searchParams.set('sessionId', session.threadId); url.searchParams.set('preview', '1'); }
+  if (session.released) { url.searchParams.set('attach', selectedId); url.searchParams.set('sessionId', session.threadId); url.searchParams.set('preview', '1'); }
   else if (session.webSessionId) url.searchParams.set('attach', session.webSessionId);
   else if (selectedId.startsWith('history:')) { url.searchParams.set('sessionId', selectedId.slice(8)); url.searchParams.set('preview', '1'); }
   else if (selectedId.startsWith('draft:')) { url.searchParams.set('new', '1'); url.searchParams.set('preview', '1'); url.searchParams.set('draftId', selectedId); }

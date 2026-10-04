@@ -55,9 +55,9 @@ test("candidate build never silently bundles the stable package without Session 
 
 test("entry uses the public UI callback shapes and ships its shared styles", async () => {
   const entry = await readFile(new URL("../public/platform-agent-web-entry.jsx", import.meta.url), "utf8");
-  assert.match(entry, /\{ prompt, mode, attachments \}/);
+  assert.match(entry, /\{ prompt, mode, attachments, references \}/);
   assert.match(entry, /\{ token, decision, answers \}/);
-  assert.match(entry, /\{ prompt, turnId, messageId, attachments \}/);
+  assert.match(entry, /\{ prompt, turnId, messageId, attachments, references \}/);
   assert.match(entry, /@agent-workbench\/platform\/styles\.css/);
   assert.match(entry, /katex\/dist\/katex\.min\.css/);
   assert.match(entry, /onUploadAttachments: uploadAgentWebAttachments/);

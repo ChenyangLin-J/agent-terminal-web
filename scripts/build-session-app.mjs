@@ -15,10 +15,12 @@ try {
     host: path.join(platformRoot, "src", "session-host.js"),
     ui: path.join(platformRoot, "src", "ui", "index.jsx"),
     styles: path.join(platformRoot, "src", "ui", "styles.css"),
+    references: path.join(platformRoot, "src", "session-references.js"),
   } : {
     host: require.resolve('@agent-workbench/platform/session-host'),
     ui: require.resolve('@agent-workbench/platform/ui'),
     styles: require.resolve('@agent-workbench/platform/styles.css'),
+    references: require.resolve('@agent-workbench/platform/session-references'),
   };
   await Promise.all(Object.values(platformPaths).map(file => access(file)));
 } catch (error) {
@@ -37,6 +39,7 @@ const platformAlias = {
     buildContext.onResolve({ filter: /^@agent-workbench\/platform\/session-host$/ }, () => ({
       path: platformPaths.host,
     }));
+    buildContext.onResolve({ filter: /^@agent-workbench\/platform\/session-references$/ }, () => ({ path: platformPaths.references }));
     buildContext.onResolve({ filter: /^@agent-workbench\/platform\/ui$/ }, () => ({
       path: platformPaths.ui,
     }));

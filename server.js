@@ -1,3 +1,4 @@
+import { createSessionReferenceEnvelopeInput, normalizeSessionReferences, parseSessionReferenceEnvelopes, requireReferences, resolveAgentWebReferences, sessionReferenceKey } from './lib/session-references.js';
 import { registerPlatformSessionRoutes } from './lib/platform-session-routes.js';
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -1148,6 +1149,27 @@ app.get("/api/sessions", (_req, res) => {
   });
 });
 
+async function readSessionReferenceTarget(threadId) {
+  if (!isValidSessionId(threadId)) return null;
+  const live = [...sessions.values()].find(item => item.sessionId === threadId && !item.exited);
+  const archived = Boolean(readSessionArchiveSync()[threadId]);
+  if (live) return { threadId, title: live.title, archived, lastActivityAt: live.lastActivityAt,
+    messages: (live.appTranscript || []).filter(item => item.type === 'user' || (item.type === 'assistant' && item.phase === 'final_answer')).map(item => ({ role: item.type === 'user' ? 'user' : 'assistant', text: item.text })) };
+  const file = await findCodexSessionFile(threadId);
+  if (!file) return null;
+  const conversation = await extractSessionConversationFromJsonl(file, { limit: 3 });
+  const messages = (conversation.turns || []).flatMap(turn => [
+    ...(turn.user ? [{ role: 'user', text: turn.user }] : []),
+    ...(turn.assistant || []).filter(item => !item.phase || item.phase === 'final_answer').map(item => ({ role: 'assistant', text: item.text })),
+  ]);
+  const metadata = (await listCodexSessions({ archived })).find(item => item.id === threadId);
+  return { threadId, archived: archived || Boolean(metadata?.archived), title: metadata?.title || messages.find(item => item.role === 'user')?.text?.slice(0, 80), updatedAt: metadata?.updatedAt, messages };
+}
+
+async function resolveSessionReferences(sourceThreadId, values) {
+  return resolveAgentWebReferences(sourceThreadId, values, readSessionReferenceTarget);
+}
+
 registerPlatformSessionRoutes(app, {
   sessions, restore: restorePersistedSession, records: readPersistedWebSessions,
   create: createAppServerSession, findReusable: findReusableSession,
@@ -1156,6 +1178,7 @@ registerPlatformSessionRoutes(app, {
   listWebSessions: () => [...[...sessions.values()].filter((session) => !session.exited).map(publicSession), ...listDetachedSessions()],
   listCodexSessions, searchSessions: searchCodexSessions, favoriteIds: favoriteSessionIdsForHost,
   status: appServerStatus, models: appServerModels,
+  resolveReferences: resolveSessionReferences,
   validThread: isValidSessionId, validTurn: isCodexTurnId, readProcess: loadHistoricalSessionProcess,
   broadcast: (session) => broadcast(session, 'status', publicSession(session)),
 });
@@ -2672,8 +2695,12 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
       }
       const normalized = message.data.trim();
       let attachments;
+      let references;
       try {
         attachments = normalizeSubmittedAttachments(message.attachments);
+        const requestedReferences = requireReferences(message.references);
+        references = await resolveSessionReferences(session.sessionId, requestedReferences);
+        if (references.length !== requestedReferences.length) throw new Error('有 Session 引用已不可用，请移除后再发送。');
       } catch (error) {
         reply("error", { message: error.message, preservePrompt: true });
         return;
@@ -2704,6 +2731,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
             deliveryMode: message.deliveryMode,
             activatesThink: prompt.activatesThink,
             skillNames,
+            references,
           });
           reply("control-ack", {
             kind: "submit",
@@ -2718,7 +2746,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
           reply("error", { message: "Session 已归档，请恢复后重试。", preservePrompt: true });
           return;
         }
-        void submitAppServerPrompt(session, prompt.text, message.deliveryMode, skillNames, attachments, requirementText)
+        void submitAppServerPrompt(session, prompt.text, message.deliveryMode, skillNames, attachments, requirementText, references)
           .then((submission) => {
             if (prompt.activatesThink) {
               session.thinkSkillActivated = true;
@@ -2765,8 +2793,12 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
         return;
       }
       let attachments;
+      let references;
       try {
         attachments = normalizeEditForkAttachments(message.attachments, sourceItem);
+        const requestedReferences = requireReferences(message.references ?? sourceItem.references);
+        references = await resolveSessionReferences(session.sessionId, requestedReferences);
+        if (references.length !== requestedReferences.length) throw new Error('有 Session 引用已不可用，请移除后再发送。');
       } catch (error) {
         reply("error", { message: error.message, preservePrompt: true });
         return;
@@ -2783,6 +2815,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
         beforeTurnId,
         editedText,
         attachments,
+        references,
         sourceTitle: session.title,
       })
         .then((result) => {
@@ -4163,6 +4196,7 @@ async function submitAppServerPrompt(
   skillNames = [],
   attachments = [],
   requirementText = text,
+  references = [],
 ) {
   await mediaSessionArchiveOperations.get(agentSessionSettingsKey(session.sessionId))?.catch(() => {});
   if (!session.ready || session.exited) throw new Error("App Server is still starting or has exited.");
@@ -4171,7 +4205,10 @@ async function submitAppServerPrompt(
   const wantsQueue = requestedMode === "queue";
   const skills = await resolveAppServerSkills(session, skillNames);
   const activeSkills = skills.map((skill) => skill.name);
-  const input = (value) => appServerPromptInput(value, skills, attachments);
+  const referenceInput = createSessionReferenceEnvelopeInput(references.map(item => item.reference), {
+    contextByKey: new Map(references.map(item => [sessionReferenceKey(item.reference), item.context])),
+  });
+  const input = (value) => [...appServerPromptInput(value, skills, attachments), ...(referenceInput ? [referenceInput] : [])];
   const personalMemory = await appServerPersonalMemory(session, requirementText);
   let lateSteer = false;
 
@@ -4270,6 +4307,7 @@ async function drainAppServerStartupPrompts(session) {
         prompt.skillNames,
         prompt.attachments,
         prompt.requirementText,
+        prompt.references || [],
       );
       if (prompt.activatesThink) {
         session.thinkSkillActivated = true;
@@ -4531,7 +4569,7 @@ async function forkAppServerSessionInBackground(session, lastTurnId) {
   };
 }
 
-async function editAndForkAppServerSession(session, { beforeTurnId, editedText, attachments, sourceTitle }) {
+async function editAndForkAppServerSession(session, { beforeTurnId, editedText, attachments, references = [], sourceTitle }) {
   const sourceThreadId = session.sessionId;
   const title = branchThreadTitle(sourceTitle, "编辑分支");
   let forkedThreadId = "";
@@ -4610,6 +4648,7 @@ async function editAndForkAppServerSession(session, { beforeTurnId, editedText, 
       skillNames,
       attachments,
       requirementText,
+      references,
     );
     session.lastActivityAt = new Date().toISOString();
     persistRestorableWebSession(session);
@@ -5467,6 +5506,7 @@ function normalizeAppTranscriptItem(item) {
     agentPath: String(item.agentPath || ""),
     activityKind: String(item.activityKind || ""),
     attachments: normalizeTranscriptAttachments(item.attachments),
+    references: normalizeSessionReferences(item.references),
     memoryCitation: normalizeMemoryCitation(item.memoryCitation),
   };
 }
@@ -5519,7 +5559,7 @@ function appTranscriptFromThreadItem(session, item, context = {}) {
   const base = { id: item.id, ...context };
   if (item.type === "userMessage") {
     const message = appServerUserMessageContent(session, item.content);
-    return { ...base, type: "user", label: "你", text: message.text, attachments: message.attachments };
+    return { ...base, type: "user", label: "你", text: message.text, attachments: message.attachments, references: message.references };
   }
   if (item.type === "agentMessage") {
     const turnId = String(context.turnId || session.turnState.turnId || "");
@@ -5632,7 +5672,8 @@ function appServerUserMessageContent(session, content) {
       attachments.push(appServerMessageAttachment(session, entry));
     } else if (entry?.type === "skill") text.push(`Skill：${entry.name || entry.path || ""}`);
   }
-  return { text: text.filter(Boolean).join("\n"), attachments };
+  const parsed = parseSessionReferenceEnvelopes(text.filter(Boolean).join("\n"));
+  return { text: parsed.text, references: parsed.references, attachments };
 }
 
 async function sessionShareSnapshot(session) {

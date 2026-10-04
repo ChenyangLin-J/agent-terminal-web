@@ -1,3 +1,4 @@
+import { parseSessionReferenceEnvelopes } from '@agent-workbench/platform/session-references';
 import { createAgentWebConnection } from './agent-web-connection.js';
 const WS_OPEN = 1;
 const RETRYABLE_ACTIONS = new Set([
@@ -38,6 +39,14 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
       for (const draft of drafts.values()) if (!targets.has(draft.id) && (!query || draft.title.includes(query))) values.unshift(draft);
       return { ...result, sessions: values };
     },
+
+    async searchSessionReferences(id, query) {
+      const result = await adapter.listSessions({ query });
+      const source = previews.get(id)?.threadId || summaries.get(id)?.threadId;
+      return { references: result.sessions.map(item => item.reference).filter(item => item && item.threadId !== source && !item.archived) };
+    },
+    resolveSessionReferences: (sourceThreadId, references) => json('/api/platform/session-references/resolve', { method: 'POST', body: JSON.stringify({ sourceThreadId, references }) }),
+    openSessionReference: (reference) => [...summaries.values()].find(item => item.reference?.threadId === reference.threadId)?.id || `history:${reference.threadId}`,
 
     async readSession(id, { signal } = {}) {
       if (drafts.has(id) && !targets.has(id)) return { ...drafts.get(id), sessionId: id, status: 'idle', messages: [], technicalItems: [], executionProfile: drafts.get(id).executionProfile || { accessMode: 'full' }, accessModes: [{ id: 'full', label: '完全访问' }, { id: 'restricted', label: '按需确认' }] };
@@ -293,11 +302,11 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
 
 function actionMessage(action, payload, idempotencyKey) {
   const data = { idempotencyKey, notificationApp: payload.notificationApp, notificationDeviceId: payload.notificationDeviceId };
-  if (action === "send" || action === "append" || action === "queue") return { ...data, type: "submit", data: payload.text || payload.prompt || "", attachments: payload.attachments || [], deliveryMode: action === "queue" ? "queue" : "auto" };
+  if (action === "send" || action === "append" || action === "queue") return { ...data, type: "submit", data: payload.text || payload.prompt || "", attachments: payload.attachments || [], references: payload.references || [], deliveryMode: action === "queue" ? "queue" : "auto" };
   if (action === "respond" || action === "approve" || action === "decline") return { ...data, type: "agent-response", requestId: payload.requestId || payload.token, decision: payload.decision || (action === "decline" ? "decline" : "accept"), answers: payload.answers, expectedTurnId: payload.expectedTurnId };
   if (action === "stop") return { ...data, type: "interrupt-turn", expectedTurnId: payload.expectedTurnId };
   if (action === "resume") return { ...data, type: "resume-interrupted", expectedTurnId: payload.expectedTurnId };
-  if (action === "editFork") return { ...data, type: "edit-and-fork", data: payload.text || "", attachments: payload.attachments || [], turnId: payload.turnId, itemId: payload.itemId };
+  if (action === "editFork") return { ...data, type: "edit-and-fork", data: payload.text || "", attachments: payload.attachments || [], references: payload.references || [], turnId: payload.turnId, itemId: payload.itemId };
   if (action === "loadHistory") return { ...data, type: "load-app-history" };
   if (action === "sideChat") return { ...data, type: "side-chat-submit", data: payload.text || "" };
   if (action === "realtime") return { ...data, type: "realtime-start", ...payload };
@@ -337,7 +346,8 @@ function presentationFromAgentWeb(session, items, pendingRequests = []) {
       messages.push({
         id: String(item.id || `${type}-${messages.length}`),
         role: type === 'user' ? 'user' : 'assistant',
-        content: String(item.text || ''), turnId, turnKey: turnId,
+        content: type === 'user' ? parseSessionReferenceEnvelopes(item.text).text : String(item.text || ''),
+        references: item.references || (type === 'user' ? parseSessionReferenceEnvelopes(item.text).references : []), turnId, turnKey: turnId,
         turnStatus: String(item.turnStatus || ''),
         canEdit: type === 'user', canFork: type === 'user',
         attachments: (item.attachments || []).map((attachment) => ({ id: attachment.path, name: attachment.originalName, path: attachment.path, mimeType: attachment.mime, size: attachment.size })),

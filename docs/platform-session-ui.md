@@ -35,7 +35,15 @@ Existing `server.js` remains the integration point for Runtime lifecycle and pro
 
 ## Build and candidate verification
 
-The current stable dependency pin remains v0.32.0 until delivery approval. This candidate requires the local Platform candidate (version 0.33.0) because the stable package lacks `./session-host`:
+Agent Web pins Platform v0.33.0, which exports `./session-host` and the shared Session application. A normal install, build and test use the published package:
+
+```bash
+npm ci --include=dev
+npm run build:session-app
+npm test
+```
+
+For later unreleased Platform changes, an explicit local candidate remains available without rewriting the formal pin:
 
 ```bash
 AGENT_PLATFORM_CANDIDATE=/absolute/path/to/platform-candidate npm run build:session-app
@@ -43,7 +51,7 @@ AGENT_PLATFORM_CANDIDATE=/absolute/path/to/platform-candidate \
 AGENT_MEMORY_SYSTEM_ROOT=/absolute/path/to/memory-system npm test
 ```
 
-After adopting a published compatible Platform pin, ordinary `npm run build:session-app` resolves only public package exports. The build unifies React and React DOM resolution with the consumer to avoid a second renderer instance. Generated JS/CSS/fonts live under ignored `public/generated/`; a fresh deployment must build them before starting the server. Missing resources produce a visible load error.
+Ordinary `npm run build:session-app` resolves only public package exports. The build unifies React and React DOM resolution with the consumer to avoid a second renderer instance. Generated JS/CSS/fonts live under ignored `public/generated/`; a fresh deployment must build them before starting the server. Missing resources produce a visible load error.
 
 `AGENT_MEMORY_SYSTEM_ROOT` is optional; without it the existing sibling memory-system path remains the default. Candidate server data, workspace, uploads and Codex state must be isolated. `scripts/testing/candidate-preview.mjs` provides synthetic Codex responses and local authentication for UI tests; it never proves real model or microphone behavior.
 
@@ -61,4 +69,4 @@ Use the project-owned `scripts/testing/session-ui.flow.mjs` with `tools/workspac
 
 Removed Session assets: `public/app.js`, `styles.css`, `thinking-session.css`, `agent-upload.js`, `agent-voice-input.js`, `agent-realtime.js`, and the old Codex-update widget assets. Product memory/integration dialogs, the local Markdown reader/editor, icons and service worker remain. Private DOM/stylesheet regex tests are retired or narrowed to their surviving backend contracts; UI behavior is covered by Platform and recorded application flows.
 
-Rollback uses the pre-change Agent Web commit `88221caca542641db2fbb010629b085c4c90194d` and its Platform v0.32.0 pin. Restore the complete prior frontend with that checkout; do not retain two selectable Session implementations. Added receipt fields are backward-compatible metadata. Build authorization does not include updating the stable pin, publishing a Platform tag, merging, or deploying/restarting the VPS service.
+Rollback uses the pre-change Agent Web commit `88221caca542641db2fbb010629b085c4c90194d` and its Platform v0.32.0 pin. Restore the complete prior frontend with that checkout; do not retain two selectable Session implementations. Added receipt fields are backward-compatible metadata. Deployment must preserve unrelated local work and stored Session identities, build the generated assets, and use an external restart only when no Turn is running. The exact release and production readback belong in the owning Change.

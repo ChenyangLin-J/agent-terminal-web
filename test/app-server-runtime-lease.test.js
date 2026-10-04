@@ -88,7 +88,6 @@ input.on("line", (line) => {
       WORKSPACE_ROOT: workspaceRoot,
       CODEX_APP_SERVER_COMMAND: fakeCodex,
       AGENT_NATIVE_THREAD_CATALOG: "0",
-      AGENT_SHARED_APP_SERVER: "0",
       SESSION_TTL_MS: "1200",
       PRIVATE_AUTH_VERIFY_URL: `http://127.0.0.1:${authServer.address().port}`,
     },

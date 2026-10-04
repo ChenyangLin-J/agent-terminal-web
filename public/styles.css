@@ -649,57 +649,6 @@ input {
   overflow-y: auto;
 }
 
-.orchestration-panel {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px 14px;
-  padding: 12px;
-  border: 1px solid #354052;
-  border-radius: 12px;
-  background: #111722;
-}
-
-.orchestration-panel > div:first-child {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-
-.orchestration-panel > div:first-child span,
-.orchestration-panel > p {
-  color: #929eb1;
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.orchestration-mode-options {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px;
-  border: 1px solid #303a4b;
-  border-radius: 9px;
-  background: #0c1119;
-}
-
-.orchestration-mode-options button {
-  min-height: 30px;
-  padding: 5px 10px;
-  border-color: transparent;
-  background: transparent;
-}
-
-.orchestration-mode-options button[aria-pressed="true"] {
-  border-color: #4d6793;
-  color: #e6edff;
-  background: #202c43;
-}
-
-.orchestration-panel > p {
-  grid-column: 1 / -1;
-  margin: 0;
-}
-
 .agent-card {
   display: grid;
   gap: 10px;
@@ -991,12 +940,10 @@ input {
   display: grid;
   grid-template-areas:
     "header"
-    "tabs"
     "content"
-    "quick-actions"
     "session-tools"
     "composer";
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
@@ -1181,150 +1128,6 @@ input {
   .session-menu {
     display: block;
   }
-}
-
-.view-tabs {
-  grid-area: tabs;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  padding: 8px 10px;
-  background: #10141c;
-  border-bottom: 1px solid #252a35;
-}
-
-.view-tabs button {
-  min-height: 38px;
-  background: #151a23;
-}
-
-.view-tabs button.active {
-  border-color: #5b7cfa;
-  background: #23305e;
-  color: #ffffff;
-}
-
-.app-server-session .view-tabs {
-  display: none;
-  gap: 5px;
-  padding: 5px 8px;
-}
-
-.app-server-session .view-tabs button {
-  min-height: 34px;
-}
-
-.terminal-view {
-  position: relative;
-  grid-area: content;
-  min-height: 0;
-  overflow: hidden;
-  padding: 8px;
-  background: #080a0f;
-  overscroll-behavior: contain;
-  touch-action: none;
-}
-
-.terminal-view.replaying::after {
-  position: absolute;
-  inset: 8px;
-  z-index: 5;
-  display: grid;
-  place-items: center;
-  color: #8d96a8;
-  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  content: "正在定位到最新内容…";
-  pointer-events: none;
-  background: #080a0f;
-}
-
-#terminal {
-  width: 100%;
-  height: 100%;
-  background: #080a0f;
-  overscroll-behavior: contain;
-  touch-action: none;
-}
-
-.terminal-session-preview {
-  position: absolute;
-  inset: 8px;
-  z-index: 6;
-  display: grid;
-  align-content: start;
-  gap: 0;
-  overflow: auto;
-  border: 1px solid #293443;
-  background: #080a0f;
-  color: #eef2f8;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
-
-.terminal-session-preview.hidden {
-  display: none;
-}
-
-.terminal-session-preview header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 9px 10px;
-  border-bottom: 1px solid #252a35;
-  background: #10141c;
-}
-
-.terminal-session-preview header strong {
-  color: #70d7a6;
-  font-size: 13px;
-}
-
-.terminal-session-preview header span {
-  color: #7f899a;
-  font-size: 11px;
-  text-align: right;
-}
-
-.terminal-session-preview pre {
-  min-height: 0;
-  margin: 0;
-  padding: 12px 11px;
-  overflow: auto;
-  color: #eef2f8;
-  font: 13px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.terminal-session-preview button {
-  justify-self: start;
-  min-height: 36px;
-  margin: 0 11px 12px;
-  color: #aeb9ca;
-  font-size: 12px;
-}
-
-#terminal .xterm,
-#terminal .xterm-screen,
-#terminal .xterm-viewport,
-#terminal .xterm-helpers,
-#terminal .xterm-scroll-area,
-#terminal .xterm-rows,
-#terminal .xterm-accessibility,
-#terminal .xterm-message {
-  height: 100%;
-  background: #080a0f !important;
-  overscroll-behavior: contain;
-  touch-action: none;
-}
-
-#terminal canvas {
-  background: #080a0f !important;
-}
-
-#terminal .xterm-viewport {
-  overflow-y: auto !important;
-  -webkit-overflow-scrolling: touch;
 }
 
 .app-server-view {
@@ -2115,51 +1918,6 @@ input {
   user-select: text;
 }
 
-.text-view {
-  grid-area: content;
-  display: grid;
-  min-height: 0;
-  padding: 8px;
-  background: #080a0f;
-}
-
-#terminal-text {
-  width: 100%;
-  min-height: 0;
-  resize: none;
-  padding: 10px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 16px;
-  line-height: 1.45;
-  -webkit-user-select: text;
-  user-select: text;
-}
-
-.quick-actions {
-  grid-area: quick-actions;
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  overscroll-behavior-x: contain;
-  padding: 8px 10px;
-  border-top: 1px solid #252a35;
-  border-bottom: 1px solid #252a35;
-}
-
-.quick-actions button {
-  white-space: nowrap;
-}
-
-.app-server-session .quick-actions {
-  display: none;
-}
-
 .app-session-tools {
   grid-area: session-tools;
   display: none;
@@ -2362,18 +2120,6 @@ input {
     position: absolute;
     right: 0;
     bottom: calc(100% + 8px);
-  }
-
-  .orchestration-panel {
-    grid-template-columns: 1fr;
-  }
-
-  .orchestration-mode-options {
-    width: 100%;
-  }
-
-  .orchestration-mode-options button {
-    flex: 1;
   }
 }
 
@@ -4060,36 +3806,6 @@ input {
   font-size: 11px;
 }
 
-.session-switcher-host-tabs {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 3px;
-  margin: 0 9px 5px;
-  padding: 3px;
-  border: 1px solid #252d39;
-  border-radius: 8px;
-  background: #090c11;
-}
-
-.session-switcher-host-tabs button {
-  min-width: 0;
-  min-height: 28px;
-  padding: 3px 4px;
-  overflow: hidden;
-  border-color: transparent;
-  color: #738096;
-  background: transparent;
-  font-size: 9px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-switcher-host-tabs button.active {
-  border-color: #354153;
-  color: #dce3ed;
-  background: #202936;
-}
-
 .session-switcher-list {
   flex: 1;
   min-height: 0;
@@ -4284,9 +4000,7 @@ input {
     margin: 0 0 0 72px;
     grid-template-areas:
       "switcher header"
-      "switcher tabs"
       "switcher content"
-      "switcher quick-actions"
       "switcher session-tools"
       "switcher composer";
     grid-template-columns: 220px minmax(0, 1fr);
@@ -4295,9 +4009,7 @@ input {
   .session-screen.session-switcher-collapsed {
     grid-template-areas:
       "header"
-      "tabs"
       "content"
-      "quick-actions"
       "session-tools"
       "composer";
     grid-template-columns: minmax(0, 1fr);

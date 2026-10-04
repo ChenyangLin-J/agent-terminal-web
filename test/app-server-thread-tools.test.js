@@ -15,7 +15,7 @@ test("Agent Web exposes native search, persistent names, branching, subagent nav
   assert.match(client, /"thread\/searchOccurrences"/);
   assert.match(client, /"thread\/fork"/);
   assert.match(client, /"thread\/list"/);
-  assert.match(server, /setPersistedThreadName\(id, title, agentHost\)/);
+  assert.match(server, /setPersistedThreadName\(id, title\)/);
   assert.match(server, /nativeThreadSessionMeta/);
   assert.match(server, /message\.type === "edit-and-fork"/);
   assert.match(server, /beforeTurnId/);
@@ -41,7 +41,7 @@ test("Agent Web exposes native search, persistent names, branching, subagent nav
   assert.match(app, /edit\.textContent = "编辑"/);
   assert.match(app, /fork\.textContent = "分支"/);
   assert.match(app, /原 Session 已归档/);
-  assert.match(server, /await setSessionArchived\(sourceThreadId, true, agentHost\);[\s\S]*sourceArchived = true/);
+  assert.match(server, /await setSessionArchived\(sourceThreadId, true\);[\s\S]*sourceArchived = true/);
   assert.match(server, /sourceArchived,[\s\S]*deliveryMode/);
   assert.match(app, /function beginCurrentSessionRename\(\)/);
   assert.match(app, /function saveCurrentSessionRename\(\)/);
@@ -52,7 +52,7 @@ test("Agent Web exposes native search, persistent names, branching, subagent nav
   assert.match(app, /sessionId: agent\.id,[\s\S]{0,300}sourceSession: activeSessionId/);
   assert.match(app, /sessionId: item\.agentThreadId,[\s\S]{0,300}sourceSession: activeSessionId/);
   assert.match(app, /sourceSession\.searchParams|previewPath\.searchParams\.set\("sourceSession"/);
-  assert.match(app, /function normalizeSessionNavigation[\s\S]*sourceSession,[\s\S]*preview: sourceSession \|\| host === "personal"/);
+  assert.match(app, /function normalizeSessionNavigation[\s\S]*sourceSession,[\s\S]*preview: "1"/);
   assert.match(app, /"打开主 Agent"/);
   assert.match(server, /function readLiveSessionPreview/);
   assert.match(server, /sourceSession\.appServer\.listThreadTurns/);

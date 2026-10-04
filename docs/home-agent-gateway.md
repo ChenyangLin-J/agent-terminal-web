@@ -62,10 +62,15 @@ reconcile a result through its own endpoint using the original request ID.
 Validation uses an isolated state/workspace, fake App Server protocol and no
 production credentials. It covers admission, idempotency, restart recovery,
 source authors/timestamps and a complete opening-to-Home-reply flow while one
-shared App Server remains alive. The fixture tests do not activate production. Home was subsequently reloaded
-and the shared gateway token is configured in the private environment file;
-Agent Web still needs an external restart with no active Turns to load this
-code and token. That restart is never performed by an Agent Web Session.
+shared App Server remains alive. The fixture tests do not activate production. Both services now load the shared
+gateway token from the private environment file. Home was reloaded at 22:17
+and Agent Web was restarted externally at 22:25 on 2026-10-04 (Asia/Shanghai);
+the authenticated Home session gateway returns 200. Real activity reads return
+bounded personal conversations with no failed reads in the checked page.
+Native generation and follow-up acceptance remain pending: real Home context
+exposed an overlong prompt, whose complete input budget is corrected in Home and awaiting its reload.
+Agent Web itself does not need another restart for that Home fix. An Agent Web
+Session never restarts the Agent service.
 
 Home conversation responses for opening threads replace their initial machine
 prompt and JSON with the natural opening text. Session titles use the opening's

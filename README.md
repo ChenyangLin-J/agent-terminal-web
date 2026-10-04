@@ -42,6 +42,12 @@ The production route is reverse proxied by Caddy. Authentication is delegated to
 - App Server 模式下，命令或文件操作需要确认时会显示允许一次、本次会话允许、拒绝三个快捷操作。
 - Start 页和 App Server 会话工具栏提供“记忆”入口；也可输入 `/memories`。
 
+## Home gateway
+
+Home can read and continue these conversations through a token-protected direct
+loopback adapter. Configuration, thread identity, retries, and pagination are
+documented in [`docs/home-agent-gateway.md`](docs/home-agent-gateway.md).
+
 ## Memory
 
 Agent Web 使用轻量的本地 Markdown 记忆与审核层；不使用向量数据库或知识图谱。入口包含三个视图：

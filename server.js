@@ -35,6 +35,7 @@ import { readProjectRuleDocuments } from "./lib/project-rule-documents.js";
 import { orderKnowledgeChanges } from "./lib/knowledge-change-order.js";
 import { memoryCitationFromToolItem } from "./lib/memory-access-citations.js";
 import { createPersonalMemoryScheduler } from "./lib/personal-memory-scheduler.js";
+import { registerPersonalAgentGateway } from "./lib/personal-agent-gateway.js";
 import { loadMemorySystemLibrary } from "./lib/memory-system-library.js";
 const { readKnowledgeChanges } = await loadMemorySystemLibrary("change-ledger.js");
 const { resolveKnowledgeChange } = await loadMemorySystemLibrary("knowledge-actions.js");
@@ -136,7 +137,13 @@ const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 30 * 60 * 1000);
 const AUTH_VERIFY_URL = process.env.PRIVATE_AUTH_VERIFY_URL || "http://127.0.0.1:3060/api/verify";
 const AUTH_LOGIN_URL = process.env.PRIVATE_AUTH_LOGIN_URL || "https://auth.chenyanglin.com/login";
 const AUTH_LOGOUT_URL = process.env.PRIVATE_AUTH_LOGOUT_URL || "https://auth.chenyanglin.com/logout";
-const CODEX_HOME = process.env.CODEX_HOME || path.join(process.env.HOME, ".codex");
+// Tests and development harnesses can isolate Agent-owned state without
+// repurposing HOME or CODEX_HOME (which may belong to a real Codex user).
+const AGENT_STATE_ROOT = String(process.env.AGENT_STATE_ROOT || "").trim();
+const CODEX_HOME = process.env.AGENT_CODEX_STATE_ROOT ||
+  (AGENT_STATE_ROOT ? path.join(path.resolve(AGENT_STATE_ROOT), "codex") : "") ||
+  process.env.CODEX_HOME ||
+  path.join(process.env.HOME, ".codex");
 const CODEX_UPDATE_NOTICES_FILE = path.resolve(
   process.env.CODEX_UPDATE_NOTICES_FILE ||
     path.join(path.dirname(CODEX_HOME), ".local", "state", "codex-update-monitor", "notices.json"),
@@ -146,6 +153,7 @@ const CODEX_ARCHIVED_SESSIONS_ROOT = path.join(CODEX_HOME, "archived_sessions");
 const CODEX_SESSION_TITLES_FILE = path.join(CODEX_HOME, "session-titles.json");
 const CODEX_SESSION_ARCHIVE_FILE = path.join(CODEX_HOME, "session-archive.json");
 const AGENT_WEB_SESSIONS_FILE = path.join(CODEX_HOME, "agent-web-sessions.json");
+const HOME_AGENT_TURN_REQUESTS_FILE = path.join(CODEX_HOME, "home-agent-turn-requests.json");
 const AGENT_SESSION_SETTINGS_FILE = path.join(CODEX_HOME, "agent-session-settings.json");
 const MEDIA_SESSION_AUTO_ARCHIVE_FILE = path.join(CODEX_HOME, "agent-session-auto-archive.json");
 const MEDIA_SESSION_AUTO_ARCHIVE_CHECK_MS = positiveDuration(
@@ -233,6 +241,7 @@ const THREAD_CATALOG_CACHE_MS = Math.max(
 const CONTROL_EVENT_HEARTBEAT_MS = 25_000;
 const HOME_PUSH_URL = process.env.HOME_PUSH_URL || "http://127.0.0.1:3050/internal/push";
 const HOME_PUSH_SUBSCRIBE_URL = process.env.HOME_PUSH_SUBSCRIBE_URL || `${HOME_PUSH_URL}/subscriptions`;
+const HOME_AGENT_GATEWAY_TOKEN = String(process.env.HOME_AGENT_GATEWAY_TOKEN || "").trim();
 const HOME_VAPID_PUBLIC_KEY = process.env.HOME_VAPID_PUBLIC_KEY || "";
 const APP_SERVER_TRANSPORT = "app-server";
 const APP_SERVER_RELEASE_REASON_DETACHED_TTL = "detached-ttl";
@@ -269,6 +278,9 @@ server.prependListener("upgrade", (req) => {
   logAgentEvent("ws-upgrade-received", req.agentWebUpgradeLogFields);
 });
 const sessions = new Map();
+const homeTurnRequests = loadHomeTurnRequests();
+const homeTurnInflightRequests = new Map();
+const homeTurnAdmissions = new Map();
 const mediaSessionAutoArchive = new MediaSessionAutoArchiveStore(MEDIA_SESSION_AUTO_ARCHIVE_FILE, {
   idleMs: positiveDuration(process.env.AGENT_MEDIA_SESSION_AUTO_ARCHIVE_IDLE_MS, MEDIA_SESSION_AUTO_ARCHIVE_IDLE_MS),
 });
@@ -1126,6 +1138,235 @@ app.post("/api/client-events", (req, res) => {
   res.json({ ok: true });
 });
 
+// This narrow API is only for Home's server-side gateway.  It deliberately
+// does not authenticate a browser itself: Home already does that and injects
+// the shared token over a direct loopback request.  Keep it separate from the
+// public Agent APIs so it cannot become a generic proxy into this process.
+app.use("/api/home/agent", (req, res, next) => {
+  if (!HOME_AGENT_GATEWAY_TOKEN) {
+    res.status(503).json({ error: "Home Agent gateway is not configured." });
+    return;
+  }
+  if (!isHomeAgentGatewayRequest(req)) {
+    res.sendStatus(404);
+    return;
+  }
+  res.set("Cache-Control", "private, no-store");
+  next();
+});
+
+const personalAgentGateway = registerPersonalAgentGateway(app, {
+  statePath: path.join(CODEX_HOME, "home-personal-agent-openings.json"),
+  cwd: path.join(WORKSPACE_ROOT, ".personal-agent-runtime"),
+  createClient: async ({ cwd }) => {
+    await fs.mkdir(cwd, { recursive: true, mode: 0o700 });
+    return createAgentAppServerClient(cwd, `home-opening-${cryptoRandomId()}`);
+  },
+  listSessions: () => listCodexSessions({ archived: false }),
+  readTurnPage: (threadId, options) => withSharedAppServer((client) => client.listThreadTurns({ threadId, ...options })),
+  isInteractiveBusy: () => [...sessions.values()].some((session) => session.turnState?.active || session.appServer?.activeTurnId),
+});
+
+app.get("/api/home/agent/sessions", async (_req, res) => {
+  try {
+    const sessionsForHome = await listCodexSessions({ archived: false });
+    const liveByThread = liveHomeSessionsByThread();
+    const catalogIds = new Set(sessionsForHome.map((entry) => entry.id));
+    const liveOnly = [...liveByThread.entries()]
+      .filter(([threadId]) => !catalogIds.has(threadId))
+      .map(([threadId, session]) => publicHomeSession({ id: threadId, title: session.title, project: session.project }, session));
+    res.json({
+      sessions: [
+        ...sessionsForHome.map((entry) => publicHomeSession(entry, liveByThread.get(entry.id))).filter(Boolean),
+        ...liveOnly.filter(Boolean),
+      ],
+    });
+  } catch (error) {
+    res.status(503).json({ error: `Agent sessions are unavailable: ${error.message}` });
+  }
+});
+
+app.get("/api/home/agent/conversation", async (req, res) => {
+  const threadId = String(req.query.sessionId || "").trim();
+  const attachId = String(req.query.attach || "").trim();
+  const cursor = String(req.query.cursor || "").trim();
+  if (!isValidSessionId(threadId)) {
+    res.status(400).json({ error: "A valid sessionId is required." });
+    return;
+  }
+  if (cursor.length > 512) {
+    res.status(400).json({ error: "Invalid conversation cursor." });
+    return;
+  }
+
+  const live = resolveHomeLiveSession(threadId, attachId);
+  if (attachId && !live) {
+    res.status(409).json({ error: "The requested live Session does not match this conversation." });
+    return;
+  }
+  try {
+    const conversation = personalAgentGateway.presentConversation(threadId, live
+      ? await homeConversationFromLiveSession(live, cursor || null)
+      : await homeConversationFromStoredThread(threadId, cursor || null));
+    const catalog = await homeSessionCatalogEntry(threadId);
+    res.json({
+      session: publicHomeSession(catalog || { id: threadId, title: live?.title, project: live?.project }, live),
+      messages: conversation.messages,
+      hasEarlier: conversation.hasEarlier,
+      nextCursor: conversation.nextCursor,
+      turn: live ? publicTurnState(live.turnState) : homeIdleTurnState(conversation.turn),
+      pendingApproval: live ? homePendingApproval(live) : null,
+      agentHref: homeAgentHref(threadId, live),
+    });
+  } catch (error) {
+    res.status(502).json({ error: `Conversation is unavailable: ${error.message}` });
+  }
+});
+
+app.post("/api/home/agent/turns", async (req, res) => {
+  const threadId = String(req.body?.sessionId || "").trim();
+  const attachId = String(req.body?.attach || "").trim();
+  const requestId = cleanHomeTurnRequestId(req.body?.requestId);
+  const text = cleanHomeTurnText(req.body?.text);
+  if (!requestId || !text) {
+    res.status(400).json({ error: "A valid requestId and non-empty text are required." });
+    return;
+  }
+  if (threadId && !isValidSessionId(threadId)) {
+    res.status(400).json({ error: "Invalid sessionId." });
+    return;
+  }
+  if (attachId && !isValidWebSessionId(attachId)) {
+    res.status(400).json({ error: "Invalid attach id." });
+    return;
+  }
+
+  const fingerprint = JSON.stringify({ threadId, attachId, text });
+  const existing = homeTurnRequests.get(requestId);
+  if (existing) {
+    if (existing.fingerprint !== fingerprint) {
+      res.status(409).json({ error: "This requestId was already used for another turn." });
+      return;
+    }
+    if (existing.status === 202) {
+      res.status(existing.status).json(homeTurnRequestResponse(existing));
+      return;
+    }
+  }
+
+  const inflight = homeTurnInflightRequests.get(requestId);
+  if (inflight) {
+    if (inflight.fingerprint !== fingerprint) {
+      res.status(409).json({ error: "This requestId is already being used for another turn." });
+      return;
+    }
+    const outcome = await inflight.promise;
+    res.status(outcome.status).json(outcome.payload);
+    return;
+  }
+
+  if (existing) {
+    res.status(409).json({ error: "This requestId has an unfinished submission state. Open Agent to verify it before sending another turn." });
+    return;
+  }
+
+  const pending = {
+    fingerprint,
+    status: "pending",
+    payload: { requestId, session: { id: threadId, webSessionId: attachId } },
+    acceptedAt: new Date().toISOString(),
+  };
+  homeTurnRequests.set(requestId, pending);
+  if (!writeHomeTurnRequests(homeTurnRequests)) {
+    homeTurnRequests.delete(requestId);
+    res.status(503).json({ error: "Unable to reserve this turn request safely. Retry with the same requestId." });
+    return;
+  }
+
+  const promise = admitHomeTurn({ threadId, attachId, requestId, text, fingerprint })
+    .then((payload) => ({ status: 202, payload }))
+    .catch((error) => ({
+      status: Number(error.homeGatewayStatus) || 502,
+      payload: { error: error.message || "The Agent turn was not accepted." },
+    }));
+  homeTurnInflightRequests.set(requestId, { fingerprint, promise });
+  try {
+    const outcome = await promise;
+    res.status(outcome.status).json(outcome.payload);
+  } finally {
+    if (homeTurnInflightRequests.get(requestId)?.promise === promise) {
+      homeTurnInflightRequests.delete(requestId);
+    }
+  }
+});
+
+async function admitHomeTurn({ threadId, attachId, requestId, text, fingerprint }) {
+  let session = resolveHomeLiveSession(threadId, attachId);
+  if (attachId && !session) {
+    releaseHomeTurnReservation(requestId, fingerprint);
+    throw homeGatewayError(409, "The requested live Session does not match this conversation.");
+  }
+  const admissionKey = homeTurnAdmissionKey(threadId, attachId, session, requestId);
+  if (homeTurnAdmissions.has(admissionKey)) {
+    releaseHomeTurnReservation(requestId, fingerprint);
+    throw homeGatewayError(409, "This Agent Session is already admitting another turn.");
+  }
+  homeTurnAdmissions.set(admissionKey, requestId);
+  let attemptedUpstreamSubmission = false;
+  let homeSubmissionSession = null;
+  try {
+    if (!session && threadId) session = findReusableSession({ sessionId: threadId });
+    if (!session) session = createHomeAppServerSession(threadId, await homeCwdForThread(threadId));
+    await waitForHomeSessionReady(session);
+    if (threadId && session.sessionId !== threadId) {
+      throw homeGatewayError(409, "The resumed Session is bound to another conversation.");
+    }
+    if (session.turnState?.active || session.appServer?.activeTurnId) {
+      throw homeGatewayError(409, "This Agent Session is busy. Wait for its current turn before sending another message.");
+    }
+    session.homeTurnSubmissionAdmission = true;
+    homeSubmissionSession = session;
+    if (!session.title) session.title = cleanTitle(text) || "New Codex session";
+    const prompt = prepareSessionPrompt(session, text);
+    attemptedUpstreamSubmission = true;
+    const submission = await submitAppServerPrompt(session, prompt.text, "auto", [], [], text, {
+      homeAdmission: true,
+      rejectIfBusy: true,
+    });
+    session.lastActivityAt = new Date().toISOString();
+    persistRestorableWebSession(session);
+    broadcast(session, "status", publicSession(session));
+    const payload = {
+      accepted: true,
+      requestId,
+      session: publicHomeSession({ id: session.sessionId, title: session.title, project: session.project }, session),
+      turn: publicTurnState(session.turnState),
+      deliveryMode: submission.deliveryMode,
+    };
+    if (!rememberHomeTurnRequest(requestId, fingerprint, 202, payload)) {
+      homeTurnRequests.set(requestId, {
+        fingerprint,
+        status: "pending",
+        payload: { requestId, session: payload.session },
+        acceptedAt: new Date().toISOString(),
+      });
+      throw homeGatewayError(409, "The turn may have started, but its idempotency record could not be confirmed. Open Agent to verify it.");
+    }
+    invalidateThreadCatalog();
+    return payload;
+  } catch (error) {
+    if ((!attemptedUpstreamSubmission || error.homeTurnNotSubmitted) && !releaseHomeTurnReservation(requestId, fingerprint)) {
+      throw homeGatewayError(409, "This turn was not submitted, but its retry reservation could not be released safely. Open Agent to verify it.");
+    }
+    throw error;
+  } finally {
+    if (homeSubmissionSession) homeSubmissionSession.homeTurnSubmissionAdmission = false;
+    if (homeTurnAdmissions.get(admissionKey) === requestId) {
+      homeTurnAdmissions.delete(admissionKey);
+    }
+  }
+}
+
 app.get("/api/sessions", (_req, res) => {
   const favoriteSessionIds = favoriteSessionIdsForHost();
   const liveSessions = [...sessions.values()]
@@ -1924,11 +2165,23 @@ async function registerAgentPushSubscription(subscription, deviceId) {
 }
 
 async function requireAuth(req, res, next) {
+  if (req.path.startsWith("/home/agent")) {
+    next();
+    return;
+  }
   if (await isAuthenticated(req)) {
     next();
     return;
   }
   res.status(401).json({ error: "Not authenticated." });
+}
+
+function isHomeAgentGatewayRequest(req) {
+  return Boolean(
+    HOME_AGENT_GATEWAY_TOKEN &&
+      isDirectLoopbackRequest(req) &&
+      req.get("x-home-agent-gateway-token") === HOME_AGENT_GATEWAY_TOKEN,
+  );
 }
 
 function applyPublicShareHeaders(res) {
@@ -2075,6 +2328,7 @@ function codexEnvironmentForWeb(sessionId, extra = {}) {
     ...process.env,
     ...extra,
     PATH: [CODEX_GUARD_BIN, process.env.PATH].filter(Boolean).join(path.delimiter),
+    CODEX_HOME,
     AGENT_WEB_SESSION_ID: sessionId,
     AGENT_WEB_PROTECTED_SERVICE: "agent-terminal-web.service",
   };
@@ -2459,6 +2713,262 @@ function findReusableSession(launch) {
         return new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime();
       })[0] || null
   );
+}
+
+function liveHomeSessionsByThread() {
+  const byThread = new Map();
+  for (const session of sessions.values()) {
+    if (session.exited || !isValidSessionId(session.sessionId)) continue;
+    const current = byThread.get(session.sessionId);
+    if (!current || preferHomeLiveSession(session, current)) byThread.set(session.sessionId, session);
+  }
+  return byThread;
+}
+
+function preferHomeLiveSession(candidate, current) {
+  const candidateActive = Boolean(candidate.turnState?.active || candidate.appServer?.activeTurnId);
+  const currentActive = Boolean(current.turnState?.active || current.appServer?.activeTurnId);
+  if (candidateActive !== currentActive) return candidateActive;
+  return Date.parse(candidate.lastActivityAt || 0) > Date.parse(current.lastActivityAt || 0);
+}
+
+function resolveHomeLiveSession(threadId, attachId) {
+  if (attachId) {
+    const session = sessions.get(attachId);
+    return session && !session.exited && (!threadId || session.sessionId === threadId) ? session : null;
+  }
+  return threadId ? liveHomeSessionsByThread().get(threadId) || null : null;
+}
+
+function createHomeAppServerSession(threadId, cwd = resolveWorkspacePath(".")) {
+  if (!cwd) throw homeGatewayError(500, "The Agent workspace is unavailable.");
+  const launch = {
+    mode: threadId ? "resume-id" : "new",
+    transport: APP_SERVER_TRANSPORT,
+    access: threadId ? savedAgentSessionAccess(threadId) || FULL_ACCESS_MODE : FULL_ACCESS_MODE,
+    sessionId: threadId || "",
+    args: ["app-server"],
+    title: "",
+    purpose: "",
+  };
+  return createAppServerSession(cwd, launch);
+}
+
+async function homeCwdForThread(threadId) {
+  if (!threadId) return resolveWorkspacePath(".");
+  const catalog = await homeSessionCatalogEntry(threadId);
+  let candidate = String(catalog?.cwd || "").trim();
+  if (!candidate) {
+    const thread = await withSharedAppServer((client) => client.readThread({ threadId, includeTurns: false }));
+    candidate = String(thread?.cwd || "").trim();
+  }
+  if (!candidate) throw homeGatewayError(409, "This conversation has no recoverable workspace directory. Open it in Agent.");
+  const cwd = path.isAbsolute(candidate) ? persistedWorkspacePath(candidate) : resolveWorkspacePath(candidate);
+  if (!cwd) throw homeGatewayError(409, "This conversation's workspace directory is unavailable. Open it in Agent.");
+  return cwd;
+}
+
+async function waitForHomeSessionReady(session, timeoutMs = 12_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (session.ready && !session.exited) return;
+    if (session.exited) throw homeGatewayError(502, "The Agent Session could not be started.");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw homeGatewayError(504, "The Agent Session is still starting. Retry with the same requestId.");
+}
+
+async function homeSessionCatalogEntry(threadId) {
+  const entries = await listCodexSessions({ archived: false });
+  return entries.find((entry) => entry.id === threadId) || null;
+}
+
+function publicHomeSession(entry, live) {
+  const id = String(entry?.id || live?.sessionId || "");
+  if (!isValidSessionId(id)) return null;
+  const source = live ? publicSession(live) : null;
+  return {
+    id,
+    webSessionId: source?.id || "",
+    title: personalAgentGateway.sessionTitle(id) || String(source?.title || entry?.title || "New Codex session"),
+    project: String(source?.project || entry?.project || "."),
+    status: source?.turnState?.active ? "running" : source?.ready === false ? "starting" : source ? "waiting" : "closed",
+    updatedAt: String(source?.lastActivityAt || entry?.updatedAt || ""),
+    access: String(source?.access || entry?.access || FULL_ACCESS_MODE),
+    runtimeKernel: String(source?.runtimeKernel || ""),
+  };
+}
+
+async function homeConversationFromLiveSession(session, cursor = null) {
+  const page = await session.appServer.listThreadTurns({
+    threadId: session.sessionId,
+    limit: APP_INITIAL_TURN_LIMIT,
+    cursor,
+    sortDirection: "desc",
+    itemsView: "full",
+  });
+  return homeConversationFromTurnPage(page);
+}
+
+async function homeConversationFromStoredThread(threadId, cursor = null) {
+  const page = await withSharedAppServer((client) => client.listThreadTurns({
+    threadId,
+    limit: APP_INITIAL_TURN_LIMIT,
+    cursor,
+    sortDirection: "desc",
+    itemsView: "full",
+  }));
+  return homeConversationFromTurnPage(page);
+}
+
+function homeConversationFromTurnPage(page) {
+  const turns = Array.isArray(page?.data) ? [...page.data] : [];
+  turns.sort((left, right) => Number(left?.startedAt || 0) - Number(right?.startedAt || 0));
+  const messages = [];
+  for (const turn of turns) {
+    const turnId = String(turn?.id || "");
+    let index = 0;
+    for (const item of Array.isArray(turn?.items) ? turn.items : []) {
+      if (item?.type === "userMessage") {
+        const text = appServerUserMessageContent({ submittedAttachmentMetadata: new Map() }, item.content).text;
+        if (text) messages.push({ id: `${turnId}:user:${index++}`, role: "user", text, turnId });
+      } else if (item?.type === "agentMessage" && ["commentary", "final_answer"].includes(String(item.phase || ""))) {
+        const text = trimAppTranscriptValue(item.text, MAX_APP_TRANSCRIPT_TEXT);
+        if (text) messages.push({
+          id: `${turnId}:assistant:${index++}`,
+          role: "assistant",
+          text,
+          turnId,
+          phase: agentMessageDisplayPhase(item),
+          questions: normalizeAsyncTranscriptQuestions(item.questions),
+          completedAt: item.completedAt || turn.completedAt || null,
+        });
+      }
+    }
+  }
+  return {
+    messages,
+    turn: turns.at(-1) || null,
+    hasEarlier: Boolean(page?.nextCursor),
+    nextCursor: page?.nextCursor || null,
+  };
+}
+
+function homeIdleTurnState(turn) {
+  const status = String(turn?.status || "").toLowerCase();
+  return {
+    active: ["inprogress", "active", "running", "pending"].includes(status),
+    stopping: false,
+    interrupted: ["interrupted", "cancelled", "canceled"].includes(status),
+    interruptedAt: "",
+    turnId: String(turn?.id || ""),
+    lastCompletedTurnId: status === "completed" ? String(turn?.id || "") : "",
+    lastStoppedTurnId: "",
+    requirements: [],
+    queuedTurns: [],
+  };
+}
+
+function homePendingApproval(session) {
+  const request = session.pendingServerRequests.values().next().value;
+  return request ? publicAppServerRequest(request) : null;
+}
+
+function homeAgentHref(threadId, live) {
+  const query = new URLSearchParams({ sessionId: threadId, cwd: live?.project || "." });
+  if (live?.id) query.set("attach", live.id);
+  return `/?${query}`;
+}
+
+function cleanHomeTurnRequestId(value) {
+  const id = String(value || "").trim();
+  return /^[A-Za-z0-9_-]{8,160}$/.test(id) ? id : "";
+}
+
+function cleanHomeTurnText(value) {
+  return String(value || "").replace(/\u0000/g, "").trim().slice(0, 100_000);
+}
+
+function homeTurnAdmissionKey(threadId, attachId, session, requestId) {
+  const durableThreadId = String(threadId || session?.sessionId || "");
+  if (isValidSessionId(durableThreadId)) return `thread:${durableThreadId}`;
+  const webSessionId = String(attachId || session?.id || "");
+  if (isValidWebSessionId(webSessionId)) return `web:${webSessionId}`;
+  // A brand-new conversation has no shared identity yet. Its requestId is
+  // already in the in-flight map before initialization can yield.
+  return `new:${requestId}`;
+}
+
+function rememberHomeTurnRequest(requestId, fingerprint, status, payload) {
+  homeTurnRequests.set(requestId, {
+    fingerprint,
+    status,
+    payload,
+    acceptedAt: new Date().toISOString(),
+  });
+  while (homeTurnRequests.size > 200) homeTurnRequests.delete(homeTurnRequests.keys().next().value);
+  return writeHomeTurnRequests(homeTurnRequests);
+}
+
+function releaseHomeTurnReservation(requestId, fingerprint) {
+  const current = homeTurnRequests.get(requestId);
+  if (!current || current.fingerprint !== fingerprint || current.status !== "pending") return true;
+  homeTurnRequests.delete(requestId);
+  if (writeHomeTurnRequests(homeTurnRequests)) return true;
+  homeTurnRequests.set(requestId, current);
+  return false;
+}
+
+function homeTurnRequestResponse(entry) {
+  const payload = entry?.payload && typeof entry.payload === "object" ? entry.payload : {};
+  const threadId = String(payload.session?.id || "");
+  const live = isValidSessionId(threadId) ? resolveHomeLiveSession(threadId, "") : null;
+  if (!live) return payload;
+  return {
+    ...payload,
+    session: publicHomeSession({ id: threadId, title: payload.session?.title, project: payload.session?.project }, live),
+    turn: publicTurnState(live.turnState),
+  };
+}
+
+function loadHomeTurnRequests() {
+  try {
+    const parsed = JSON.parse(fsSync.readFileSync(HOME_AGENT_TURN_REQUESTS_FILE, "utf8"));
+    const now = Date.now();
+    const entries = Object.entries(parsed && typeof parsed === "object" ? parsed : [])
+      .filter(([requestId, entry]) =>
+        cleanHomeTurnRequestId(requestId) === requestId &&
+        typeof entry?.fingerprint === "string" &&
+        entry.fingerprint.length <= 110_000 &&
+        [202, "pending"].includes(entry?.status) &&
+        entry?.payload && typeof entry.payload === "object" &&
+        Date.parse(entry.acceptedAt || 0) > now - 24 * 60 * 60 * 1_000,
+      )
+      .slice(-200);
+    return new Map(entries);
+  } catch {
+    return new Map();
+  }
+}
+
+function writeHomeTurnRequests(requests) {
+  try {
+    fsSync.mkdirSync(path.dirname(HOME_AGENT_TURN_REQUESTS_FILE), { recursive: true });
+    const output = Object.fromEntries([...requests.entries()].slice(-200));
+    const temporary = `${HOME_AGENT_TURN_REQUESTS_FILE}.${process.pid}.tmp`;
+    fsSync.writeFileSync(temporary, `${JSON.stringify(output, null, 2)}\n`, { mode: 0o600 });
+    fsSync.renameSync(temporary, HOME_AGENT_TURN_REQUESTS_FILE);
+    return true;
+  } catch (error) {
+    console.error(`Failed to persist Home Agent turn requests: ${error.message}`);
+    return false;
+  }
+}
+
+function homeGatewayError(status, message) {
+  const error = new Error(message);
+  error.homeGatewayStatus = status;
+  return error;
 }
 
 function restorePersistedSession(id) {
@@ -4203,6 +4713,9 @@ async function submitAppServerPrompt(
   if (!session.ready || session.exited) throw new Error("App Server is still starting or has exited.");
   const state = session.turnState;
   const appServer = session.appServer;
+  if ((session.homeTurnSubmissionAdmission || homeTurnAdmissions.has(`thread:${session.sessionId}`)) && !options.homeAdmission) {
+    throw new Error("A Home turn is being admitted for this Session. Please wait before sending another message.");
+  }
   const wantsQueue = requestedMode === "queue";
   const skills = await resolveAppServerSkills(session, skillNames);
   const activeSkills = skills.map((skill) => skill.name);
@@ -4211,6 +4724,14 @@ async function submitAppServerPrompt(
   });
   const input = (value) => [...appServerPromptInput(value, skills, attachments), ...(referenceInput ? [referenceInput] : [])];
   const personalMemory = await appServerPersonalMemory(session, requirementText);
+  if ((session.homeTurnSubmissionAdmission || homeTurnAdmissions.has(`thread:${session.sessionId}`)) && !options.homeAdmission) {
+    throw new Error("A Home turn is being admitted for this Session. Please wait before sending another message.");
+  }
+  if (options.rejectIfBusy && (state.active || appServer.activeTurnId)) {
+    const error = homeGatewayError(409, "This Agent Session became busy while this turn was being admitted.");
+    error.homeTurnNotSubmitted = true;
+    throw error;
+  }
   let lateSteer = false;
 
   if (wantsQueue && appServer.activeTurnId) {

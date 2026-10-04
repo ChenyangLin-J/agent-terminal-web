@@ -27,7 +27,7 @@ Deploy this change through the normal Agent Web process. After verification and 
 
 ## Personal openings
 
-The same protected loopback prefix now also provides a backend-only personal
+The same protected loopback prefix now also provides a personal
 opening gateway. Home owns the context and saved result; Agent Web owns the
 restricted durable thread. The Home product and API contract is in
 `home-portal/docs/personal-agent-mvp.md`.
@@ -63,3 +63,12 @@ Validation uses an isolated state/workspace, fake App Server protocol and no
 production credentials. It covers admission, idempotency, restart recovery,
 source authors/timestamps and a complete opening-to-Home-reply flow while one
 shared App Server remains alive. Neither service was deployed or restarted.
+
+Home conversation responses for opening threads replace their initial machine
+prompt and JSON with the natural opening text. Session titles use the opening's
+date and period. Actual user follow-ups stay in the same durable thread and are
+kept as activity evidence; pure generated openings do not consume the 12 real
+conversation slots. Activity checks at most 36 recent candidates, each up to
+12 turns, and continues to report partial coverage. The opening schema and
+validation accept up to 350 Unicode characters (typically 150–350 according to
+available evidence, with shorter text allowed when evidence is sparse).

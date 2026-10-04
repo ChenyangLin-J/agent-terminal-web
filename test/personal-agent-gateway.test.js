@@ -14,13 +14,13 @@ async function fixture(options = {}) {
   const app = express(); app.use(express.json());
   const clients = [];
   const createClient = options.createClient || (() => { const client = new FakeClient(); clients.push(client); return client; });
-  registerPersonalAgentGateway(app, {
+  const gateway = registerPersonalAgentGateway(app, {
     createClient, listSessions: options.listSessions || (async () => []), readTurnPage: options.readTurnPage || (async () => ({ data: [] })),
     statePath: path.join(root, "opening-ledger.json"), openingTimeoutMs: options.openingTimeoutMs || 200,
     isInteractiveBusy: options.isInteractiveBusy, backgroundThreadIds: options.backgroundThreadIds,
   });
   const server = http.createServer(app); await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return { root, clients, statePath: path.join(root, "opening-ledger.json"), url: `http://127.0.0.1:${server.address().port}`, close: async () => { await new Promise((resolve) => server.close(resolve)); await rm(root, { recursive: true, force: true }); } };
+  return { root, clients, gateway, statePath: path.join(root, "opening-ledger.json"), url: `http://127.0.0.1:${server.address().port}`, close: async () => { await new Promise((resolve) => server.close(resolve)); await rm(root, { recursive: true, force: true }); } };
 }
 async function request(fixture, pathname, method = "GET", body) { const response = await fetch(fixture.url + pathname, { method, headers: body ? { "content-type": "application/json" } : {}, body: body && JSON.stringify(body) }); return { status: response.status, body: await response.json() }; }
 async function eventually(fn) { for (let i = 0; i < 30; i += 1) { const value = await fn(); if (value) return value; await new Promise((resolve) => setTimeout(resolve, 10)); } throw new Error("Timed out"); }
@@ -54,6 +54,36 @@ test("openings are idempotent, durable, and pin the restricted App Server settin
   const changed = await request(f, "/api/home/agent/openings", "POST", { ...body, prompt: "different" });
   assert.equal(changed.status, 409);
   assert.match(await readFile(f.statePath, "utf8"), /same-id/);
+  const history = f.gateway.presentConversation('opening-thread', { messages: [
+    { id: 'machine', role: 'user', text: 'private machine context', turnId: 'opening-turn' },
+    { id: 'json', role: 'assistant', text: '{"text":"hello"}', turnId: 'opening-turn' },
+    { id: 'real', role: 'user', text: 'My own reply', turnId: 'next-turn' },
+  ], hasEarlier: false });
+  assert.deepEqual(history.messages.map(message => message.text), ['hello', 'My own reply']);
+  assert.equal(f.gateway.sessionTitle('opening-thread'), '2026-10-04 · 晨间开场');
+  assert.equal(f.gateway.sessionTitle('ordinary-thread'), '');
+});
+
+test('accepts a full 350-character opening without truncation', async t => {
+  const text = '开'.repeat(349) + '😀';
+  const f = await fixture({ createClient: () => {
+    const client = new FakeClient();
+    client.startTurn = async (_text, params) => {
+      assert.equal(params.outputSchema.properties.text.maxLength, 350);
+      setTimeout(() => {
+        client.emit('notification', { method: 'item/completed', params: { threadId: client.threadId, item: { type: 'agentMessage', phase: 'final_answer', text: JSON.stringify({ text, sourceIds: [], reason: 'grounded' }) } } });
+        client.emit('notification', { method: 'turn/completed', params: { threadId: client.threadId, turn: { id: 'opening-turn', status: 'completed' } } });
+      }, 5);
+      return { id: 'opening-turn' };
+    };
+    return client;
+  } }); t.after(f.close);
+  await request(f, '/api/home/agent/openings', 'POST', { requestId: 'full-length', prompt: 'x', date: '2026-10-04', period: 'evening' });
+  const result = await eventually(async () => {
+    const value = await request(f, '/api/home/agent/openings/full-length');
+    return value.body.status === 'completed' && value;
+  });
+  assert.equal(result.body.text, text);
 });
 
 test("interactive busy rejects new work and a restart keeps uncertain work fail closed", async (t) => {
@@ -113,7 +143,7 @@ test("invalid oversized schema output is uncertain instead of silently truncated
   const f = await fixture({ createClient: () => {
     const client = new FakeClient();
     client.startTurn = async () => { const turn = { id: "bad-output" }; setTimeout(() => {
-      client.emit("notification", { method: "item/completed", params: { threadId: client.threadId, item: { type: "agentMessage", phase: "final_answer", text: JSON.stringify({ text: "😀".repeat(301), sourceIds: [42], reason: "x" }) } } });
+      client.emit("notification", { method: "item/completed", params: { threadId: client.threadId, item: { type: "agentMessage", phase: "final_answer", text: JSON.stringify({ text: "😀".repeat(351), sourceIds: ["s1"], reason: "x" }) } } });
       client.emit("notification", { method: "turn/completed", params: { threadId: client.threadId, turn: { id: turn.id, status: "completed" } } });
     }, 5); return turn; }; return client;
   } }); t.after(f.close);
@@ -131,6 +161,25 @@ test("activity preserves user and final-answer source dates and reports partial 
   const response = await request(f, "/api/home/agent/activity?from=2026-10-04T07:00:00Z&to=2026-10-04T09:00:00Z");
   assert.equal(response.status, 200); assert.equal(response.body.coverage.status, "partial");
   assert.deepEqual(response.body.items.map((item) => [item.author, item.text, item.occurredAt]), [["assistant", "answer", "2026-10-04T08:05:00.000Z"], ["user", "question", "2026-10-04T08:00:00.000Z"]]);
+});
+
+test('pure generated openings cannot crowd real conversations out of the activity budget', async t => {
+  const f = await fixture(); t.after(f.close);
+  const records = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`job-${i}`, { requestId: `job-${i}`, status: 'completed', threadId: `generated-${i}`, turnId: `initial-${i}`, date: '2026-10-04', period: 'morning' }]));
+  await writeFile(f.statePath, JSON.stringify({ records }));
+  const app = express();
+  registerPersonalAgentGateway(app, {
+    createClient: () => { throw Error('activity must not start a client'); }, statePath: f.statePath,
+    listSessions: async () => [...Array.from({ length: 12 }, (_, i) => ({ id: `generated-${i}`, updatedAt: '2026-10-04T09:00:00Z' })), { id: 'real-thread', updatedAt: '2026-10-04T08:00:00Z' }],
+    readTurnPage: async id => ({ data: [{ id: id === 'real-thread' ? 'real-turn' : 'initial-'+id.split('-').at(-1), status: 'completed', startedAt: '2026-10-04T08:00:00Z', items: [{ type: 'userMessage', content: [{ type: 'text', text: id === 'real-thread' ? 'real user experience' : 'machine input' }] }] }] }),
+  });
+  const server = http.createServer(app); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/api/home/agent/activity?from=2026-10-04T07:00:00Z&to=2026-10-04T10:00:00Z`);
+  const result = await response.json();
+  assert.deepEqual(result.items.map(item => item.text), ['real user experience']);
+  assert.equal(result.coverage.scanned, 13); assert.equal(result.coverage.selected, 1);
+  assert.equal(result.coverage.candidateLimit, 36);
 });
 
 test("activity retains user input from failed turns and uses a half-open date range", async (t) => {

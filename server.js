@@ -1150,7 +1150,7 @@ app.use("/api/home/agent", (req, res, next) => {
   next();
 });
 
-registerPersonalAgentGateway(app, {
+const personalAgentGateway = registerPersonalAgentGateway(app, {
   statePath: path.join(CODEX_HOME, "home-personal-agent-openings.json"),
   cwd: path.join(WORKSPACE_ROOT, ".personal-agent-runtime"),
   createClient: async ({ cwd }) => {
@@ -1200,9 +1200,9 @@ app.get("/api/home/agent/conversation", async (req, res) => {
     return;
   }
   try {
-    const conversation = live
+    const conversation = personalAgentGateway.presentConversation(threadId, live
       ? await homeConversationFromLiveSession(live, cursor || null)
-      : await homeConversationFromStoredThread(threadId, cursor || null);
+      : await homeConversationFromStoredThread(threadId, cursor || null));
     const catalog = await homeSessionCatalogEntry(threadId);
     res.json({
       session: publicHomeSession(catalog || { id: threadId, title: live?.title, project: live?.project }, live),
@@ -2734,7 +2734,7 @@ function publicHomeSession(entry, live) {
   return {
     id,
     webSessionId: source?.id || "",
-    title: String(source?.title || entry?.title || "New Codex session"),
+    title: personalAgentGateway.sessionTitle(id) || String(source?.title || entry?.title || "New Codex session"),
     project: String(source?.project || entry?.project || "."),
     status: source?.turnState?.active ? "running" : source?.ready === false ? "starting" : source ? "waiting" : "closed",
     updatedAt: String(source?.lastActivityAt || entry?.updatedAt || ""),

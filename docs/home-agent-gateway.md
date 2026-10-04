@@ -68,7 +68,10 @@ and Agent Web was restarted externally at 22:25 on 2026-10-04 (Asia/Shanghai);
 the authenticated Home session gateway returns 200. Real activity reads return
 bounded personal conversations with no failed reads in the checked page.
 Native generation and follow-up acceptance remain pending: real Home context
-exposed an overlong prompt, whose complete input budget is corrected in Home and awaiting its reload.
+exposed an overlong prompt, whose complete input budget is corrected and deployed in Home as of 22:40.
+A one-off live check now waits for all interactive Turns to finish before
+submitting generation; it does not bypass interactive admission or restart
+either production service.
 Agent Web itself does not need another restart for that Home fix. An Agent Web
 Session never restarts the Agent service.
 

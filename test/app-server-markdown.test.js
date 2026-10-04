@@ -5,14 +5,9 @@ import test from "node:test";
 import { chromium } from "playwright";
 
 test("App Server final answers render safe Markdown links", async (t) => {
-  const [pageSource, appSource, serverSource] = await Promise.all([
-    readFile(new URL("../public/index.html", import.meta.url), "utf8"),
-    readFile(new URL("../public/app.js", import.meta.url), "utf8"),
-    readFile(new URL("../server.js", import.meta.url), "utf8"),
-  ]);
-  assert.match(pageSource, /markdown-it\.min\.js\?v=14\.3\.0[\s\S]*app-markdown\.js\?v=20260825-mobile-files-1[\s\S]*app\.js\?v=20260914-auto-memory-1/);
+  const serverSource = await readFile(new URL("../server.js", import.meta.url), "utf8");
+
   assert.match(serverSource, /app\.use\("\/vendor\/markdown-it"/);
-  assert.match(appSource, /\["assistant", "user"\]\.includes\(item\.type\)/);
 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());

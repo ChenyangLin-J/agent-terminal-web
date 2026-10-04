@@ -6,8 +6,13 @@
 
 ```bash
 npm install
+npm run build:session-app
 npm start
 ```
+
+The shared Session UI candidate and local Platform build instructions are in
+[`docs/platform-session-ui.md`](docs/platform-session-ui.md). Build the browser
+assets before starting a fresh checkout.
 
 打开：
 

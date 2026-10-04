@@ -1,0 +1,101 @@
+import React from "react";
+import { createRoot } from "react-dom/client";
+import { createSessionHostController } from "@agent-workbench/platform/session-host";
+import { SessionApplication } from "@agent-workbench/platform/ui";
+import "@agent-workbench/platform/styles.css";
+import "katex/dist/katex.min.css";
+import { createAgentWebSessionAdapter } from "./platform-agent-web-adapter.js";
+import { localFileUrl, normalizeUploadedAttachment, uploadAgentWebAttachments } from "./platform-agent-web-resources.js";
+import { createAgentWebProductController } from "./platform-agent-web-product-controller.js";
+import { createAgentWebExtensions } from "./platform-agent-web-product-extensions.jsx";
+import { agentWebNotificationTarget } from './platform-agent-web-notifications.js';
+
+const mount = document.querySelector("#platform-session-application");
+
+if (!mount) throw new Error("Missing #platform-session-application mount point.");
+
+const adapter = createAgentWebSessionAdapter({ sourceSession: new URLSearchParams(location.search).get('sourceSession') || '', title: new URLSearchParams(location.search).get('title') || '', notificationTarget: agentWebNotificationTarget() });
+const product = createAgentWebProductController();
+const params = new URLSearchParams(location.search);
+const initialSessionId = adapter.resolveSessionId(params.get('attach') || params.get('draftId') || (params.get('sessionId') ? `history:${params.get('sessionId')}` : ''));
+const controller = createSessionHostController({
+  adapter,
+  initialSessionId,
+  capabilities: {
+    attachments: true,
+    queue: true,
+    approvals: true,
+    sideChat: true,
+    subagents: true,
+    realtime: true,
+    voiceInput: true,
+    compact: true,
+  },
+});
+
+const execute = (action, payload) => controller.execute(action, payload);
+if (params.get('new') === '1' && !params.get('draftId')) void controller.execute('create', { cwd: params.get('cwd') || '.', title: params.get('title') || '新对话', access: params.get('access') === 'safe' ? 'safe' : 'full' }).catch(() => {});
+const extensions = createAgentWebExtensions({ product, controller, adapter });
+const detail = (state) => state.session ? {
+  session: state.session,
+  compactComposer: true,
+  labels: { composerPlaceholder: state.session.readOnly ? '子 Agent 预览为只读' : '输入问题……' },
+  extensions,
+  features: {
+    attachments: 'visible', steer: true, queuedTurns: true,
+    messageEdit: !state.session.readOnly, messageFork: !state.session.readOnly, sessionStatus: false, technicalDetails: true,
+  },
+  actions: {
+    onSubmit: ({ prompt, mode, attachments }) => execute(mode === 'queue' ? 'queue' : 'send', { text: prompt, attachments: attachments.map(normalizeUploadedAttachment) }),
+    onInterrupt: ({ turnId } = {}) => execute('stop', { expectedTurnId: turnId || state.session.activeTurnId }),
+    onResume: ({ turnId } = {}) => execute('resume', { expectedTurnId: turnId || state.session.activeTurnId }),
+    onLoadEarlier: () => controller.loadHistory(),
+    onLoadTechnicalDetails: (turnId) => execute('loadTechnicalDetails', { turnId }),
+    onRespondToRequest: ({ token, decision, answers }) => execute(decision === 'decline' ? 'decline' : 'respond', { requestId: token, expectedTurnId: state.session.activeTurnId, decision, answers }),
+    onEditMessage: ({ prompt, turnId, messageId, attachments }) => execute('editFork', { text: prompt, turnId, itemId: messageId, attachments: (attachments || []).map(normalizeUploadedAttachment) }),
+    onForkMessage: async ({ turnId, messageId }) => {
+      const result = await execute('fork', { turnId, itemId: messageId });
+      await controller.refreshSessions();
+      if (result.threadId) await controller.select(`history:${result.threadId}`);
+    },
+    onFinalResultVisible: ({ turnId }) => controller.markResultRead(turnId),
+    onDeleteQueuedTurn: (queuedTurnId) => execute('deleteQueuedTurn', { queuedTurnId }),
+    onExecutionProfileChange: (profile) => execute('executionProfile', profile),
+    onCompact: () => execute('compact'),
+    onUploadAttachments: uploadAgentWebAttachments,
+    onResolveMedia: ({ path, resourceId }) => localFileUrl(path || resourceId),
+    onOpenLink: (href) => window.open(href.startsWith('/') ? localFileUrl(href) : href, '_blank', 'noopener,noreferrer'),
+    onOpenAttachment: (attachment) => window.open(localFileUrl(attachment.path || attachment.id), '_blank', 'noopener,noreferrer'),
+    onError: (error) => console.warn('Agent Web Session action failed', error),
+  },
+} : null;
+
+createRoot(mount).render(
+  <SessionApplication
+    controller={controller}
+    detail={detail}
+    extensions={extensions}
+    browser={{ showCreateTargetSelect: false, createTargets: [{ id: "session", label: "对话" }], groupMode: "time", groupOptions: [{ id: "time", label: "最近" }] }}
+    actions={{
+      onCreate: () => controller.execute('create', { cwd: localStorage.getItem('agent-web.default-cwd') || '.', title: '新对话' }),
+      onFavorite: (session, favorited) => controller.execute('favorite', { favorited }, { sessionId: session.id }).then(() => controller.refreshSessions()),
+      onArchive: (session, archived) => controller.execute('archive', { archived }, { sessionId: session.id }).then(() => controller.refreshSessions()),
+    }}
+    labels={{ productName: "Agent Web", createAriaLabel: "新建对话", countSuffix: "个对话" }}
+  />,
+);
+
+controller.subscribe(() => {
+  const { selectedId, session } = controller.getSnapshot();
+  if (!selectedId || !session) return;
+  const url = new URL(location.href);
+  for (const key of ['new', 'preview', 'attach', 'sessionId', 'draftId']) url.searchParams.delete(key);
+  if (session.released) { url.searchParams.set('sessionId', session.threadId); url.searchParams.set('preview', '1'); }
+  else if (session.webSessionId) url.searchParams.set('attach', session.webSessionId);
+  else if (selectedId.startsWith('history:')) { url.searchParams.set('sessionId', selectedId.slice(8)); url.searchParams.set('preview', '1'); }
+  else if (selectedId.startsWith('draft:')) { url.searchParams.set('new', '1'); url.searchParams.set('preview', '1'); url.searchParams.set('draftId', selectedId); }
+  else url.searchParams.set('attach', selectedId);
+  history.replaceState(null, '', url);
+});
+
+window.addEventListener("pagehide", () => controller.dispose(), { once: true });

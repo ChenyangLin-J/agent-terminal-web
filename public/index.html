@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#0f1115" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#faf9f7" />
+    <meta name="color-scheme" content="light dark" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>Agent Terminal Web</title>
@@ -13,8 +13,8 @@
     <link rel="manifest" href="/manifest.webmanifest?v=20260710-1" />
     <style>
       :root {
-        color-scheme: dark;
-        background: #0f1115;
+        color-scheme: light;
+        background: #faf9f7;
       }
 
       html,
@@ -22,549 +22,29 @@
         margin: 0;
         min-height: 100%;
         width: 100%;
-        background: #0f1115;
-        background-color: #0f1115;
-        color: #e8ebf0;
+        background: #faf9f7;
+        background-color: #faf9f7;
+        color: #332f2c;
       }
 
       body,
       .app,
       .session-screen {
-        background: #0f1115;
+        background: #faf9f7;
+      }
+
+
+      #platform-session-application {
+        height: 100dvh;
+        min-height: 0;
       }
     </style>
-    <link rel="stylesheet" href="/styles.css?v=20261004-app-server-1" />
-    <link rel="stylesheet" href="/thinking-session.css?v=20260716-1" />
     <link rel="stylesheet" href="/agent-memories.css?v=20261003-change-timeline-1" />
     <link rel="stylesheet" href="/agent-integrations.css?v=20260825-custom-keys-1" />
-    <link rel="stylesheet" href="/codex-updates.css?v=20261003-1" />
+    <link rel="stylesheet" href="/generated/session-app.css" />
   </head>
   <body>
-    <main class="app">
-      <nav id="app-primary-nav" class="app-primary-nav" aria-label="Agent 主要导航">
-        <img class="app-nav-brand" src="/favicon.svg?v=20260710-1" alt="Agent" />
-        <button id="nav-control-center" class="app-nav-button active" type="button" aria-current="page">
-          <span class="app-nav-icon" aria-hidden="true">
-            <i></i><i></i><i></i><i></i>
-          </span>
-          <span>中控</span>
-          <strong id="nav-attention-count" class="app-nav-badge hidden">0</strong>
-        </button>
-        <button id="nav-current-session" class="app-nav-button" type="button" disabled>
-          <span class="app-nav-session-icon" aria-hidden="true"></span>
-          <span>会话</span>
-        </button>
-        <span class="app-nav-spacer"></span>
-        <span class="app-nav-connection" title="Agent Web 在线"><i></i><span>在线</span></span>
-      </nav>
-
-      <section id="start-screen" class="start-screen hidden" aria-label="Start session">
-        <header class="start-header control-center-header">
-          <div class="start-brand">
-            <div>
-              <span class="control-center-eyebrow">Session control center</span>
-              <h1>Agent 中控</h1>
-              <p>先看哪里需要你，再决定进入哪个会话。</p>
-            </div>
-          </div>
-          <div class="start-header-actions">
-            <button id="open-new-session" class="primary control-center-new" type="button">＋ 新建</button>
-            <details id="control-center-menu" class="control-center-menu">
-              <summary title="更多中控操作" aria-label="更多中控操作">•••</summary>
-              <div>
-                <button id="open-integrations" type="button" title="管理外部工具凭证">集成</button>
-                <button id="open-codex-updates" type="button">Codex 更新</button>
-                <button
-                  id="open-memories"
-                  class="memory-trigger"
-                  type="button"
-                  data-memory-state="loading"
-                  title="管理个人记忆"
-                >
-                  <span>记忆</span>
-                  <strong class="memory-trigger-status" data-memory-trigger-status>检查中</strong>
-                </button>
-                <button id="refresh-sessions" type="button">刷新状态</button>
-                <button id="restart-agent" class="restart-agent" type="button" title="重启 Agent Web">
-                  <span class="restart-agent-icon" aria-hidden="true">↻</span>
-                  <span id="restart-agent-label">重启 Agent Web</span>
-                </button>
-                <button id="logout" type="button">退出登录</button>
-              </div>
-            </details>
-          </div>
-        </header>
-
-        <section id="codex-update-notices" class="codex-update-notices hidden" aria-label="Codex 更新提醒" aria-live="polite"></section>
-
-        <section class="control-center-summary" aria-label="Session 状态概览">
-          <button type="button" data-summary-kind="pending" data-summary-filter="pending">
-            <span>待处理</span>
-            <strong id="control-pending-count">0</strong>
-            <small id="control-pending-detail">0 需操作 · 0 新结果</small>
-          </button>
-          <button type="button" data-summary-kind="running" data-summary-filter="running">
-            <span>进行中</span>
-            <strong id="control-running-count">0</strong>
-            <small>持续有变化</small>
-          </button>
-          <button type="button" data-summary-kind="ready" data-summary-filter="ready">
-            <span>空闲</span>
-            <strong id="control-ready-count">0</strong>
-            <small>已查看 · 暂无下一步</small>
-          </button>
-        </section>
-
-        <section class="session-search" aria-label="Search Codex sessions">
-          <div class="control-center-command">
-            <input id="session-search-input" type="search" placeholder="筛选 Session、项目或当前任务…" />
-            <button id="session-search-submit" type="button">全文搜索</button>
-          </div>
-          <div id="control-center-filters" class="control-center-filters hidden" aria-label="清除 Session 筛选">
-            <button type="button" data-session-filter="all">清除筛选</button>
-          </div>
-          <div id="session-search-results" class="sessions-list hidden" aria-live="polite"></div>
-        </section>
-
-        <section id="new-session-panel" class="start-launch-panel hidden" aria-label="新建 Session">
-          <header>
-            <div>
-              <span>New session</span>
-              <h2>开始一个 Session</h2>
-            </div>
-            <button id="close-new-session" type="button" aria-label="关闭新建 Session">×</button>
-          </header>
-          <div class="start-grid">
-
-            <label>
-              <span>Project</span>
-              <select id="project"></select>
-            </label>
-
-            <label>
-              <span>Permissions</span>
-              <select id="access-mode">
-                <option value="full" selected>全部允许（默认，高风险）</option>
-                <option value="safe">按需确认</option>
-              </select>
-            </label>
-          </div>
-          <div class="start-actions">
-            <button id="connect" class="primary" type="button">打开空白会话</button>
-            <button id="start-think" type="button">Think</button>
-          </div>
-        </section>
-
-        <section id="favorite-sessions-section" class="recent control-center-favorites hidden">
-          <header class="control-center-section-header">
-            <div>
-              <h2><span aria-hidden="true">★</span> 置顶 Session</h2>
-              <span>常用工作线程；新目标仍建议新建 Session</span>
-            </div>
-            <small id="favorite-sessions-count">0 个置顶</small>
-          </header>
-          <div id="favorite-sessions-list" class="sessions-list"></div>
-        </section>
-
-        <section class="recent control-center-live">
-          <header class="control-center-section-header">
-            <div>
-              <h2>当前 Session</h2>
-              <span>区分任务进度、阅读状态与运行资源</span>
-            </div>
-            <small id="control-live-count">0 个当前</small>
-          </header>
-          <div id="sessions-list" class="sessions-list"></div>
-        </section>
-
-        <section class="recent control-center-history" data-control-section="history">
-          <header class="control-center-section-header">
-            <div>
-              <h2>最近历史</h2>
-              <span>手动结束的 Session 会保存在这里</span>
-            </div>
-            <small id="control-history-count">0 个历史</small>
-          </header>
-          <div id="codex-sessions-list" class="sessions-list"></div>
-        </section>
-
-        <details class="recent control-center-history control-center-archive" data-control-section="history">
-          <summary>已归档 Session</summary>
-          <div id="archived-codex-sessions-list" class="sessions-list"></div>
-        </details>
-      </section>
-
-      <section id="session-screen" class="session-screen session-switcher-collapsed hidden" aria-label="Codex session">
-        <aside id="session-switcher" class="session-switcher collapsed" aria-label="快速切换 Session">
-          <header>
-            <div>
-              <strong>当前 Session</strong>
-              <span id="session-switcher-count">0 个当前</span>
-            </div>
-            <button
-              id="session-switcher-toggle"
-              class="session-switcher-toggle"
-              type="button"
-              aria-expanded="true"
-              aria-label="收起快速切换"
-              title="收起快速切换"
-            >
-              <span class="session-switcher-panel-icon" aria-hidden="true"></span>
-            </button>
-          </header>
-          <label>
-            <span class="hidden">搜索 Session</span>
-            <input id="session-switcher-search" type="search" placeholder="搜索 Session…" />
-          </label>
-          <div id="session-switcher-list" class="session-switcher-list"></div>
-          <button id="session-switcher-new" class="session-switcher-new" type="button">＋ 新建 Session</button>
-        </aside>
-
-        <header class="session-header">
-          <button id="back" type="button" title="返回 Agent 中控">中控</button>
-          <button
-            id="session-switcher-open"
-            class="session-switcher-open"
-            type="button"
-            aria-label="展开快速切换"
-            title="展开快速切换"
-          >
-            <span class="session-switcher-panel-icon" aria-hidden="true"></span>
-          </button>
-          <div id="session-title" class="session-title">
-            <button
-              id="session-title-display"
-              class="session-title-display"
-              type="button"
-              title="点击重命名当前 Session"
-              aria-label="重命名当前 Session"
-              disabled
-            >
-              <strong id="session-project">workspace</strong>
-              <span class="session-title-rename-hint" aria-hidden="true">重命名</span>
-            </button>
-            <form id="session-title-editor" class="session-title-editor hidden">
-              <input
-                id="session-title-input"
-                type="text"
-                maxlength="120"
-                autocomplete="off"
-                aria-label="Session 名称；按 Enter 保存，Esc 取消"
-              />
-            </form>
-            <span id="connection" class="session-connection">idle</span>
-          </div>
-          <div class="session-controls">
-            <button id="search-current-session" type="button" title="搜索当前会话">搜索</button>
-            <button id="disconnect" type="button" title="离开页面，Codex 保持运行">离开</button>
-            <button id="archive-session" type="button" title="结束运行并将 Session 移入归档" disabled>归档</button>
-            <button id="restart-session" type="button" title="重启当前 Session" disabled>重启</button>
-            <button id="kill-session" class="danger" type="button" title="结束运行并移到最近历史">结束</button>
-            <details id="session-menu" class="session-menu">
-              <summary aria-label="打开 Session 操作菜单" title="Session 操作">···</summary>
-              <div class="session-menu-panel">
-                <button id="mobile-search-current-session" type="button">搜索</button>
-                <button id="mobile-disconnect" type="button">离开</button>
-                <button id="mobile-archive-session" type="button" disabled>归档</button>
-                <button id="mobile-restart-session" type="button" disabled>重启</button>
-                <button id="mobile-kill-session" class="danger" type="button">结束</button>
-              </div>
-            </details>
-          </div>
-        </header>
-
-        <section id="app-server-view" class="app-server-view" aria-label="Session conversation">
-          <div class="app-transcript-latest-layer">
-            <button id="app-transcript-latest" class="app-transcript-latest hidden" type="button">有新内容 ↓</button>
-          </div>
-          <div id="app-server-transcript" class="app-server-transcript" aria-live="polite"></div>
-        </section>
-
-        <section id="app-session-tools" class="app-session-tools" aria-label="Session tools">
-          <button
-            id="app-session-task-control"
-            class="app-session-task-control"
-            type="button"
-            data-state="connecting"
-            title="当前任务状态"
-            aria-live="polite"
-            disabled
-          >
-            <span class="task-control-caption">当前任务</span>
-            <strong>
-              <i class="task-state-indicator" aria-hidden="true"></i>
-              <span id="app-session-task-state">连接中</span>
-              <span id="app-session-task-stop" class="task-stop-action hidden">停止</span>
-            </strong>
-          </button>
-          <button id="app-session-permissions" type="button" title="修改当前 Session 的权限">
-            <span>权限</span>
-            <strong id="app-session-permissions-value">按需确认</strong>
-          </button>
-          <button
-            id="app-session-context"
-            type="button"
-            data-context-state="unknown"
-            title="查看当前 Session 的 Token 与上下文用量"
-          >
-            <span>上下文</span>
-            <strong id="app-session-context-value">等待</strong>
-          </button>
-          <button
-            id="app-session-memories"
-            class="memory-trigger"
-            type="button"
-            data-memory-state="loading"
-            title="管理个人记忆"
-          >
-            <span>记忆</span>
-            <strong id="app-session-memory-projects" data-memory-project-label>自动运行</strong>
-          </button>
-          <details id="app-session-more" class="app-session-more">
-            <summary title="展开更多 Session 工具">
-              <span>更多</span>
-              <strong>•••</strong>
-            </summary>
-            <div class="app-session-more-menu">
-              <button id="app-session-agents" type="button" title="查看当前 Session 的子 Agent">
-                <span>Agents</span>
-                <strong id="app-session-agents-mode">管理</strong>
-              </button>
-              <button id="app-session-tree" type="button" title="查看 Session 分支与 Agent 关系">
-                <span>关系</span>
-                <strong>分支树</strong>
-              </button>
-              <button id="app-session-share" type="button" title="创建当前 Session 的 24 小时只读快照">
-                <span>分享</span>
-                <strong>24 小时</strong>
-              </button>
-              <button id="app-session-side-chat" type="button" title="打开不影响主任务的只读临时对话">
-                <span>侧问</span>
-                <strong>临时</strong>
-              </button>
-              <button id="app-session-realtime" type="button" title="实验性 Realtime V3 实时语音">
-                <span>语音</span>
-                <strong>实时</strong>
-              </button>
-            </div>
-          </details>
-        </section>
-
-        <section id="composer" class="composer" aria-label="Prompt composer">
-          <input id="file-input" class="hidden" type="file" multiple />
-          <section id="agent-request" class="agent-request hidden" aria-live="assertive">
-            <header>
-              <strong id="agent-request-title">Codex 需要确认</strong>
-              <span>需要你的操作</span>
-            </header>
-            <pre id="agent-request-detail"></pre>
-            <textarea id="agent-request-answer" class="hidden" rows="2" placeholder="输入回答"></textarea>
-            <div class="agent-request-actions">
-              <button id="agent-request-accept" class="primary" type="button">允许一次</button>
-              <button id="agent-request-session" type="button">本次会话允许</button>
-              <button id="agent-request-decline" type="button">拒绝</button>
-            </div>
-          </section>
-          <details id="turn-ledger" class="turn-ledger hidden" aria-label="Current turn requirements">
-            <summary>
-              <strong>本次任务</strong>
-              <span id="turn-ledger-status">进行中</span>
-            </summary>
-            <ol id="turn-requirements"></ol>
-          </details>
-          <section
-            id="composer-suggestions"
-            class="composer-suggestions hidden"
-            role="listbox"
-            aria-label="Commands and Skills"
-          ></section>
-          <div id="composer-attachments" class="composer-attachments hidden" aria-label="待发送附件"></div>
-          <section id="edit-fork-banner" class="edit-fork-banner hidden" aria-live="polite">
-            <div>
-              <strong>正在编辑历史消息</strong>
-              <span>提交后将在新分支继续，原 Session 保留。</span>
-            </div>
-            <button id="cancel-edit-fork" type="button">退出编辑</button>
-          </section>
-          <div class="prompt-field">
-            <textarea
-              id="prompt"
-              rows="5"
-              placeholder="输入任务，或点麦克风说话…"
-            ></textarea>
-            <button id="voice-input" class="voice-button" type="button" aria-label="语音输入" title="语音输入">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" />
-                <path d="M5 11a7 7 0 0 0 14 0" />
-                <path d="M12 18v3" />
-                <path d="M9 21h6" />
-              </svg>
-            </button>
-          </div>
-          <div class="composer-actions">
-            <button id="attach-file" type="button">附件</button>
-            <button id="send-prompt" class="primary" type="button">Send</button>
-            <button id="queue-prompt" class="hidden" type="button">下一轮</button>
-          </div>
-          <div id="upload-status" class="upload-status" aria-live="polite"></div>
-        </section>
-      </section>
-    </main>
-
-    <dialog id="app-command-dialog" class="app-command-dialog" aria-labelledby="app-command-title">
-      <form method="dialog">
-        <header>
-          <div>
-            <span id="app-command-eyebrow">Session</span>
-            <h2 id="app-command-title">Session status</h2>
-          </div>
-          <button id="app-command-close" class="dialog-close" type="button" aria-label="关闭">×</button>
-        </header>
-        <div id="app-command-content" class="app-command-content"></div>
-        <div id="app-command-actions" class="app-command-actions"></div>
-      </form>
-    </dialog>
-
-    <dialog id="agent-manager-dialog" class="feature-dialog" aria-labelledby="agent-manager-title">
-      <section class="feature-dialog-shell">
-        <header>
-          <div>
-            <span>Multi-Agent V2</span>
-            <h2 id="agent-manager-title">Agent 管理</h2>
-          </div>
-          <div class="feature-dialog-header-actions">
-            <button id="agent-manager-refresh" type="button">刷新</button>
-            <button id="agent-manager-close" class="dialog-close" type="button" aria-label="关闭">×</button>
-          </div>
-        </header>
-        <p id="agent-manager-note" class="feature-dialog-note">正在读取当前 Session 的子 Agent…</p>
-        <div id="agent-manager-list" class="agent-manager-list" aria-live="polite"></div>
-      </section>
-    </dialog>
-
-    <dialog id="thread-tree-dialog" class="feature-dialog" aria-labelledby="thread-tree-title">
-      <section class="feature-dialog-shell">
-        <header>
-          <div>
-            <span>Session lineage</span>
-            <h2 id="thread-tree-title">Session 关系</h2>
-          </div>
-          <div class="feature-dialog-header-actions">
-            <button id="thread-tree-refresh" type="button">刷新</button>
-            <button id="thread-tree-close" class="dialog-close" type="button" aria-label="关闭">×</button>
-          </div>
-        </header>
-        <p id="thread-tree-note" class="feature-dialog-note">正在读取分支与 Agent 关系…</p>
-        <div id="thread-tree-content" class="thread-tree-content" aria-live="polite"></div>
-      </section>
-    </dialog>
-
-    <dialog id="session-share-dialog" class="feature-dialog session-share-dialog" aria-labelledby="session-share-title">
-      <section class="feature-dialog-shell">
-        <header>
-          <div>
-            <span>Static snapshot · 24 hours</span>
-            <h2 id="session-share-title">临时分享 Session</h2>
-          </div>
-          <button id="session-share-close" class="dialog-close" type="button" aria-label="关闭">×</button>
-        </header>
-        <p class="feature-dialog-note">
-          链接无需登录，知道链接的人都能查看。快照只包含用户消息和 Codex 最终回答，不包含工具过程、附件或记忆引用，也不会随原 Session 更新。
-        </p>
-        <section class="session-share-state" aria-live="polite">
-          <div>
-            <span>当前状态</span>
-            <strong id="session-share-status">正在读取…</strong>
-          </div>
-          <p id="session-share-detail">正在检查当前 Session 是否已有有效分享。</p>
-        </section>
-        <label id="session-share-link-field" class="session-share-link-field hidden">
-          <span>分享链接</span>
-          <input id="session-share-link" type="url" readonly />
-        </label>
-        <p id="session-share-error" class="session-share-error hidden"></p>
-        <div class="feature-dialog-actions session-share-actions">
-          <button id="session-share-revoke" class="danger hidden" type="button">撤销链接</button>
-          <button id="session-share-open" class="hidden" type="button">打开</button>
-          <button id="session-share-copy" class="hidden" type="button">复制链接</button>
-          <button id="session-share-create" class="primary" type="button">创建 24 小时链接</button>
-        </div>
-      </section>
-    </dialog>
-
-    <dialog id="side-chat-dialog" class="feature-dialog side-chat-dialog" aria-labelledby="side-chat-title">
-      <section class="feature-dialog-shell">
-        <header>
-          <div>
-            <span>Ephemeral · Read-only</span>
-            <h2 id="side-chat-title">临时侧问</h2>
-          </div>
-          <button id="side-chat-dismiss" class="dialog-close" type="button" aria-label="收起">×</button>
-        </header>
-        <div class="side-chat-summary">
-          <span id="side-chat-status">独立于主任务，关闭后不保留</span>
-          <button id="side-chat-close" class="danger" type="button">结束并清除</button>
-        </div>
-        <div id="side-chat-transcript" class="side-chat-transcript" aria-live="polite"></div>
-        <label class="side-chat-composer">
-          <span>只读侧问</span>
-          <textarea id="side-chat-input" rows="3" placeholder="例如：先解释一下刚才提到的协议，不要修改文件。"></textarea>
-        </label>
-        <div class="feature-dialog-actions">
-          <button id="side-chat-stop" type="button" disabled>停止回答</button>
-          <button id="side-chat-send" class="primary" type="button">发送侧问</button>
-        </div>
-      </section>
-    </dialog>
-
-    <dialog id="realtime-dialog" class="feature-dialog realtime-dialog" aria-labelledby="realtime-title">
-      <section class="feature-dialog-shell">
-        <header>
-          <div>
-            <span>Experimental · Realtime V3</span>
-            <h2 id="realtime-title">实时语音对话</h2>
-          </div>
-          <button id="realtime-dismiss" class="dialog-close" type="button" aria-label="收起">×</button>
-        </header>
-        <div class="realtime-controls">
-          <label>
-            <span>声音</span>
-            <select id="realtime-voice">
-              <option value="juniper">juniper</option>
-            </select>
-          </label>
-          <strong id="realtime-status" data-state="idle">尚未开始</strong>
-        </div>
-        <audio id="realtime-output" autoplay playsinline hidden></audio>
-        <div id="realtime-transcript" class="realtime-transcript" aria-live="polite">
-          <p class="feature-empty">开始后可直接说话，Codex 会用语音回应。</p>
-        </div>
-        <p id="realtime-error" class="realtime-error hidden"></p>
-        <div class="feature-dialog-actions realtime-actions">
-          <button id="realtime-fallback" type="button">改用语音转文字</button>
-          <button id="realtime-stop" type="button" disabled>停止</button>
-          <button id="realtime-start" class="primary" type="button">开始实时对话</button>
-        </div>
-      </section>
-    </dialog>
-
-    <dialog id="thread-search-dialog" class="thread-search-dialog" aria-labelledby="thread-search-title">
-      <form method="dialog">
-        <header>
-          <div>
-            <span>当前 Session</span>
-            <h2 id="thread-search-title">搜索会话内容</h2>
-          </div>
-          <button id="thread-search-close" class="dialog-close" type="button" aria-label="关闭">×</button>
-        </header>
-        <div class="thread-search-field">
-          <input id="thread-search-input" type="search" placeholder="搜索你的消息和 Codex 最终回答" />
-          <button id="thread-search-submit" class="primary" type="button">搜索</button>
-        </div>
-        <div id="thread-search-results" class="thread-search-results" aria-live="polite"></div>
-      </form>
-    </dialog>
-
+    <main id="platform-session-application" aria-label="Agent Web"></main>
     <dialog id="integrations-dialog" class="integrations-dialog" aria-labelledby="integrations-title">
       <section class="integrations-shell">
         <header>
@@ -580,7 +60,6 @@
         <div id="integrations-content" class="integrations-content" aria-live="polite"></div>
       </section>
     </dialog>
-
     <dialog id="memory-dialog" class="memory-dialog" aria-labelledby="memory-title">
       <form method="dialog">
         <header>
@@ -615,17 +94,16 @@
         <section id="memory-content" class="memory-content" aria-live="polite"></section>
       </form>
     </dialog>
-
     <script src="/vendor/markdown-it/markdown-it.min.js?v=14.3.0"></script>
     <script src="/app-markdown.js?v=20260825-mobile-files-1"></script>
     <script src="/agent-memories.js?v=20261003-change-timeline-1"></script>
     <script src="/agent-integrations.js?v=20260825-custom-keys-1"></script>
     <script src="/shared/voice-recovery-store.js?v=20260717-2"></script>
     <script src="/shared/voice-capture-widget.js?v=20260717-recovery-3"></script>
-    <script src="/agent-upload.js?v=20260725-attachment-wait-1"></script>
-    <script src="/agent-voice-input.js?v=20260717-recovery-2"></script>
-    <script src="/agent-realtime.js?v=20260807-webrtc-1"></script>
-    <script src="/app.js?v=20260914-auto-memory-1"></script>
-    <script src="/codex-updates.js?v=20261003-1"></script>
+    <script type="module">
+      import("/generated/session-app.js")
+        .then(() => document.body.classList.add("platform-session-ready"))
+        .catch((error) => document.querySelector('#platform-session-application').textContent = '界面资源加载失败，请构建 Session UI 后刷新。');
+    </script>
   </body>
 </html>

@@ -171,10 +171,9 @@ test("exec orchestration restores nested commands instead of the exec wrapper", 
 });
 
 test("historical process details load only when a restored group is expanded", async () => {
-  const [server, app] = await Promise.all([
-    fs.readFile(new URL("../server.js", import.meta.url), "utf8"),
-    fs.readFile(new URL("../public/app.js", import.meta.url), "utf8"),
-  ]);
+  const [server] = await Promise.all([
+fs.readFile(new URL("../server.js", import.meta.url), "utf8")
+]);
 
   assert.match(server, /app\.get\("\/api\/session-process\/:sessionId\/:turnId"/);
   assert.match(server, /\(!isRestoredTurn && !isCodexTurnId\(turnId\)\)/);
@@ -182,15 +181,7 @@ test("historical process details load only when a restored group is expanded", a
   assert.match(server, /indexFile: sessionProcessIndexFile\(session\.sessionId\)/);
   assert.match(server, /scheduleSessionProcessIndexWarm\(session\)/);
   assert.match(server, /logAgentEvent\("session-process-load"/);
-  assert.match(app, /group\.addEventListener\("toggle"[\s\S]*loadHistoricalProcessDetails\(turnId\)/);
-  assert.match(app, /historicalProcessLoads\.set\(turnId, \{ status: "loading", items: \[\] \}\)/);
-  assert.match(app, /copy\.textContent = "正在加载完整过程…"/);
-  assert.match(app, /copy\.textContent = "完整过程加载失败"/);
-  assert.match(app, /isRepeatedProcessSummary\(item, currentItem\)/);
-  assert.match(app, /if \(item\.type === "assistant"\) return normalized/);
-  assert.match(app, /historical: answer\.phase !== "final_answer"/);
-  assert.match(app, /processGroupCounts\.set\(item\.turnId, groupNumber\)/);
-  assert.match(app, /`\$\{turnId \|\| items\[0\]\?\.id \|\| "turn"\}:process:\$\{groupNumber\}`/);
+
 });
 
 function response(type, payload) {

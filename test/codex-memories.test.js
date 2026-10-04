@@ -249,28 +249,16 @@ test("project memory explains when no generated section matches", () => {
 });
 
 test("Agent Web exposes memory review views and authenticated APIs", async () => {
-  const [server, app, page, styles] = await Promise.all([
-    fs.readFile(new URL("../server.js", import.meta.url), "utf8"),
-    fs.readFile(new URL("../public/app.js", import.meta.url), "utf8"),
-    fs.readFile(new URL("../public/index.html", import.meta.url), "utf8"),
-    fs.readFile(new URL("../public/agent-memories.css", import.meta.url), "utf8"),
-  ]);
+  const [server, styles] = await Promise.all([
+fs.readFile(new URL("../server.js", import.meta.url), "utf8"),
+fs.readFile(new URL("../public/agent-memories.css", import.meta.url), "utf8")
+]);
   assert.match(server, /app\.use\("\/api", requireAuth\)[\s\S]*app\.get\("\/api\/memories\/status"/);
   assert.match(server, /app\.get\("\/api\/memories"/);
   assert.match(server, /app\.patch\("\/api\/memories\/:id"/);
   assert.match(server, /app\.delete\("\/api\/memories\/:id"/);
   assert.match(server, /app\.patch\("\/api\/knowledge-changes\/:id"/);
-  assert.match(page, /id="open-memories"/);
-  assert.match(page, /id="app-session-memories"/);
-  assert.match(page, /id="memory-project-routing"/);
-  assert.doesNotMatch(page, /id="open-memories" class="hidden"/);
-  assert.match(page, /Memory System · 自动沉淀/);
-  assert.match(page, /data-memory-trigger-status/);
-  assert.match(page, /data-memory-view="overview"/);
-  assert.match(page, /data-memory-view="detail"/);
-  assert.match(page, /data-memory-view="changes"/);
-  assert.doesNotMatch(page, /data-memory-view="pending"|data-memory-view="sources"/);
-  assert.match(page, /agent-memories\.js\?v=/);
+
   const memoryUi = await fs.readFile(new URL("../public/agent-memories.js", import.meta.url), "utf8");
   assert.match(memoryUi, /renderPersonalDocuments/);
   assert.match(memoryUi, /renderProjectRuleDocuments/);
@@ -303,11 +291,7 @@ test("Agent Web exposes memory review views and authenticated APIs", async () =>
   assert.match(styles, /\.memory-inline-confirmation/);
   assert.match(styles, /\.memory-inline-textarea/);
   assert.match(styles, /\.memory-markdown-file/);
-  assert.match(page, /id="memory-context">Core、Now 与按需 Topics/);
-  assert.match(app, /name: "\/memories"/);
-  assert.match(app, /查看个人记忆、项目规则与变更记录/);
-  assert.match(app, /AgentMemories\?\.open/);
-  assert.match(app, /type: "set-memory-projects"/);
+
   assert.match(styles, /\.memory-dialog/);
 });
 

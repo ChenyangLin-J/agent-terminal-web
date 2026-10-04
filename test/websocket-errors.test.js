@@ -11,15 +11,9 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 test("browser WebSocket diagnostics retain handshake timing and reconnect context", async () => {
-  const client = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+
   const server = await readFile(new URL("../server.js", import.meta.url), "utf8");
 
-  assert.match(client, /const connectionStartedAt = Date\.now\(\);/);
-  assert.match(client, /phase: connectionOpened \? "established" : "handshake"/);
-  assert.match(client, /addEventListener\("error",[\s\S]*logClientEvent\("ws-error", connectionLogFields\(\)\)/);
-  assert.match(client, /path: window\.location\.pathname,/);
-  assert.doesNotMatch(client, /path: `\$\{window\.location\.pathname\}\$\{window\.location\.search\}`/);
-  assert.match(client, /reconnectAttempt,[\s\S]*phase:/);
   assert.match(server, /reconnectAttempt: optionalNonNegativeInteger\(req\.body\?\.reconnectAttempt\)/);
   assert.match(server, /phase: cleanClientLogValue\(req\.body\?\.phase, 30\)/);
 });

@@ -16,3 +16,6 @@ playwright-report/
 
 .DS_Store
 
+
+# Built from the reviewed Platform package or an explicit local candidate.
+public/generated/

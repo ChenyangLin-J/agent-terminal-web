@@ -1,0 +1,17 @@
+html,body { margin:0; height:100%; overflow:hidden; background:var(--cwu-bg); font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+.cwu-product-settings,.cwu-product-session-tools { position:relative; }
+.cwu-product-settings summary,.cwu-product-session-tools summary { width:40px;height:40px;display:grid;place-items:center;cursor:pointer;list-style:none;border-radius:8px; }
+.cwu-product-settings summary::-webkit-details-marker,.cwu-product-session-tools summary::-webkit-details-marker { display:none; }
+.cwu-product-settings summary svg { width:20px;height:20px; }
+.cwu-product-settings[open]>div,.cwu-product-session-tools[open]>div { position:absolute;top:44px;right:0;z-index:30;min-width:160px;padding:6px;background:#fff;border:1px solid #dedbd6;border-radius:10px;box-shadow:0 8px 24px #0002; }
+.cwu-product-settings button,.cwu-product-session-tools button { display:block;width:100%;text-align:left;border:0;background:transparent;padding:10px 12px;color:inherit;cursor:pointer;border-radius:6px; }
+.cwu-product-settings button:hover,.cwu-product-session-tools button:hover { background:#f5f3f0; }
+.cwu-product-dialog { width:min(760px,calc(100vw - 32px));max-height:85dvh;overflow:auto;border:1px solid #dedbd6;border-radius:16px;padding:20px;background:#faf9f7;color:#292723; }
+.cwu-product-dialog::backdrop { background:#0005; }
+.cwu-product-dialog>header { display:flex;justify-content:space-between;align-items:center;margin-bottom:16px; }
+.cwu-product-dialog>header button { border:0;background:transparent;font-size:22px;width:40px;height:40px;cursor:pointer; }
+.cwu-product-dialog>nav { display:flex;gap:8px;margin-bottom:16px; }
+.cwu-product-dialog>nav button { padding:8px 12px;border:1px solid #dedbd6;border-radius:7px;background:white;cursor:pointer; }
+.cwu-product-notice { position:fixed;bottom:20px;left:20px;z-index:100;padding:12px;border-radius:8px;background:#fff;box-shadow:0 4px 16px #0002; }
+
+.hidden { display:none !important; }

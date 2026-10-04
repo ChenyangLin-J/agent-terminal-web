@@ -59,7 +59,7 @@ export default async function({page,evidence,baseUrl,profile}) {
  await page.locator('.cwu-session-finder').waitFor({state:'hidden'});
  if(await toggle.getAttribute('aria-expanded')==='true') await toggle.click();
  await page.locator('.cwu-product-session-tools summary').click();
- await page.getByRole('button',{name:'Side Chat',exact:true}).click();
+ await page.getByRole('button',{name:'关联会话',exact:true}).click();
  await page.locator('.cwu-side-chat textarea').waitFor();
  assert.equal(await page.locator('.cwu-side-chat textarea').isEnabled(),true);
  await evidence.checkpoint('Side Chat 菜单与未创建 Runtime 的可输入状态');

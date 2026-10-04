@@ -18,7 +18,17 @@ html,body { margin:0; height:100%; overflow:hidden; background:var(--cwu-bg); fo
 .cwu-product-dialog>header button { border:0;background:transparent;font-size:22px;width:40px;height:40px;padding:0; }
 .cwu-product-dialog>nav { display:flex;gap:4px;margin-bottom:20px;padding-bottom:8px;border-bottom:1px solid var(--cwu-border);overflow-x:auto; }
 .cwu-product-dialog>nav button { flex-shrink:0;border:0;background:transparent;color:var(--cwu-muted); }
-.cwu-product-dialog>nav button[aria-pressed=true] { background:var(--cwu-soft);color:var(--cwu-text);font-weight:600; }
+.cwu-product-dialog>nav button[aria-pressed=true],.cwu-product-dialog>nav button[aria-selected=true] { background:var(--cwu-soft);color:var(--cwu-text);font-weight:600; }
+.cwu-relations-intro { display:flex;align-items:center;gap:16px;justify-content:space-between;margin-bottom:16px; }
+.cwu-relations-intro p { margin:0;color:var(--cwu-muted);font-size:13px;line-height:1.6; }
+.cwu-relations-intro button { flex-shrink:0; }
+.cwu-thread-relations ul { margin:0;padding:0;list-style:none;max-height:45dvh;overflow:auto; }
+.cwu-thread-relations li { display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0 8px calc(var(--thread-depth)*14px);padding:14px;border:1px solid var(--cwu-border);border-radius:10px;background:var(--cwu-surface); }
+.cwu-thread-relations li>div { min-width:0;display:grid;gap:6px; }
+.cwu-thread-relations strong,.cwu-thread-relations small { overflow:hidden;white-space:nowrap;text-overflow:ellipsis; }
+.cwu-thread-relations strong { font-size:14px; }
+.cwu-relation-kind,.cwu-thread-relations small,.cwu-relations-empty { color:var(--cwu-muted);font-size:12px; }
+.cwu-thread-relations li>button { flex-shrink:0; }
 .cwu-account-summary { display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px; }
 .cwu-account-summary>div { min-width:0;display:grid;gap:5px; }
 .cwu-account-summary strong { font-size:15px;text-transform:capitalize; }

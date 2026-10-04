@@ -24,6 +24,8 @@ Historical process details are read lazily through the authenticated product pro
 
 Account usage remains a product-owned dialog. Opening it reads the existing `/usage` response automatically and presents available quota windows, remaining percentage and reset time; refresh uses the same read operation. Missing quota data stays unknown. Slash-command usage results use this presentation too, while the Composer's context usage remains a separate shared control.
 
+The Session menu exposes one Related Sessions entry with Side Chat, Subagent and Thread Relations tabs. Agent Web supports one Side Chat, so the shared panel's internal selector is omitted. Thread Relations reads the existing `session-tree` response on entry and renders named parent/branch/agent rows with read-only navigation. Realtime has a separate dialog showing the shared inline controls immediately, including voice choices and visible permission/connection errors.
+
 Existing `server.js` remains the integration point for Runtime lifecycle and product services. New shared-UI routes and receipt logic are separate modules. A later backend refactor can extract lifecycle, transcript projection, approvals and persistence in independent steps while preserving those contracts; moving product scheduling or memory policy into Platform would blur this boundary.
 
 ## Build and candidate verification
@@ -45,6 +47,8 @@ For interactive verification, run the same script with `--real`, an absolute iso
 Use the project-owned `scripts/testing/session-ui.flow.mjs` with `tools/workspace-playwright/pw record` to produce desktop/mobile videos and ordered frames. Browser regressions also cover lazy draft/restart recovery, runtime lease expiry and read-only child previews. Platform owns the shared component and input-state tests; Agent Web retains backend authorization, upload validation, thread, memory, integration and service safety tests.
 
 `scripts/testing/session-chrome.flow.mjs` verifies the fixed sidebar toggle, contiguous list/detail layout, and account dialog against an existing Session in the isolated real preview. It reads usage without submitting a model Turn and records both desktop and mobile results.
+
+`scripts/testing/session-tools.flow.mjs` covers the three related tabs, real relation/voice metadata, direct realtime opening, close/reopen and simulated microphone denial. It never captures physical audio or starts a model Turn; this is separate from physical voice acceptance.
 
 ## Removed duplicate implementation and rollback
 

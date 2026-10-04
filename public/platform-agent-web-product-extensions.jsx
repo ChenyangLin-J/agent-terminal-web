@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import './platform-agent-web-product.css';
 import { SessionComposerUtilities, SessionRealtimePanel, SideChatPanel, SubagentPanel } from '@agent-workbench/platform/ui';
@@ -72,7 +72,6 @@ function SessionMoreMenu({ controller, session }) {
   const [error, setError] = useState('');
   const menu = useRef(null);
   const openPanel = (panel) => { if (menu.current) menu.current.open = false; globalThis.dispatchEvent(new CustomEvent('agent-web-open-session-panel', { detail: { sessionId: session.sessionId, panel } })); };
-  const perform = (type) => controller.execute('raw', { type }, { sessionId: session.sessionId }).catch(error => setError(error.message));
   async function lifecycle(action) {
     if (!globalThis.confirm?.(action === 'end' ? '结束当前 Session？历史记录会保留。' : '重启当前 Session？本轮任务会中断。')) return;
     try { await controller.execute(action); if (action === 'end') await controller.execute('create', { title: '新对话' }); await controller.refreshSessions(); } catch (error) { setError(error.message); }
@@ -83,10 +82,9 @@ function SessionMoreMenu({ controller, session }) {
     try { await controller.execute('rename', { title }); await controller.refreshSessions(); } catch (error) { setError(error.message); }
   }
   return <details ref={menu} className="cwu-product-session-tools"><summary aria-label="会话更多操作">⋯</summary><div>
-    <button type="button" onClick={() => { openPanel('side'); void perform('side-chat-open'); }}>Side Chat</button>
-    <button type="button" onClick={() => { openPanel('subagents'); void perform('subagents-list'); }}>Subagent</button>
+    <button type="button" onClick={() => openPanel('side')}>关联会话</button>
     <button type="button" onClick={() => openPanel('realtime')}>实时语音</button>
-    {['usage', 'tree', 'share'].map((panel) => <button key={panel} type="button" onClick={() => openPanel(panel)}>{panel === 'usage' ? '账户用量' : panel === 'tree' ? '线程关系' : '分享'}</button>)}
+    {['usage', 'share'].map((panel) => <button key={panel} type="button" onClick={() => openPanel(panel)}>{panel === 'usage' ? '账户用量' : '分享'}</button>)}
     <button type="button" onClick={rename}>重命名</button>
     <button type="button" onClick={() => lifecycle('restart')}>重启当前 Session</button>
     <button type="button" onClick={() => lifecycle('end')}>结束当前 Session</button>
@@ -98,11 +96,18 @@ function SessionMorePanel({ controller, adapter, session, sourceSession = sessio
   const [panel, setPanel] = useState('');
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
+  const relatedPanelId = useId();
   useEffect(() => {
     const open = (event) => { if (event.detail?.sessionId === session.sessionId) { setError(''); setPanel(event.detail.panel); setResult(event.detail.result || null); } };
     globalThis.addEventListener('agent-web-open-session-panel', open);
     return () => globalThis.removeEventListener('agent-web-open-session-panel', open);
   }, [session.sessionId]);
+  useEffect(() => {
+    if (!['side', 'subagents'].includes(panel)) return;
+    let cancelled = false;
+    void controller.execute('raw', { type: panel === 'side' ? 'side-chat-open' : 'subagents-list' }, { sessionId: session.sessionId }).catch(error => { if (!cancelled) setError(error.message); });
+    return () => { cancelled = true; };
+  }, [controller, session.sessionId, panel]);
   if (!panel) return null;
   const run = async (type, payload = {}) => {
     if (type === 'realtime-audio') return adapter.execute(session.sessionId, 'raw', { type, ...payload });
@@ -110,21 +115,55 @@ function SessionMorePanel({ controller, adapter, session, sourceSession = sessio
     catch (error) { setError(error.message); throw error; }
   };
   const usagePanel = panel === 'usage' || panel === 'command' && result?.kind === 'usage';
-  const title = usagePanel ? '账户用量' : ({ side: 'Side Chat', subagents: 'Subagent', realtime: '实时语音', tree: '线程关系', share: '分享' }[panel] || '会话工具');
+  const relatedPanel = ['side', 'subagents', 'tree'].includes(panel);
+  const relatedTabs = [{ id: 'side', label: 'Side Chat' }, { id: 'subagents', label: 'Subagent' }, { id: 'tree', label: '线程关系' }];
+  const title = relatedPanel ? '关联会话' : usagePanel ? '账户用量' : ({ realtime: '实时语音', share: '分享' }[panel] || '会话工具');
+  const selectRelated = (id) => { setError(''); setResult(null); setPanel(id); };
   return <ProductDialog label={title} onClose={() => setPanel('')}><header><strong>{title}</strong><button type="button" aria-label="关闭会话工具" onClick={() => setPanel('')}>×</button></header>
-    <nav aria-label="会话工具"><button type="button" aria-pressed={panel === 'side'} onClick={() => { setError(''); setPanel('side'); }}>Side Chat</button><button type="button" aria-pressed={panel === 'subagents'} onClick={() => { setError(''); setPanel('subagents'); void run('subagents-list').catch(() => {}); }}>Subagent</button><button type="button" aria-pressed={panel === 'realtime'} onClick={() => { setError(''); setPanel('realtime'); }}>实时语音</button><button type="button" aria-pressed={usagePanel} onClick={() => { setError(''); setResult(null); setPanel('usage'); }}>账户用量</button></nav>
+    {relatedPanel ? <nav role="tablist" aria-label="关联会话">{relatedTabs.map((tab, index) => <button key={tab.id} id={`${relatedPanelId}-${tab.id}`} type="button" role="tab" aria-selected={panel === tab.id} aria-controls={relatedPanelId} tabIndex={panel === tab.id ? 0 : -1} onClick={() => selectRelated(tab.id)} onKeyDown={event => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? relatedTabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : relatedTabs.length - 1)) % relatedTabs.length;
+      selectRelated(relatedTabs[next].id); event.currentTarget.parentElement.children[next].focus();
+    }}>{tab.label}</button>)}</nav> : null}
     {error ? <p role="alert">{error}</p> : null}
-    {panel === 'side' ? <SideChatPanel panel={normalizeAgentWebSideChatPanel(sourceSession.sideChat)} actions={{
+    {relatedPanel ? <div role="tabpanel" id={relatedPanelId} aria-labelledby={`${relatedPanelId}-${panel}`}>
+    <div hidden={panel !== 'side'}><SideChatPanel singleChat panel={normalizeAgentWebSideChatPanel(sourceSession.sideChat)} actions={{
       onSelect: () => run('side-chat-open'), onCreate: () => run('side-chat-open'), onSubmit: ({ prompt }) => run('side-chat-submit', { data: prompt }),
       onStop: () => run('side-chat-stop'), onDelete: () => run('side-chat-close'),
-    }} /> : null}
+    }} /></div>
     {panel === 'subagents' ? <SubagentPanel panel={{ agents: session.subagents || [], selected: sourceSession.subagentDetail || null }} actions={{ onOpen: (agent) => { const url = new URL(location.href); url.search = new URLSearchParams({ preview: '1', sessionId: agent.id, sourceSession: sourceSession.webSessionId || session.sessionId }); location.href = url; }, onStop: (agent) => run('subagent-stop', { threadId: agent.id }) }} /> : null}
+    {panel === 'tree' ? <ThreadRelationsPanel controller={controller} sessionId={session.sessionId} onOpen={async node => { await controller.select(`history:${node.id}`); setPanel(''); }} /> : null}
+    </div> : null}
     {usagePanel ? <AccountUsagePanel key={`${session.sessionId}:${panel}`} controller={controller} sessionId={session.sessionId} initialResult={result} /> : null}
-    {panel === 'tree' ? <section><button type="button" onClick={() => void run('session-tree').catch(() => {})}>读取线程关系</button>{result ? <pre>{JSON.stringify(result, null, 2)}</pre> : null}</section> : null}
     {panel === 'share' ? <SessionShare session={sourceSession} /> : null}
     {panel === 'command' && !usagePanel ? <pre>{JSON.stringify(result, null, 2)}</pre> : null}
-    {panel === 'realtime' ? <SessionRealtimePanel enabled={session.status !== 'running'} initialState={sourceSession.realtime || {}} event={sourceSession.realtimeEvent} onSend={(message) => run(message.type, message)} onFallback={() => setPanel('side')} /> : null}
+    {panel === 'realtime' ? <SessionRealtimePanel inline enabled={session.status !== 'running'} initialState={sourceSession.realtime || {}} event={sourceSession.realtimeEvent} onSend={(message) => run(message.type, message)} onFallback={() => { setPanel(''); requestAnimationFrame(() => document.querySelector('.cwu-composer textarea')?.focus()); }} /> : null}
   </ProductDialog>;
+}
+
+function ThreadRelationsPanel({ controller, sessionId, onOpen }) {
+  const [tree, setTree] = useState(null), [loading, setLoading] = useState(true), [error, setError] = useState('');
+  const generation = useRef(0);
+  async function read() {
+    const request = ++generation.current; setLoading(true); setError('');
+    try { const value = await controller.execute('raw', { type: 'session-tree' }, { sessionId }); if (request === generation.current) setTree(value); }
+    catch (error) { if (request === generation.current) setError(error.message || '会话关系读取失败。'); }
+    finally { if (request === generation.current) setLoading(false); }
+  }
+  useEffect(() => { void read(); return () => { generation.current++; }; }, [controller, sessionId]);
+  const nodes = Array.isArray(tree?.nodes) ? tree.nodes : [];
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  const ordered = [], visited = new Set();
+  function visit(node, depth = 0) { if (visited.has(node.id)) return; visited.add(node.id); ordered.push({ node, depth }); nodes.filter(child => child.parentId === node.id).forEach(child => visit(child, depth + 1)); }
+  nodes.filter(node => !byId.has(node.parentId)).forEach(node => visit(node)); nodes.forEach(node => visit(node));
+  return <section className="cwu-thread-relations" aria-busy={loading}>
+    <div className="cwu-relations-intro"><p>查看当前会话的来源、分支和子 Agent。Side Chat 是临时侧问，不属于线程分支。</p><button type="button" disabled={loading} onClick={() => void read()}>{loading ? '读取中…' : '刷新关系'}</button></div>
+    {error ? <p role="alert">{error}</p> : null}
+    {!tree && loading ? <p role="status">正在读取会话关系…</p> : null}
+    {tree && nodes.length <= 1 ? <p className="cwu-relations-empty">当前会话还没有分支或子 Agent。</p> : null}
+    <ul>{ordered.map(({ node, depth }) => <li key={node.id} style={{ '--thread-depth': Math.min(depth, 5) }}><div><span className="cwu-relation-kind">{node.relation === 'agent' ? '子 Agent' : node.relation === 'branch' ? '分支' : '主会话'}{node.current ? ' · 当前' : ''}</span><strong>{node.name || '未命名会话'}</strong>{node.parentId && byId.get(node.parentId) ? <small>来自：{byId.get(node.parentId).name || '未命名会话'}</small> : null}</div>{!node.current ? <button type="button" aria-label={`查看对话：${node.name || '未命名会话'}`} onClick={() => Promise.resolve(onOpen(node)).catch(error => setError(error.message))}>查看对话</button> : null}</li>)}</ul>
+  </section>;
 }
 
 function AccountUsagePanel({ controller, sessionId, initialResult }) {
@@ -171,7 +210,7 @@ function sessionContext(controller, session) {
 function ProductDialog({ label, onClose, children }) {
   const dialog = useRef(null);
   useEffect(() => {
-    const focus = document.activeElement;
+    const focus = document.activeElement?.closest('details:not([open])')?.querySelector('summary') || document.activeElement;
     dialog.current?.showModal();
     return () => { dialog.current?.close(); focus?.focus?.(); };
   }, []);

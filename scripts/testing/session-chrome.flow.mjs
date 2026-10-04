@@ -1,0 +1,44 @@
+import assert from 'node:assert/strict';
+export const metadata = { name: 'session-chrome-feedback', profiles: ['desktop', 'mobile'] };
+export default async function ({ page, evidence, baseUrl, profile }) {
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto(baseUrl);
+  await page.locator('.cwu-composer textarea').waitFor();
+  const toggle = page.locator('.cwu-browser-list-toggle');
+  if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
+  await page.locator('.cwu-browser-list').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('.cwu-browser-summary > span').count(), 0);
+  const geometry = async () => page.evaluate(() => {
+    const rect = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width }; };
+    return { toggle: rect('.cwu-browser-list-toggle'), list: rect('.cwu-browser-list'), detail: rect('.cwu-browser-detail'), transition: getComputedStyle(document.querySelector('.cwu-browser')).transitionDuration, listTransition: getComputedStyle(document.querySelector('.cwu-browser-list')).transitionDuration };
+  });
+  const open = await geometry();
+  assert.equal(open.toggle.x, 10);
+  assert.equal(open.list.x, 0);
+  assert.equal(open.transition, '0s');
+  if (profile === 'desktop') assert.ok(open.detail.x <= open.list.width + 1);
+  else assert.equal(open.listTransition, '0s');
+  await evidence.checkpoint('侧栏展开无多余空位');
+  await toggle.click();
+  const closed = await geometry();
+  assert.equal(closed.toggle.x, open.toggle.x);
+  assert.equal(closed.toggle.y, open.toggle.y);
+  await evidence.checkpoint('侧栏收起按钮保持原位');
+  await toggle.click();
+  const reopened = await geometry();
+  assert.deepEqual(reopened.toggle, open.toggle);
+  await toggle.click();
+  await page.getByLabel('会话更多操作', { exact: true }).click();
+  await page.getByRole('button', { name: '账户用量', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '账户用量', exact: true });
+  await dialog.getByRole('button', { name: '刷新用量', exact: true }).waitFor({ timeout: 30000 });
+  assert.equal(await dialog.getByText('读取账户用量', { exact: true }).count(), 0);
+  assert.equal(await dialog.locator('pre').count(), 0);
+  await evidence.checkpoint('真实账户用量与现代弹窗');
+  await dialog.getByRole('button', { name: '刷新用量', exact: true }).click();
+  await dialog.getByRole('button', { name: '刷新用量', exact: true }).waitFor({ timeout: 30000 });
+  await dialog.getByRole('button', { name: '关闭会话工具', exact: true }).click();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  assert.deepEqual(errors, []);
+}

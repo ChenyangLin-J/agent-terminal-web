@@ -22,6 +22,8 @@ Platform owns common interaction and presentation, selection protection, snapsho
 
 Historical process details are read lazily through the authenticated product projection, including previews with no live Runtime. Reading a completed record never resumes a Codex thread. Editing a user message forwards its existing authorized attachments to the product's Edit/Fork validation.
 
+Account usage remains a product-owned dialog. Opening it reads the existing `/usage` response automatically and presents available quota windows, remaining percentage and reset time; refresh uses the same read operation. Missing quota data stays unknown. Slash-command usage results use this presentation too, while the Composer's context usage remains a separate shared control.
+
 Existing `server.js` remains the integration point for Runtime lifecycle and product services. New shared-UI routes and receipt logic are separate modules. A later backend refactor can extract lifecycle, transcript projection, approvals and persistence in independent steps while preserving those contracts; moving product scheduling or memory policy into Platform would blur this boundary.
 
 ## Build and candidate verification
@@ -41,6 +43,8 @@ After adopting a published compatible Platform pin, ordinary `npm run build:sess
 For interactive verification, run the same script with `--real`, an absolute isolated `CANDIDATE_PREVIEW_ROOT`, `AGENT_MEMORY_SYSTEM_ROOT` and `AGENT_PLATFORM_CANDIDATE`. It uses the installed Codex binary and a permission-restricted copy of the current user's `auth.json` (override with `AGENT_PREVIEW_AUTH_SOURCE`). Session history, configuration, uploads and product state stay in the preview root. Its local authentication helper is only for a loopback preview, not a deployable authentication service. Stop the owning preview process to close its child server and helper. Shared recording scripts must be available in the preview's `workspace/shared-web` for microphone input.
 
 Use the project-owned `scripts/testing/session-ui.flow.mjs` with `tools/workspace-playwright/pw record` to produce desktop/mobile videos and ordered frames. Browser regressions also cover lazy draft/restart recovery, runtime lease expiry and read-only child previews. Platform owns the shared component and input-state tests; Agent Web retains backend authorization, upload validation, thread, memory, integration and service safety tests.
+
+`scripts/testing/session-chrome.flow.mjs` verifies the fixed sidebar toggle, contiguous list/detail layout, and account dialog against an existing Session in the isolated real preview. It reads usage without submitting a model Turn and records both desktop and mobile results.
 
 ## Removed duplicate implementation and rollback
 

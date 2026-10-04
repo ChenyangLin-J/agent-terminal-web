@@ -4957,7 +4957,6 @@ async function createSideChat(session) {
       developerInstructions: sideChatInstructions(session),
       ephemeral: true,
       excludeTurns: true,
-      deferGoalContinuation: true,
     };
     if (session.turnState.active && session.turnState.turnId) forkParams.beforeTurnId = session.turnState.turnId;
     const result = await client.forkThread(forkParams);

@@ -18,6 +18,7 @@ Agent Web consumes Platform's `SessionApplication`, Session Host controller, Com
 | `lib/session-references.js` | Native Session reference validation, canonical metadata and bounded public context |
 | `lib/session-operation-receipts.js` | Bounded durable operation receipts, hashes and public results |
 | `lib/memory-system-library.js` | Product memory dependency location |
+| `lib/personal-agent-gateway.js` | Product personal openings and bounded public conversation activity |
 
 Platform owns common interaction and presentation, selection protection, snapshot/event recovery, retry identity, and UI state. Agent Web owns its server/API/WS protocol, Runtime choice, authentication, native thread identity, persistence, memory, integrations, local-file access, notification service and deployment. Product endpoints and recording/account services must not be embedded in Platform components.
 
@@ -26,6 +27,8 @@ Historical process details are read lazily through the authenticated product pro
 Session rows supply the same reference contract as Personal Workbench: sidebar drag and `@` search produce removable Composer chips. Agent Web reauthorizes `agent-web + native threadId` against its current account's live or stored Codex history before submission, rejects self/foreign/archived/missing targets, and includes bounded recent public context in the model input. Messages persist the public pointer and hide the input envelope; edit/queue preserve it. Opening a message reference navigates to the target. Released Sessions retain their selected UI identity in the URL so refresh recovers the same draft/reference state.
 
 The private `submitAppServerPrompt` helper receives an options object after `requirementText`. Resolved references use `options.references`; direct, startup-queued and edit/fork submissions use the same field. Product gateway admission controls can share this object without interpreting their options as a reference array.
+
+Home's conversation and personal activity gateways remain product-owned backend APIs. Their user-message projections use the same Session reference parser: model-only reference envelopes and excerpts are hidden, user text is retained, and reference-only input does not become authored activity. The gateway contract and isolated integration coverage are described in `docs/home-agent-gateway.md`.
 
 Account usage remains a product-owned dialog. Opening it reads the existing `/usage` response automatically and presents available quota windows, remaining percentage and reset time; refresh uses the same read operation. Missing quota data stays unknown. Slash-command usage results use this presentation too, while the Composer's context usage remains a separate shared control.
 
@@ -69,4 +72,4 @@ Use the project-owned `scripts/testing/session-ui.flow.mjs` with `tools/workspac
 
 Removed Session assets: `public/app.js`, `styles.css`, `thinking-session.css`, `agent-upload.js`, `agent-voice-input.js`, `agent-realtime.js`, and the old Codex-update widget assets. Product memory/integration dialogs, the local Markdown reader/editor, icons and service worker remain. Private DOM/stylesheet regex tests are retired or narrowed to their surviving backend contracts; UI behavior is covered by Platform and recorded application flows.
 
-Rollback uses the pre-change Agent Web commit `88221caca542641db2fbb010629b085c4c90194d` and its Platform v0.32.0 pin. Restore the complete prior frontend with that checkout; do not retain two selectable Session implementations. Added receipt fields are backward-compatible metadata. Deployment must preserve unrelated local work and stored Session identities, build the generated assets, and use an external restart only when no Turn is running. The exact release and production readback belong in the owning Change.
+Rollback restores the last verified deployed Agent Web commit and its corresponding Platform pin, including the complete frontend and product gateways. Added receipt fields are backward-compatible metadata. Deployment must preserve unrelated local work and stored Session identities, build the generated assets, and use an external restart only when no Turn is running. The exact rollback commit, release and production readback belong in the owning Change.

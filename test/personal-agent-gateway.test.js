@@ -8,6 +8,7 @@ import test from "node:test";
 import express from "express";
 
 import { registerPersonalAgentGateway } from "../lib/personal-agent-gateway.js";
+import { createSessionReferenceEnvelopeInput, sessionReferenceKey } from "../lib/session-references.js";
 
 async function fixture(options = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "personal-agent-gateway-"));
@@ -207,4 +208,31 @@ test('a recovered exact failed turn becomes a durable known failure without resu
   assert.equal(result.status, 'failed'); assert.equal(result.reason, 'known provider failure');
   assert.equal((await (await fetch(url)).json()).status, 'failed');
   assert.equal(reads, 1); assert.equal(created, 0);
+});
+
+test("activity excludes model reference context and retains the user's message", async (t) => {
+  const reference = { hostId: "agent-web", threadId: "referenced-thread", label: "Referenced conversation" };
+  const envelope = createSessionReferenceEnvelopeInput([reference], {
+    contextByKey: new Map([[sessionReferenceKey(reference), "model-only referenced conversation context"]]),
+  });
+  const f = await fixture({
+    listSessions: async () => [{ id: "thread", title: "Thread" }],
+    readTurnPage: async () => ({ data: [
+      { id: "message-with-reference", status: "failed", startedAt: "2026-10-04T08:00:00Z", items: [
+        { type: "userMessage", content: [
+          { type: "text", text: "First user paragraph" }, envelope,
+          { type: "text", text: "Second user paragraph" }, { type: "image", url: "fixture-image" },
+        ] },
+      ] },
+      { id: "reference-only", status: "completed", startedAt: "2026-10-04T08:01:00Z", items: [
+        { type: "userMessage", content: [envelope] },
+      ] },
+    ] }),
+  }); t.after(f.close);
+  const response = await request(f, "/api/home/agent/activity?from=2026-10-04T00:00:00Z&to=2026-10-05T00:00:00Z");
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.items.map(({ author, text, status }) => ({ author, text, status })), [
+    { author: "user", text: "First user paragraph\nSecond user paragraph", status: "failed" },
+  ]);
+  assert.ok(!JSON.stringify(response.body).includes("model-only referenced conversation context"));
 });

@@ -83,3 +83,11 @@ conversation slots. Activity checks at most 36 recent candidates, each up to
 12 turns, and continues to report partial coverage. The opening schema and
 validation accept up to 350 Unicode characters (typically 150–350 according to
 available evidence, with shorter text allowed when evidence is sparse).
+
+Conversation and activity user text pass through the shared Session reference
+parser before publication. Model-only reference envelopes and their context
+excerpts never become user-authored activity; ordinary user text remains visible,
+including input from failed turns. A reference-only message supplies no authored
+activity. Isolated Home reply and opening-to-reply integration tests cover both
+legacy and Platform runtimes; the activity regression uses the actual shared
+reference envelope contract.

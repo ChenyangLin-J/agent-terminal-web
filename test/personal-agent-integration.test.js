@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const threadId = '019f9db5-cdfd-7c10-b477-4859c2339901';
 
-test('restricted opening uses the shared protocol and can resume through the existing Home gateway', async t => {
+for (const kernelMode of ['legacy', 'new']) {
+test(`restricted opening uses the shared protocol and can resume through the existing Home gateway (${kernelMode})`, async t => {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'personal-opening-integration-'));
   const workspace = path.join(temp, 'workspace'), state = path.join(temp, 'state'), fake = path.join(temp, 'fake-codex.cjs'), log = path.join(temp, 'calls.jsonl');
   await mkdir(workspace); await mkdir(state);
@@ -22,6 +23,8 @@ test('restricted opening uses the shared protocol and can resume through the exi
   const child = spawn(process.execPath, ['server.js'], { cwd: root, env: {
     PATH: process.env.PATH, NODE_ENV: 'test', HOST: '127.0.0.1', PORT: String(port), WORKSPACE_ROOT: workspace,
     OBSIDIAN_VAULT_PATH: path.join(workspace, 'obsidian'), AGENT_CODEX_STATE_ROOT: state,
+    AGENT_MEMORY_SYSTEM_ROOT: process.env.AGENT_MEMORY_SYSTEM_ROOT,
+    AGENT_PLATFORM_KERNEL: kernelMode,
     AGENT_INTEGRATIONS_DIR: path.join(temp, 'integrations'), AGENT_CUBOX_CONFIG_DIR: path.join(temp, 'cubox'),
     PRIVATE_AUTH_VERIFY_URL: 'http://127.0.0.1:9/disabled', HOME_AGENT_GATEWAY_TOKEN: 'fixture-only',
     CODEX_APP_SERVER_COMMAND: fake, AGENT_NATIVE_THREAD_CATALOG: '1',
@@ -48,7 +51,9 @@ test('restricted opening uses the shared protocol and can resume through the exi
   assert.equal(ledger.records['opening-fixture'].turnId, completed.turnId);
   const reply = await request('/turns', { sessionId: completed.threadId, text: '今天有点累，但终于跑通很开心', requestId: 'real-reply' });
   assert.equal(reply.status, 202);
-  assert.equal((await reply.json()).session.id, threadId);
+  const replyPayload = await reply.json();
+  assert.equal(replyPayload.session.id, threadId);
+  assert.equal(replyPayload.session.runtimeKernel, kernelMode === 'new' ? 'platform' : 'legacy');
   await until(async () => (await readFile(log, 'utf8')).includes('thread/resume'));
   await new Promise(resolve => setTimeout(resolve, 120));
   const activity = await (await request('/activity?' + new URLSearchParams({ from: new Date(Date.now() - 60_000).toISOString(), to: new Date(Date.now() + 1000).toISOString(), limit: '40' }))).json();
@@ -68,6 +73,7 @@ test('restricted opening uses the shared protocol and can resume through the exi
   assert.ok(turns[0].params.outputSchema);
   assert.equal(turns[1].params.outputSchema, undefined, 'opening JSON schema is confined to the initial turn');
 });
+}
 
 async function until(read) {
   const deadline = Date.now() + 10_000;

@@ -2746,7 +2746,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
           reply("error", { message: "Session 已归档，请恢复后重试。", preservePrompt: true });
           return;
         }
-        void submitAppServerPrompt(session, prompt.text, message.deliveryMode, skillNames, attachments, requirementText, references)
+        void submitAppServerPrompt(session, prompt.text, message.deliveryMode, skillNames, attachments, requirementText, { references })
           .then((submission) => {
             if (prompt.activatesThink) {
               session.thinkSkillActivated = true;
@@ -4196,8 +4196,9 @@ async function submitAppServerPrompt(
   skillNames = [],
   attachments = [],
   requirementText = text,
-  references = [],
+  options = {},
 ) {
+  const { references = [] } = options;
   await mediaSessionArchiveOperations.get(agentSessionSettingsKey(session.sessionId))?.catch(() => {});
   if (!session.ready || session.exited) throw new Error("App Server is still starting or has exited.");
   const state = session.turnState;
@@ -4307,7 +4308,7 @@ async function drainAppServerStartupPrompts(session) {
         prompt.skillNames,
         prompt.attachments,
         prompt.requirementText,
-        prompt.references || [],
+        { references: prompt.references || [] },
       );
       if (prompt.activatesThink) {
         session.thinkSkillActivated = true;
@@ -4648,7 +4649,7 @@ async function editAndForkAppServerSession(session, { beforeTurnId, editedText, 
       skillNames,
       attachments,
       requirementText,
-      references,
+      { references },
     );
     session.lastActivityAt = new Date().toISOString();
     persistRestorableWebSession(session);

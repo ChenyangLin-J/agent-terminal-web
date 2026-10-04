@@ -131,6 +131,24 @@ Saved sessions can also be archived from the web UI. The web UI keeps a small ar
 
 Archive also calls Codex's native `codex archive <session-id>` when possible, so archived sessions are moved out of the normal Codex sessions directory. The web UI scans both `~/.codex/sessions` and `~/.codex/archived_sessions`, so archived sessions can still be restored.
 
+Douyin and Xiaohongshu extraction Sessions archive automatically after a completed
+turn has had no follow-up conversation for two hours. A dedicated Session is
+identified from its first prompt: a media link/share, an extraction request, or
+the `douyin-transcript` / `xiaohongshu-transcript` skill. Favorites and Sessions
+with active or interrupted work remain available. A follow-up clears the
+deadline; its successful completion starts a new two-hour window. Reading the
+result or reopening the page does not reset the window.
+
+Auto-archive timing is stored privately in
+`~/.codex/agent-session-auto-archive.json`, so it survives runtime reclamation and
+service restarts. Existing local extraction Sessions with a recorded completion
+are also eligible. Before archiving, Agent Web verifies the latest native turn
+is still that completed turn; failed archive requests are retried. The check runs
+every minute and preserves the full conversation for later restoration.
+`AGENT_MEDIA_SESSION_AUTO_ARCHIVE_IDLE_MS` and
+`AGENT_MEDIA_SESSION_AUTO_ARCHIVE_CHECK_MS` override the two-hour window and
+one-minute check interval for isolated tests or custom deployments.
+
 The terminal helper uses the same title file:
 
 ```bash

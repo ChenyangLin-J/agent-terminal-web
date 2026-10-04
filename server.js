@@ -68,6 +68,11 @@ import {
   readAgentSessionFavorites,
   setAgentSessionFavorite,
 } from "./lib/agent-session-favorites.js";
+import {
+  MEDIA_SESSION_AUTO_ARCHIVE_IDLE_MS,
+  MediaSessionAutoArchiveStore,
+  mediaExtractionKind,
+} from "./lib/session-auto-archive.js";
 import { viewedImagePath } from "./lib/session-image.js";
 import { commandDisplayText } from "./lib/command-display.js";
 import {
@@ -149,6 +154,10 @@ const CODEX_SESSION_TITLES_FILE = path.join(CODEX_HOME, "session-titles.json");
 const CODEX_SESSION_ARCHIVE_FILE = path.join(CODEX_HOME, "session-archive.json");
 const AGENT_WEB_SESSIONS_FILE = path.join(CODEX_HOME, "agent-web-sessions.json");
 const AGENT_SESSION_SETTINGS_FILE = path.join(CODEX_HOME, "agent-session-settings.json");
+const MEDIA_SESSION_AUTO_ARCHIVE_FILE = path.join(CODEX_HOME, "agent-session-auto-archive.json");
+const MEDIA_SESSION_AUTO_ARCHIVE_CHECK_MS = positiveDuration(
+  process.env.AGENT_MEDIA_SESSION_AUTO_ARCHIVE_CHECK_MS, 60_000,
+);
 const CODEX_SESSION_PREVIEWS_FILE = path.join(CODEX_HOME, "agent-session-previews.json");
 const CODEX_SESSION_PROCESS_INDEX_ROOT = path.join(CODEX_HOME, "agent-session-process-index");
 const AGENT_SESSION_FAVORITES_FILE = path.resolve(
@@ -318,6 +327,11 @@ server.prependListener("upgrade", (req) => {
   logAgentEvent("ws-upgrade-received", req.agentWebUpgradeLogFields);
 });
 const sessions = new Map();
+const mediaSessionAutoArchive = new MediaSessionAutoArchiveStore(MEDIA_SESSION_AUTO_ARCHIVE_FILE, {
+  idleMs: positiveDuration(process.env.AGENT_MEDIA_SESSION_AUTO_ARCHIVE_IDLE_MS, MEDIA_SESSION_AUTO_ARCHIVE_IDLE_MS),
+});
+const mediaSessionArchiveOperations = new Map();
+let mediaSessionArchiveSweepRunning = false;
 const controlEventClients = new Set();
 let remoteAgentNotifyRateWindow = { startedAt: Date.now(), requests: 0 };
 const pendingSessionControlEvents = new Map();
@@ -406,8 +420,10 @@ app.post("/internal/codex-notify", async (req, res) => {
     session.sessionId = threadId;
     rememberAgentSessionAccess(threadId, session.access, session.hostId);
   }
+  flushMediaSessionPrompts(session);
   persistCompletedSessionPreview(session, event["last-assistant-message"]);
   const completedTurnId = cleanTurnId(event["turn-id"]);
+  const mediaCompletionIsCurrent = !session.turnState?.turnId || session.turnState.turnId === completedTurnId;
   completeTrackedTurn(session, completedTurnId);
   session.lastActivityAt = new Date().toISOString();
   rememberAgentSessionCompletion(
@@ -416,6 +432,7 @@ app.post("/internal/codex-notify", async (req, res) => {
     session.lastActivityAt,
     session.hostId,
   );
+  if (mediaCompletionIsCurrent) rememberMediaSessionCompletion(session, completedTurnId);
   resetDetachedCleanupAfterWork(session);
   persistRestorableWebSession(session);
   broadcast(session, "status", publicSession(session));
@@ -1865,6 +1882,7 @@ app.put("/api/codex-sessions/:id/archive", async (req, res) => {
   }
 
   try {
+    await mediaSessionArchiveOperations.get(agentSessionSettingsKey(id, agentHost.id))?.catch(() => {});
     if (endLiveSession) {
       for (const session of sessions.values()) {
         if (!session.exited && session.hostId === agentHost.id && session.sessionId === id) {
@@ -2060,7 +2078,13 @@ server.listen(PORT, HOST, () => {
   console.log(`Workspace root: ${WORKSPACE_ROOT}`);
   console.log(`Detached session TTL: ${Math.round(SESSION_TTL_MS / 60000)} minutes`);
   console.log(`Shared App Server: ${SHARED_APP_SERVER_ENABLED ? "enabled" : "disabled"}`);
+  void seedExistingMediaSessions().then(sweepMediaSessionArchives).catch(logMediaSessionArchiveError);
 });
+
+const mediaSessionArchiveTimer = setInterval(() => {
+  void sweepMediaSessionArchives();
+}, MEDIA_SESSION_AUTO_ARCHIVE_CHECK_MS);
+mediaSessionArchiveTimer.unref?.();
 
 process.once("exit", () => {
   agentHostAppServerPool?.close();
@@ -2799,6 +2823,7 @@ async function initializeAppServerSession(session, launch) {
       restoreAppServerTranscript(session, thread, { resumed: false });
     }
     session.sessionId = thread.id;
+    flushMediaSessionPrompts(session);
     session.forkedFromId = String(thread.forkedFromId || session.forkedFromId || "");
     session.parentThreadId = String(thread.parentThreadId || session.parentThreadId || "");
     if (session.parentThreadId) {
@@ -2843,17 +2868,16 @@ async function initializeAppServerSession(session, launch) {
 
 async function resumeAppServerThread(session, launch, params) {
   const threadId = launch.sessionId;
+  await mediaSessionArchiveOperations.get(agentSessionSettingsKey(threadId, session.hostId))?.catch(() => {});
   let unarchived = false;
 
   const unarchive = async () => {
     if (unarchived) return;
     await session.appServer.setThreadArchived(false, threadId);
     unarchived = true;
+    mediaSessionAutoArchive.cancel({ hostId: session.hostId, sessionId: threadId });
     if (launch.agentHost?.type !== "local") return;
-    const archive = await readSessionArchive();
-    if (!archive[threadId]) return;
-    delete archive[threadId];
-    await writeSessionArchive(archive);
+    updateLocalSessionArchive(threadId, false);
   };
 
   if (launch.agentHost?.type === "local") {
@@ -3175,7 +3199,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
     });
   }
 
-  ws.on("message", (raw) => {
+  ws.on("message", async (raw) => {
     let message;
     try {
       message = JSON.parse(raw.toString());
@@ -3197,6 +3221,9 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
       }
       rememberNotificationTarget(session, message.notificationApp, message.notificationDeviceId);
       renewSessionRetention(session);
+      rememberMediaSessionPrompt(session, "", [], { consumeFirstPrompt: false });
+      await mediaSessionArchiveOperations.get(agentSessionSettingsKey(session.sessionId, session.hostId))?.catch(() => {});
+      if (session.exited) return;
       logControlMessage(session, ws, "input", message.data);
       session.terminal.write(message.data);
       session.lastActivityAt = new Date().toISOString();
@@ -3229,6 +3256,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
         if (!session.title) session.title = cleanTitle(requirementText) || "New Codex session";
         const prompt = prepareSessionPrompt(session, normalized);
         const skillNames = requestedAppSkillNames(prompt.text, message.skills);
+        rememberMediaSessionPrompt(session, requirementText, skillNames);
         if (prompt.activatesThink) session.thinkSkillActivationPending = true;
         if (session.transport === APP_SERVER_TRANSPORT) {
           rememberSubmittedAttachments(session, attachments);
@@ -3270,6 +3298,11 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
               if (prompt.activatesThink) session.thinkSkillActivationPending = false;
               send(ws, "error", { message: `Prompt was not sent: ${error.message}`, preservePrompt: true });
             });
+          return;
+        }
+        await mediaSessionArchiveOperations.get(agentSessionSettingsKey(session.sessionId, session.hostId))?.catch(() => {});
+        if (session.exited) {
+          send(ws, "error", { message: "Session 已归档，请恢复后重试。", preservePrompt: true });
           return;
         }
         const submission = submitTrackedPrompt(
@@ -3695,6 +3728,156 @@ function logControlMessage(session, ws, kind, data, fields = {}) {
     clients: session.clients.size,
     ...fields,
   });
+}
+
+function positiveDuration(value, fallback) {
+  const duration = Number(value);
+  return Number.isSafeInteger(duration) && duration > 0 ? duration : fallback;
+}
+
+function logMediaSessionArchiveError(error) {
+  logAgentEvent("media-session-auto-archive-failed", { message: cleanClientLogValue(error.message, 300) });
+}
+
+function rememberMediaSessionPrompt(session, text, skillNames = [], { consumeFirstPrompt = true } = {}) {
+  const isFirstPrompt = consumeFirstPrompt && session.mode === "new" && !session.mediaAutoArchivePromptSeen &&
+    !session.turnState?.requirementSequence && !session.restoredTurnCount;
+  if (consumeFirstPrompt) session.mediaAutoArchivePromptSeen = true;
+  const prompt = { text, skillNames, isFirstPrompt, now: Date.now() };
+  if (!isValidSessionId(session.sessionId)) {
+    // New terminal/App Server threads receive their Codex id asynchronously.
+    if (isFirstPrompt && mediaExtractionKind(text, skillNames)) {
+      session.pendingMediaAutoArchivePrompts = [prompt];
+    } else if (session.pendingMediaAutoArchivePrompts?.length) {
+      session.pendingMediaAutoArchivePrompts.push(prompt);
+    }
+    return;
+  }
+  flushMediaSessionPrompts(session);
+  mediaSessionAutoArchive.recordPrompt({ hostId: session.hostId, sessionId: session.sessionId, ...prompt });
+}
+
+function flushMediaSessionPrompts(session) {
+  if (!isValidSessionId(session.sessionId) || !session.pendingMediaAutoArchivePrompts?.length) return;
+  for (const prompt of session.pendingMediaAutoArchivePrompts) {
+    mediaSessionAutoArchive.recordPrompt({ hostId: session.hostId, sessionId: session.sessionId, ...prompt });
+  }
+  session.pendingMediaAutoArchivePrompts = [];
+}
+
+function rememberMediaSessionCompletion(session, turnId, { successful = true } = {}) {
+  if (!isValidSessionId(session.sessionId) || !turnId) return;
+  flushMediaSessionPrompts(session);
+  // A queued follow-up must finish before the inactivity window can begin.
+  mediaSessionAutoArchive.recordCompletion({
+    hostId: session.hostId,
+    sessionId: session.sessionId,
+    turnId,
+    successful: successful && !session.turnState?.active,
+  });
+}
+
+async function seedExistingMediaSessions() {
+  const settings = readAgentSessionSettings();
+  const completedIds = new Set(Object.entries(settings)
+    .filter(([id, setting]) => isValidSessionId(id) && setting?.lastCompletedTurnId &&
+      validIsoTimestamp(setting.lastCompletedAt) &&
+      !mediaSessionAutoArchive.get({ hostId: PERSONAL_AGENT_HOST.id, sessionId: id }))
+    .map(([id]) => id));
+  if (!completedIds.size) return;
+  const archived = readSessionArchiveSync();
+  for (const file of await walkFiles(CODEX_SESSIONS_ROOT)) {
+    const id = sessionIdFromFilename(file);
+    if (!completedIds.has(id) || archived[id]) continue;
+    const meta = await readCodexSessionMeta(file);
+    const firstPrompt = await readCodexSessionTitle(file, { fullPrompt: true });
+    if (!meta || !mediaExtractionKind(firstPrompt) ||
+        mediaSessionAutoArchive.get({ hostId: PERSONAL_AGENT_HOST.id, sessionId: id })) continue;
+    const identity = { hostId: PERSONAL_AGENT_HOST.id, sessionId: id };
+    // Native turn state is checked again before any historical thread is archived.
+    mediaSessionAutoArchive.recordPrompt({ ...identity, text: firstPrompt,
+      isFirstPrompt: true, now: Date.parse(meta.createdAt) });
+    mediaSessionAutoArchive.recordCompletion({ ...identity,
+      turnId: settings[id].lastCompletedTurnId, now: Date.parse(settings[id].lastCompletedAt) });
+  }
+}
+
+function mediaSessionArchiveStillDue(record) {
+  const current = mediaSessionAutoArchive.get(record);
+  if (!current || current.completedAt !== record.completedAt ||
+      current.lastUserMessageAt !== record.lastUserMessageAt ||
+      current.lastCompletedTurnId !== record.lastCompletedTurnId ||
+      Date.now() < record.dueAt) return false;
+  const host = resolveAgentHost(AGENT_HOSTS, record.hostId);
+  if (!host || favoriteSessionIdsForHost(host).has(record.sessionId)) return false;
+  for (const session of sessions.values()) {
+    if (session.hostId !== record.hostId || session.sessionId !== record.sessionId || session.exited) continue;
+    if (!session.ready || sessionHasActiveWork(session) || session.turnState?.interrupted) return false;
+  }
+  return !Object.values(readPersistedWebSessions()).some((session) =>
+    (session.hostId || PERSONAL_AGENT_HOST.id) === record.hostId &&
+    session.sessionId === record.sessionId && (session.turnState?.active || session.turnState?.interrupted));
+}
+
+async function autoArchiveMediaSession(record) {
+  const host = resolveAgentHost(AGENT_HOSTS, record.hostId);
+  if (!host || !mediaSessionArchiveStillDue(record)) return;
+  if (host.type === "local" && readSessionArchiveSync()[record.sessionId]) {
+    mediaSessionAutoArchive.cancel(record);
+    return;
+  }
+  await withStandaloneAppServer(host, async (client) => {
+    const thread = await client.readThread({ threadId: record.sessionId, includeTurns: true });
+    const latestTurn = thread?.turns?.at(-1);
+    // Also protects against conversations submitted outside Agent Web.
+    if (!thread || thread.status?.type === "active" || activeTurnFromThread(thread) ||
+        latestTurn?.id !== record.lastCompletedTurnId || latestTurn?.status !== "completed" || latestTurn.error ||
+        !mediaSessionArchiveStillDue(record)) return;
+    try {
+      await client.setThreadArchived(true, record.sessionId);
+    } catch (error) {
+      // The native server may have applied the archive before its response failed.
+      // Roll back before releasing a follow-up waiting on this operation.
+      if (!mediaSessionArchiveStillDue(record)) {
+        await client.setThreadArchived(false, record.sessionId).catch(logMediaSessionArchiveError);
+      }
+      throw error;
+    }
+    // A prompt may arrive during the RPC. Its submission waits for this operation;
+    // restore the thread first, then let that conversation continue normally.
+    if (!mediaSessionArchiveStillDue(record)) {
+      await client.setThreadArchived(false, record.sessionId);
+      return;
+    }
+    if (host.type === "local") updateLocalSessionArchive(record.sessionId, true);
+    mediaSessionAutoArchive.cancel(record);
+    for (const session of sessions.values()) {
+      if (session.hostId !== record.hostId || session.sessionId !== record.sessionId || session.exited) continue;
+      killSessionTerminal(session);
+    }
+    removePersistedWebSessionsForCodexSession(record.sessionId, record.hostId);
+    invalidateThreadCatalog(host);
+    logAgentEvent("media-session-auto-archived", {
+      hostId: record.hostId, codexSessionId: record.sessionId, kind: record.kind,
+    });
+  });
+}
+
+async function sweepMediaSessionArchives() {
+  if (mediaSessionArchiveSweepRunning) return;
+  mediaSessionArchiveSweepRunning = true;
+  try {
+    for (const record of mediaSessionAutoArchive.dueRecords()) {
+      if (!mediaSessionArchiveStillDue(record)) continue;
+      const key = agentSessionSettingsKey(record.sessionId, record.hostId);
+      const operation = autoArchiveMediaSession(record);
+      mediaSessionArchiveOperations.set(key, operation);
+      try { await operation; } catch (error) { logMediaSessionArchiveError(error); }
+      finally { mediaSessionArchiveOperations.delete(key); }
+    }
+  } finally {
+    mediaSessionArchiveSweepRunning = false;
+  }
 }
 
 function scheduleCleanup(session) {
@@ -4686,6 +4869,7 @@ async function submitAppServerPrompt(
   attachments = [],
   requirementText = text,
 ) {
+  await mediaSessionArchiveOperations.get(agentSessionSettingsKey(session.sessionId, session.hostId))?.catch(() => {});
   if (!session.ready || session.exited) throw new Error("App Server is still starting or has exited.");
   const state = session.turnState;
   const appServer = session.appServer;
@@ -6408,6 +6592,7 @@ function handleAppServerNotification(session, message) {
   if (method === "thread/started" && params.thread?.id) {
     session.sessionId = params.thread.id;
     rememberAgentSessionAccess(session.sessionId, session.access, session.hostId);
+    flushMediaSessionPrompts(session);
   }
   if (method === "thread/tokenUsage/updated" && params.tokenUsage) {
     session.appTokenUsage = params.tokenUsage;
@@ -6503,6 +6688,7 @@ function handleAppServerNotification(session, message) {
     renderAppServerItemCompleted(session, params.item);
   } else if (method === "turn/completed") {
     const turnId = cleanTurnId(params.turn?.id);
+    const mediaCompletionIsCurrent = !session.turnState.turnId || session.turnState.turnId === turnId;
     const turnStatus = String(params.turn?.status || "").toLowerCase();
     const stopped = Boolean(
       ["interrupted", "cancelled", "canceled"].includes(turnStatus) ||
@@ -6510,6 +6696,9 @@ function handleAppServerNotification(session, message) {
     );
     if (!stopped) persistCompletedSessionPreview(session, session.lastAssistantMessage);
     completeTrackedTurn(session, turnId, { stopped });
+    if (mediaCompletionIsCurrent) rememberMediaSessionCompletion(session, turnId, {
+      successful: !stopped && !["failed", "error"].includes(turnStatus) && !params.turn?.error,
+    });
     if (!stopped) {
       rememberAgentSessionCompletion(
         session.sessionId,
@@ -8515,8 +8704,11 @@ function normalizeSessionArchive(value) {
   );
 }
 
-async function writeSessionArchive(archive) {
-  await fs.mkdir(path.dirname(CODEX_SESSION_ARCHIVE_FILE), { recursive: true });
+function updateLocalSessionArchive(id, archived) {
+  const archive = readSessionArchiveSync();
+  if (archived) archive[id] = { archivedAt: new Date().toISOString() };
+  else delete archive[id];
+  fsSync.mkdirSync(path.dirname(CODEX_SESSION_ARCHIVE_FILE), { recursive: true });
   const cleaned = Object.fromEntries(
     Object.entries(archive)
       .map(([id, record]) => [
@@ -8527,20 +8719,15 @@ async function writeSessionArchive(archive) {
       .sort(([a], [b]) => a.localeCompare(b)),
   );
   const tempFile = `${CODEX_SESSION_ARCHIVE_FILE}.${process.pid}.tmp`;
-  await fs.writeFile(tempFile, `${JSON.stringify(cleaned, null, 2)}\n`, { mode: 0o600 });
-  await fs.rename(tempFile, CODEX_SESSION_ARCHIVE_FILE);
+  fsSync.writeFileSync(tempFile, `${JSON.stringify(cleaned, null, 2)}\n`, { mode: 0o600 });
+  fsSync.renameSync(tempFile, CODEX_SESSION_ARCHIVE_FILE);
 }
 
 async function setSessionArchived(id, archived, agentHost = PERSONAL_AGENT_HOST) {
   if (agentHost.type === "local") {
-    const archive = await readSessionArchive();
-    if (archived) {
-      archive[id] = { archivedAt: new Date().toISOString() };
-    } else {
-      delete archive[id];
-    }
-    await writeSessionArchive(archive);
+    updateLocalSessionArchive(id, archived);
   }
+  mediaSessionAutoArchive.cancel({ hostId: agentHost.id, sessionId: id });
 
   try {
     await withStandaloneAppServer(agentHost, (client) => client.setThreadArchived(archived, id));
@@ -8563,7 +8750,7 @@ function isValidSessionId(value) {
   return /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(String(value || ""));
 }
 
-async function readCodexSessionTitle(file) {
+async function readCodexSessionTitle(file, { fullPrompt = false } = {}) {
   const stream = fsSync.createReadStream(file, { encoding: "utf8", highWaterMark: 16_384 });
   let buffer = "";
   let linesRead = 0;
@@ -8575,7 +8762,7 @@ async function readCodexSessionTitle(file) {
 
     for (const line of lines) {
       linesRead += 1;
-      const title = titleFromJsonLine(line);
+      const title = titleFromJsonLine(line, { fullPrompt });
       if (title) return title;
       if (linesRead > 300) {
         stream.destroy();
@@ -8584,10 +8771,10 @@ async function readCodexSessionTitle(file) {
     }
   }
 
-  return titleFromJsonLine(buffer) || "";
+  return titleFromJsonLine(buffer, { fullPrompt }) || "";
 }
 
-function titleFromJsonLine(line) {
+function titleFromJsonLine(line, { fullPrompt = false } = {}) {
   if (!line.trim()) return "";
 
   try {
@@ -8595,11 +8782,14 @@ function titleFromJsonLine(line) {
     const payload = parsed.payload || {};
 
     if (parsed.type === "event_msg" && payload.type === "user_message") {
-      return cleanTitle(payload.message);
+      const title = cleanTitle(payload.message);
+      return fullPrompt && title ? String(payload.message) : title;
     }
 
     if (parsed.type === "response_item" && payload.type === "message" && payload.role === "user") {
-      return cleanTitle(textFromContent(payload.content));
+      const text = textFromContent(payload.content);
+      const title = cleanTitle(text);
+      return fullPrompt && title ? text : title;
     }
   } catch {
     return "";

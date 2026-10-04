@@ -38,6 +38,8 @@ After adopting a published compatible Platform pin, ordinary `npm run build:sess
 
 `AGENT_MEMORY_SYSTEM_ROOT` is optional; without it the existing sibling memory-system path remains the default. Candidate server data, workspace, uploads and Codex state must be isolated. `scripts/testing/candidate-preview.mjs` provides synthetic Codex responses and local authentication for UI tests; it never proves real model or microphone behavior.
 
+For interactive verification, run the same script with `--real`, an absolute isolated `CANDIDATE_PREVIEW_ROOT`, `AGENT_MEMORY_SYSTEM_ROOT` and `AGENT_PLATFORM_CANDIDATE`. It uses the installed Codex binary and a permission-restricted copy of the current user's `auth.json` (override with `AGENT_PREVIEW_AUTH_SOURCE`). Session history, configuration, uploads and product state stay in the preview root. Its local authentication helper is only for a loopback preview, not a deployable authentication service. Stop the owning preview process to close its child server and helper. Shared recording scripts must be available in the preview's `workspace/shared-web` for microphone input.
+
 Use the project-owned `scripts/testing/session-ui.flow.mjs` with `tools/workspace-playwright/pw record` to produce desktop/mobile videos and ordered frames. Browser regressions also cover lazy draft/restart recovery, runtime lease expiry and read-only child previews. Platform owns the shared component and input-state tests; Agent Web retains backend authorization, upload validation, thread, memory, integration and service safety tests.
 
 ## Removed duplicate implementation and rollback

@@ -1,11 +1,21 @@
-import { mkdir,writeFile,chmod } from 'node:fs/promises';
+import { mkdir,writeFile,chmod,copyFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import http from 'node:http';
 import path from 'node:path';
+import os from 'node:os';
 const root=process.env.CANDIDATE_PREVIEW_ROOT;
+const realBackend=process.argv.includes('--real');
 if(!root||!path.isAbsolute(root))throw new Error('Set an absolute isolated CANDIDATE_PREVIEW_ROOT.');
-for(const dir of ['workspace','codex','integrations']) await mkdir(path.join(root,dir),{recursive:true});
+for(const dir of ['workspace','codex','integrations']) await mkdir(path.join(root,dir),{recursive:true,mode:0o700});
+if(realBackend){
+ const authSource=process.env.AGENT_PREVIEW_AUTH_SOURCE||path.join(os.homedir(),'.codex','auth.json');
+ await copyFile(authSource,path.join(root,'codex','auth.json'));
+ await chmod(path.join(root,'codex','auth.json'),0o600);
+ await writeFile(path.join(root,'codex','config.toml'),'cli_auth_credentials_store = "file"\n',{mode:0o600});
+ console.log('Real Codex backend; isolated Session state and workspace; loopback-only preview.');
+}
 const fake=path.join(root,'fake-codex.cjs');
+if(!realBackend){
 await writeFile(fake,`#!/usr/bin/env node
 const readline=require('node:readline'); const send=v=>process.stdout.write(JSON.stringify(v)+'\\n'); let n=0;
 const threads=new Map();
@@ -26,9 +36,10 @@ setTimeout(()=>{send({method:'item/completed',params:{threadId,turnId:id,item:{i
 }else if(m.id!==undefined)send({id:m.id,result:{}});
 });
 `);await chmod(fake,0o755);
+}
 const auth=http.createServer((_req,res)=>{res.writeHead(200,{'content-type':'application/json'});res.end('{"authenticated":true}');});
 await new Promise(resolve=>auth.listen(0,'127.0.0.1',resolve));
-const child=spawn(process.execPath,['server.js'],{cwd:path.resolve(import.meta.dirname,'../..'),env:{...process.env,HOST:'127.0.0.1',PORT:'0',WORKSPACE_ROOT:path.join(root,'workspace'),CODEX_HOME:path.join(root,'codex'),AGENT_MEMORY_SYSTEM_ROOT:process.env.AGENT_MEMORY_SYSTEM_ROOT,AGENT_INTEGRATIONS_DIR:path.join(root,'integrations'),AGENT_SESSION_FAVORITES_FILE:path.join(root,'favorites.json'),AGENT_SESSION_SHARES_FILE:path.join(root,'shares.json'),CODEX_UPDATE_NOTICES_FILE:path.join(root,'notices.json'),PRIVATE_AUTH_VERIFY_URL:'http://127.0.0.1:'+auth.address().port,CODEX_APP_SERVER_COMMAND:fake,AGENT_NATIVE_THREAD_CATALOG:'0',AGENT_RUNTIME_KERNEL:'legacy',NODE_ENV:'test'},stdio:['ignore','pipe','pipe']});
+const child=spawn(process.execPath,['server.js'],{cwd:path.resolve(import.meta.dirname,'../..'),env:{...process.env,HOST:'127.0.0.1',PORT:'0',WORKSPACE_ROOT:path.join(root,'workspace'),CODEX_HOME:path.join(root,'codex'),AGENT_MEMORY_SYSTEM_ROOT:process.env.AGENT_MEMORY_SYSTEM_ROOT,AGENT_INTEGRATIONS_DIR:path.join(root,'integrations'),AGENT_SESSION_FAVORITES_FILE:path.join(root,'favorites.json'),AGENT_SESSION_SHARES_FILE:path.join(root,'shares.json'),CODEX_UPDATE_NOTICES_FILE:path.join(root,'notices.json'),PRIVATE_AUTH_VERIFY_URL:'http://127.0.0.1:'+auth.address().port,CODEX_APP_SERVER_COMMAND:realBackend?(process.env.CODEX_APP_SERVER_COMMAND||'codex'):fake,AGENT_NATIVE_THREAD_CATALOG:realBackend?'1':'0',AGENT_RUNTIME_KERNEL:'legacy',NODE_ENV:'test'},stdio:['ignore','pipe','pipe']});
 child.stdout.pipe(process.stdout);child.stderr.pipe(process.stderr);
 child.on('exit',code=>{auth.close();process.exit(code||0);});
 for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>child.kill(signal));

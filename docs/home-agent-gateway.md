@@ -24,3 +24,42 @@ Before Agent Web sends upstream, it writes a `pending` request record; accepted 
 For isolated tests or development harnesses, set `AGENT_CODEX_STATE_ROOT`; `AGENT_STATE_ROOT` uses its `codex/` child. These avoid repurposing a real user's `HOME` or `CODEX_HOME`.
 
 Deploy this change through the normal Agent Web process. After verification and commit, an external terminal must restart `agent-terminal-web.service` only when no turn is running. An Agent Web session must not restart its own service.
+
+## Personal openings
+
+The same protected loopback prefix now also provides a backend-only personal
+opening gateway. Home owns the context and saved result; Agent Web owns the
+restricted durable thread. The Home product and API contract is in
+`home-portal/docs/personal-agent-mvp.md`.
+
+| Route | Behavior |
+| --- | --- |
+| `GET /api/home/agent/activity?from=…&to=…&limit=…` | Bounded recent conversations, with user/assistant authors, exact timestamps and partial coverage. Uses `[from,to)`. Initial opening turns are excluded; user continuation is included for all turn states. |
+| `POST /api/home/agent/openings` | `requestId`, `date`, `period` (`morning`/`evening`), bounded `prompt`; durable reservation before submission. Same request/payload is reused, a changed payload conflicts. One background generation, interactive turns take precedence at admission. |
+| `GET /api/home/agent/openings/:requestId` | Read the completed/pending/failed/uncertain result. Uncertain jobs with an exact stored thread/turn ID may reconcile from durable history without submitting another turn. |
+
+Requests use a thread-scoped client over the existing shared App Server, never
+the mutable catalog client for `thread/start`. Configuration discovery is
+required; shell, unified exec, discovered MCP, Apps, Plugins and web search are
+disabled for generation. The thread uses read-only sandbox and approval never;
+the turn uses the installed protocol's `sandboxPolicy` and a one-turn JSON
+output schema. Unsupported restrictions fail rather than falling back to full
+access. Actual native capability behavior and generation quality remain to be
+verified in a candidate environment with a real model.
+
+The runtime cwd is `WORKSPACE_ROOT/.personal-agent-runtime`, created on demand.
+It stays inside the existing Home resume boundary. User continuation uses the
+existing `/turns` route and normal Session policy; the generation schema is not
+carried into replies. Token usage is saved when the provider reports it.
+
+`home-personal-agent-openings.json` in the configured Codex state root has mode
+0600. Thread and accepted turn IDs are persisted before publishing a result;
+pending/running records after a restart are uncertain. Recovery matches the
+exact turn on a bounded history page. Missing identity or missing history is
+left uncertain for inspection. Ledger corruption fails closed. Home can
+reconcile a result through its own endpoint using the original request ID.
+
+Validation uses an isolated state/workspace, fake App Server protocol and no
+production credentials. It covers admission, idempotency, restart recovery,
+source authors/timestamps and a complete opening-to-Home-reply flow while one
+shared App Server remains alive. Neither service was deployed or restarted.

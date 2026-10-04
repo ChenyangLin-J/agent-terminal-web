@@ -31,6 +31,7 @@ import { readProjectRuleDocuments } from "./lib/project-rule-documents.js";
 import { orderKnowledgeChanges } from "./lib/knowledge-change-order.js";
 import { memoryCitationFromToolItem } from "./lib/memory-access-citations.js";
 import { createPersonalMemoryScheduler } from "./lib/personal-memory-scheduler.js";
+import { registerPersonalAgentGateway } from "./lib/personal-agent-gateway.js";
 import { readKnowledgeChanges } from "../memory-system/lib/change-ledger.js";
 import { resolveKnowledgeChange } from "../memory-system/lib/knowledge-actions.js";
 import {
@@ -1147,6 +1148,18 @@ app.use("/api/home/agent", (req, res, next) => {
   }
   res.set("Cache-Control", "private, no-store");
   next();
+});
+
+registerPersonalAgentGateway(app, {
+  statePath: path.join(CODEX_HOME, "home-personal-agent-openings.json"),
+  cwd: path.join(WORKSPACE_ROOT, ".personal-agent-runtime"),
+  createClient: async ({ cwd }) => {
+    await fs.mkdir(cwd, { recursive: true, mode: 0o700 });
+    return createAgentAppServerClient(cwd, `home-opening-${cryptoRandomId()}`);
+  },
+  listSessions: () => listCodexSessions({ archived: false }),
+  readTurnPage: (threadId, options) => withSharedAppServer((client) => client.listThreadTurns({ threadId, ...options })),
+  isInteractiveBusy: () => [...sessions.values()].some((session) => session.turnState?.active || session.appServer?.activeTurnId),
 });
 
 app.get("/api/home/agent/sessions", async (_req, res) => {

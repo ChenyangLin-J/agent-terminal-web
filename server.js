@@ -1159,7 +1159,6 @@ const personalAgentGateway = registerPersonalAgentGateway(app, {
   },
   listSessions: () => listCodexSessions({ archived: false }),
   readTurnPage: (threadId, options) => withSharedAppServer((client) => client.listThreadTurns({ threadId, ...options })),
-  isInteractiveBusy: () => [...sessions.values()].some((session) => session.turnState?.active || session.appServer?.activeTurnId),
 });
 
 app.get("/api/home/agent/sessions", async (_req, res) => {

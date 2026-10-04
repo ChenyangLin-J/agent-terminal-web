@@ -67,6 +67,23 @@ test('restricted opening uses the shared protocol and can resume through the exi
   assert.equal(turns[0].params.sandboxPolicy.type, 'readOnly');
   assert.ok(turns[0].params.outputSchema);
   assert.equal(turns[1].params.outputSchema, undefined, 'opening JSON schema is confined to the initial turn');
+
+  // Keep an actual interactive Session running over the shared connection.
+  // An opening must use a different thread and complete without stopping it.
+  const held = await request('/turns', { sessionId: threadId, text: 'fixture:hold-interactive', requestId: 'held-interactive' });
+  assert.equal(held.status, 202);
+  const conversation = () => request('/conversation?sessionId=' + threadId).then(response => response.json());
+  await until(async () => (await conversation()).turn?.active);
+  const concurrent = await request('/openings', { ...opening, requestId: 'concurrent-opening', period: 'morning' });
+  assert.equal(concurrent.status, 202, 'active interactive Sessions must not block an independent opening');
+  const concurrentResult = await until(async () => {
+    const result = await (await request('/openings/concurrent-opening')).json();
+    return result.status === 'completed' ? result : null;
+  });
+  assert.notEqual(concurrentResult.threadId, threadId);
+  assert.equal((await conversation()).turn?.active, true, 'opening completion must not complete or interrupt the interactive turn');
+  const concurrentCalls = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(concurrentCalls.filter(call => call.method === 'initialize').length, 1, 'concurrent generation still uses one App Server');
 });
 
 async function until(read) {
@@ -77,8 +94,8 @@ async function until(read) {
 function fakeAppServer() {
   return `#!/usr/bin/env node
 const fs = require('node:fs'), readline = require('node:readline');
-const threadId = '${threadId}', turns = [], input = readline.createInterface({input:process.stdin});
-let cwd = process.cwd();
+const threadId = '${threadId}', concurrentThreadId = '019f9db5-cdfd-7c10-b477-4859c2339902', threads = new Map(), input = readline.createInterface({input:process.stdin});
+let sequence = 0;
 const send = value => process.stdout.write(JSON.stringify(value)+'\\n');
 input.on('line', line => {
  const message = JSON.parse(line), params = message.params || {};
@@ -86,20 +103,26 @@ input.on('line', line => {
  if(message.id===undefined) return;
  if(message.method==='initialize') return send({id:message.id,result:{userAgent:'fixture'}});
  if(message.method==='config/read') return send({id:message.id,result:{config:{mcp_servers:{},apps:{},plugins:{}}}});
- if(message.method==='thread/list') return send({id:message.id,result:{data:turns.length?[{id:threadId,cwd,name:'Opening',updatedAt:Math.floor(Date.now()/1000),createdAt:1,status:'idle'}]:[]}});
- if(message.method==='thread/turns/list') return send({id:message.id,result:{data:[...turns].reverse(),nextCursor:null}});
- if(message.method==='thread/read') return send({id:message.id,result:{thread:{id:threadId,cwd,turns}}});
- if(message.method==='thread/start'||message.method==='thread/resume') {cwd=params.cwd; return send({id:message.id,result:{thread:{id:threadId,cwd,turns:[]},initialTurnsPage:{data:[...turns].reverse()}}});}
+ if(message.method==='thread/list') return send({id:message.id,result:{data:[...threads].filter(([,value])=>value.turns.length).map(([id,value])=>({id,cwd:value.cwd,name:'Opening',updatedAt:Math.floor(Date.now()/1000),createdAt:1,status:'idle'}))}});
+ if(message.method==='thread/turns/list') return send({id:message.id,result:{data:[...(threads.get(params.threadId)?.turns||[])].reverse(),nextCursor:null}});
+ if(message.method==='thread/read') {const value=threads.get(params.threadId);return send({id:message.id,result:{thread:{id:params.threadId,cwd:value.cwd,turns:value.turns}}});}
+ if(message.method==='thread/start'||message.method==='thread/resume') {
+  const id=message.method==='thread/resume'?params.threadId:threads.size?concurrentThreadId:threadId;
+  if(!threads.has(id))threads.set(id,{cwd:params.cwd,turns:[]});
+  const value=threads.get(id);return send({id:message.id,result:{thread:{id,cwd:value.cwd,turns:[]},initialTurnsPage:{data:[...value.turns].reverse()}}});
+ }
  if(message.method==='turn/start') {
-  const turn={id:'019f9db5-cdfd-7c10-b477-4859c233'+String(9910+turns.length),startedAt:Math.floor(Date.now()/1000),status:'inProgress',items:[{type:'userMessage',content:params.input}]};
+  const targetThreadId=params.threadId, turns=threads.get(targetThreadId).turns;
+  const turn={id:'019f9db5-cdfd-7c10-b477-4859c233'+String(9910+sequence++),startedAt:Math.floor(Date.now()/1000),status:'inProgress',items:[{type:'userMessage',content:params.input}]};
   turns.push(turn);send({id:message.id,result:{turn}});
+  if(params.input.some(item=>item.text==='fixture:hold-interactive'))return;
   return setTimeout(()=>{
    const text=params.outputSchema?JSON.stringify({text:'今天你说跑通了，想聊聊过程吗？',sourceIds:['source-1'],reason:'用户记录'}):'接着说说你的感受吧。';
    const item={type:'agentMessage',phase:'final_answer',text,completedAt:new Date().toISOString()};
    turn.items.push(item);turn.status='completed';turn.completedAt=Math.floor(Date.now()/1000);
-   send({method:'item/completed',params:{threadId,turnId:turn.id,item}});
-   send({method:'thread/tokenUsage/updated',params:{threadId,turnId:turn.id,tokenUsage:{last:{inputTokens:120,outputTokens:20,totalTokens:140},total:{}}}});
-   send({method:'turn/completed',params:{threadId,turn}});
+   send({method:'item/completed',params:{threadId:targetThreadId,turnId:turn.id,item}});
+   send({method:'thread/tokenUsage/updated',params:{threadId:targetThreadId,turnId:turn.id,tokenUsage:{last:{inputTokens:120,outputTokens:20,totalTokens:140},total:{}}}});
+   send({method:'turn/completed',params:{threadId:targetThreadId,turn}});
   },30);
  }
  send({id:message.id,result:{}});

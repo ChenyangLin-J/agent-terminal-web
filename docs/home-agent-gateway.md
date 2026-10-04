@@ -35,7 +35,7 @@ restricted durable thread. The Home product and API contract is in
 | Route | Behavior |
 | --- | --- |
 | `GET /api/home/agent/activity?from=…&to=…&limit=…` | Bounded recent conversations, with user/assistant authors, exact timestamps and partial coverage. Uses `[from,to)`. Initial opening turns are excluded; user continuation is included for all turn states. |
-| `POST /api/home/agent/openings` | `requestId`, `date`, `period` (`morning`/`evening`), bounded `prompt`; durable reservation before submission. Same request/payload is reused, a changed payload conflicts. One background generation, interactive turns take precedence at admission. |
+| `POST /api/home/agent/openings` | `requestId`, `date`, `period` (`morning`/`evening`), bounded `prompt`; durable reservation before submission. Same request/payload is reused, a changed payload conflicts. One opening generation at a time; active interactive Sessions do not block admission to its independent thread. |
 | `GET /api/home/agent/openings/:requestId` | Read the completed/pending/failed/uncertain result. Uncertain jobs with an exact stored thread/turn ID may reconcile from durable history without submitting another turn. |
 
 Requests use a thread-scoped client over the existing shared App Server, never
@@ -46,6 +46,16 @@ the turn uses the installed protocol's `sandboxPolicy` and a one-turn JSON
 output schema. Unsupported restrictions fail rather than falling back to full
 access. Real morning and evening turns have completed without tool calls;
 usage and longer-term policy behavior remain to be validated.
+
+Opening admission does not inspect other Sessions' active turns. It proceeds
+on a separate durable thread while users continue chatting. The opening
+reservation remains serialized, as does submitting a new turn to an already
+active target thread; neither condition depends on unrelated Sessions.
+The protocol integration test keeps an interactive turn active, completes an
+opening on a different thread, and verifies that the original turn stays active
+and both clients use one shared App Server. The targeted suite passes 18/18.
+The admission change requires an external Agent Web reload after commit;
+the successful production morning/evening acceptance predates this change.
 
 The opening watcher only accepts notifications explicitly attributed to its
 durable thread and checks a supplied turn ID. Completion requires the expected

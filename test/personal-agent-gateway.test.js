@@ -17,7 +17,7 @@ async function fixture(options = {}) {
   const gateway = registerPersonalAgentGateway(app, {
     createClient, listSessions: options.listSessions || (async () => []), readTurnPage: options.readTurnPage || (async () => ({ data: [] })),
     statePath: path.join(root, "opening-ledger.json"), openingTimeoutMs: options.openingTimeoutMs || 200,
-    isInteractiveBusy: options.isInteractiveBusy, backgroundThreadIds: options.backgroundThreadIds,
+    backgroundThreadIds: options.backgroundThreadIds,
   });
   const server = http.createServer(app); await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   return { root, clients, gateway, statePath: path.join(root, "opening-ledger.json"), url: `http://127.0.0.1:${server.address().port}`, close: async () => { await new Promise((resolve) => server.close(resolve)); await rm(root, { recursive: true, force: true }); } };
@@ -86,9 +86,7 @@ test('accepts a full 350-character opening without truncation', async t => {
   assert.equal(result.body.text, text);
 });
 
-test("interactive busy rejects new work and a restart keeps uncertain work fail closed", async (t) => {
-  const busy = await fixture({ isInteractiveBusy: () => true }); t.after(busy.close);
-  assert.equal((await request(busy, "/api/home/agent/openings", "POST", { requestId: "busy", prompt: "x", date: "2026-10-04", period: "morning" })).status, 409);
+test("a restart keeps uncertain work fail closed", async (t) => {
   const first = await fixture({ createClient: () => new FakeClient() });
   const pending = { records: { restart: { requestId: "restart", fingerprint: "x", status: "running", threadId: "durable-thread", turnId: "expected-turn", prompt: "x", date: "2026-10-04", period: "morning" } } };
   await (await import("node:fs/promises")).writeFile(first.statePath, JSON.stringify(pending), { mode: 0o600 });

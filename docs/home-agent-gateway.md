@@ -44,7 +44,7 @@ required; shell, unified exec, discovered MCP, Apps, Plugins and web search are
 disabled for generation. The thread uses read-only sandbox and approval never;
 the turn uses the installed protocol's `sandboxPolicy` and a one-turn JSON
 output schema. Unsupported restrictions fail rather than falling back to full
-access. A real morning turn has completed without tool calls; evening quality,
+access. Real morning and evening turns have completed without tool calls;
 usage and longer-term policy behavior remain to be validated.
 
 The opening watcher only accepts notifications explicitly attributed to its
@@ -81,8 +81,11 @@ same-thread follow-up. The original rollout contains no tool calls: the former
 watcher's broad method-name match had rejected non-execution metadata. The
 exact triggering notification was not captured by that rollout. Recovery did
 not resubmit generation, and usage was not available from the early-ended
-watcher. A one-off idle check is prepared for evening generation and follow-up;
-it never bypasses interactive admission or restarts services. An Agent Web
+watcher. The one-off idle check also completed a real 191-character evening
+opening, its three sources, automatic time selection, a natural same-thread
+reply and refreshed history. Its rollout has no tool calls. No usage was saved
+for either result, so cost remains unverified. The check exited successfully;
+it never bypassed interactive admission or restarted services. An Agent Web
 Session never restarts the Agent service.
 
 Home conversation responses for opening threads replace their initial machine

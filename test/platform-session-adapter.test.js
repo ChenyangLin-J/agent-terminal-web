@@ -2,6 +2,22 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { applyAgentWebEvent, normalizeSnapshot, previewSnapshot } from "../public/platform-agent-web-adapter.js";
+import { agentWebSessionContext } from '../public/platform-agent-web-adapter.js';
+
+test('Composer receives product context usage from the selected Host snapshot, independently of UI presentation fields', async () => {
+  const usage = { contextUsedTokens: 6000, modelContextWindow: 258400 };
+  let snapshot = normalizeSnapshot({ session: { id: 'web-a', sessionId: 'thread-a', tokenUsage: usage } });
+  const calls = [];
+  const controller = { getSnapshot: () => ({ session: snapshot }), execute: (...args) => calls.push(args) };
+  const view = { sessionId: 'web-a', isDraft: false };
+  assert.equal(agentWebSessionContext(controller, view).usage, usage);
+  await agentWebSessionContext(controller, view).onRead();
+  assert.deepEqual(calls[0], ['readContext', {}, { sessionId: 'web-a' }]);
+  snapshot = { ...snapshot, tokenUsage: { contextUsedTokens: 12000, modelContextWindow: 258400 } };
+  assert.equal(agentWebSessionContext(controller, view).usage.contextUsedTokens, 12000);
+  assert.equal(agentWebSessionContext(controller, { sessionId: 'web-b' }).usage, null);
+  assert.equal(agentWebSessionContext(controller, { sessionId: 'web-a', isDraft: true }).onCompact, undefined);
+});
 test('historical preview exposes each turn for lazy process loading without a live Runtime',()=>{
  const snapshot=previewSnapshot('history:thread-1',{conversation:{turns:[{id:'turn-1',user:'question',assistant:[{text:'answer'}]}]}});
  assert.deepEqual(snapshot.technicalDetailsAvailable,['turn-1']);

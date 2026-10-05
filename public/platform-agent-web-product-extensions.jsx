@@ -5,15 +5,16 @@ import { SessionComposerUtilities, SessionRealtimePanel, SideChatPanel, Subagent
 import { agentWebVoiceCapture } from './platform-agent-web-voice.js';
 import { agentWebNotificationTarget, enableAgentWebNotifications } from './platform-agent-web-notifications.js';
 import { normalizeAgentWebSideChatPanel } from './platform-agent-web-product-controller.js';
+import { agentWebSessionContext } from './platform-agent-web-adapter.js';
 
 export function createAgentWebExtensions({ product, controller, adapter }) {
   return {
     renderListHeaderActions: ({ closeList }) => <ProductSettingsMenu product={product} controller={controller} closeList={closeList} />,
     renderComposerActions: ({ draft, setDraft, disabled, session }) => <SessionComposerUtilities
-      context={sessionContext(controller, session)} disabled={disabled} sessionId={session.sessionId}
+      context={agentWebSessionContext(controller, session)} disabled={disabled} sessionId={session.sessionId}
       setDraft={setDraft} variant="actions" voice={agentWebVoiceCapture(session.sessionId)} />,
     renderComposerOptions: ({ draft, setDraft, disabled, session }) => <SessionComposerUtilities
-      context={sessionContext(controller, session)} disabled={disabled} sessionId={session.sessionId}
+      context={agentWebSessionContext(controller, session)} disabled={disabled} sessionId={session.sessionId}
       setDraft={setDraft} variant="options" voice={agentWebVoiceCapture(session.sessionId)} />,
     renderHeaderActions: ({ session }) => session.composerDisabled ? null : <SessionMoreMenu controller={controller} session={session} />,
     renderBeforeMessages: ({ session }) => session.composerDisabled ? <p className="cwu-read-only" role="status">子 Agent · 只读 · {session.status === 'running' ? '运行中 · 自动更新' : '已完成'}</p> : null,
@@ -197,15 +198,6 @@ function AccountUsagePanel({ controller, sessionId, initialResult }) {
     })}</div>
     {usage?.credits?.unlimited ? <p className="cwu-account-extra">额外额度：不限量</p> : usage?.credits?.balance != null ? <p className="cwu-account-extra">额外额度余额：{String(usage.credits.balance)}</p> : null}
   </section>;
-}
-
-function sessionContext(controller, session) {
-  return {
-    usage: session.tokenUsage ?? null,
-    isDraft: Boolean(session.isDraft),
-    onRead: () => controller.execute('readContext', {}, { sessionId: session.sessionId }),
-    onCompact: session.isDraft ? undefined : () => controller.execute('compact', {}, { sessionId: session.sessionId }),
-  };
 }
 
 function ProductDialog({ label, onClose, children }) {

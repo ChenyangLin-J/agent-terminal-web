@@ -29,6 +29,8 @@ New Conversation opens a browser-local draft immediately, independently of the h
 
 Context reads use token notifications or stored native usage and a reported/configured context window. Missing capacity remains unknown; an unsent draft shows Not Started. Context reads avoid the unrelated account quota/status bundle, and the shared Composer drops older popup results when the Host publishes a newer usage snapshot. Catalog/configuration reads share bounded caches and in-flight requests, including a timeout and short retry after failures.
 
+Composer context extensions read product usage from the public Host snapshot, guarded by the selected UI Session ID. The shared presentation view omits product token fields; reading usage from that view loses the meter even when the backend has supplied it. Empty drafts omit compaction, and available Fast tiers supply their own tooltip description.
+
 Session rows supply the same reference contract as Personal Workbench: sidebar drag and `@` search produce removable Composer chips. Agent Web reauthorizes `agent-web + native threadId` against its current account's live or stored Codex history before submission, rejects self/foreign/archived/missing targets, and includes bounded recent public context in the model input. Messages persist the public pointer and hide the input envelope; edit/queue preserve it. Opening a message reference navigates to the target. Released Sessions retain their selected UI identity in the URL so refresh recovers the same draft/reference state.
 
 The private `submitAppServerPrompt` helper receives an options object after `requirementText`. Resolved references use `options.references`; direct, startup-queued and edit/fork submissions use the same field. Product gateway admission controls can share this object without interpreting their options as a reference array.
@@ -68,6 +70,8 @@ For interactive verification, run the same script with `--real`, an absolute iso
 Use the project-owned `scripts/testing/session-ui.flow.mjs` with `tools/workspace-playwright/pw record` to produce desktop/mobile videos and ordered frames. Browser regressions also cover lazy draft/restart recovery, runtime lease expiry and read-only child previews. Platform owns the shared component and input-state tests; Agent Web retains backend authorization, upload validation, thread, memory, integration and service safety tests.
 
 `scripts/testing/session-draft.flow.mjs` records desktop/mobile draft creation under a delayed history request, actual default/configuration selection, reload recovery, empty-draft archive and archived-history discovery. It asserts that none of these actions creates a backend Session. App Server canaries separately verify that the selected profile reaches the first Turn in both supported kernels.
+
+`scripts/testing/session-context.flow.mjs` submits one synthetic Turn, verifies that the App Server token notification reaches the Composer and checks the context dialog's same reported values. It opens Input Options on narrow screens, where the context control lives. The recording CLI's `--timeout` is in seconds.
 
 Finish the selected package's build and full tests before recording browser flows: `pretest` rewrites `public/generated/`, so a simultaneous candidate build or recording can observe a different bundle during the same flow.
 

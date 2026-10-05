@@ -186,6 +186,23 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     const persisted = JSON.parse(await readFile(path.join(codexHome, "agent-web-sessions.json"), "utf8"));
     assert.equal(persisted["old-terminal"].transport, "app-server");
     assert.equal(persisted["old-terminal"].sessionId, threadId);
+    const previewFile = path.join(codexHome, 'agent-session-previews.json');
+    const previewBefore = await readFile(previewFile, 'utf8');
+    for (const turnId of ['continued-turn-1', 'continued-turn-2', '']) {
+      const response = await fetch(`${origin}/internal/codex-notify`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ webSessionId: 'old-terminal', event: {
+          type: 'agent-turn-complete', 'thread-id': reference.threadId,
+          'turn-id': turnId, 'last-assistant-message': 'stale injected result',
+        } }),
+      });
+      assert.equal(response.status, 202);
+      assert.equal((await response.json()).skipped, 'stale-or-duplicate-completion');
+    }
+    assert.equal(await readFile(previewFile, 'utf8'), previewBefore);
+    const afterNotify = JSON.parse(await readFile(path.join(codexHome, 'agent-web-sessions.json'), 'utf8'));
+    assert.equal(afterNotify['old-terminal'].sessionId, threadId);
+    assert.equal(afterNotify['old-terminal'].turnState.lastCompletedTurnId, 'continued-turn-2');
   });
 }
 

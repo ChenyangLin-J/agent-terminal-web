@@ -388,6 +388,12 @@ app.post("/internal/codex-notify", async (req, res) => {
     return;
   }
 
+  const completedTurnId = cleanTurnId(event["turn-id"]);
+  if (!acceptTrackedTurnCompletion(session.turnState, completedTurnId)) {
+    res.status(202).json({ ok: true, skipped: "stale-or-duplicate-completion" });
+    return;
+  }
+
   const threadId = String(event["thread-id"] || "");
   if (isValidSessionId(threadId)) {
     session.sessionId = threadId;
@@ -395,8 +401,6 @@ app.post("/internal/codex-notify", async (req, res) => {
   }
   flushMediaSessionPrompts(session);
   persistCompletedSessionPreview(session, event["last-assistant-message"]);
-  const completedTurnId = cleanTurnId(event["turn-id"]);
-  const mediaCompletionIsCurrent = !session.turnState?.turnId || session.turnState.turnId === completedTurnId;
   completeTrackedTurn(session, completedTurnId);
   session.lastActivityAt = new Date().toISOString();
   rememberAgentSessionCompletion(
@@ -404,7 +408,7 @@ app.post("/internal/codex-notify", async (req, res) => {
     completedTurnId,
     session.lastActivityAt,
   );
-  if (mediaCompletionIsCurrent) rememberMediaSessionCompletion(session, completedTurnId);
+  rememberMediaSessionCompletion(session, completedTurnId);
   resetDetachedCleanupAfterWork(session);
   persistRestorableWebSession(session);
   broadcast(session, "status", publicSession(session));

@@ -49,7 +49,7 @@ class FakeClient extends EventEmitter {
   async start() { this.calls.push(["start"]); }
   async readConfig() { return { mcp_servers: { calendar: {}, drive: {} }, apps: { calendar_app: {} }, plugins: { plugin_a: { mcp_servers: { plugin_tool: {} } } } }; }
   async startThread(params) { this.calls.push(["thread", params]); this.threadId = "opening-thread"; return { id: this.threadId }; }
-  async startTurn(_text, params) { this.calls.push(["turn", params]); const turn = { id: "opening-turn" }; setTimeout(() => { this.emit("notification", { method: "item/completed", params: { threadId: this.threadId, item: { type: "agentMessage", phase: "final_answer", text: '{"text":"hello","sourceIds":["s1"],"reason":"prompt"}' } } }); this.emit("notification", { method: "turn/completed", params: { threadId: this.threadId, turn: { id: turn.id, status: "completed" } } }); }, 5); return turn; }
+  async startTurn(_text, params) { this.calls.push(["turn", params]); const turn = { id: "opening-turn" }; setTimeout(() => { this.emit("notification", { method: "item/completed", params: { threadId: this.threadId, item: { type: "agentMessage", phase: "final_answer", text: '{"text":"hello","sourceIds":["s1"],"reason":"prompt","nextActions":[{"label":"继续查看材料","sourceId":"s1"}]}' } } }); this.emit("notification", { method: "turn/completed", params: { threadId: this.threadId, turn: { id: turn.id, status: "completed" } } }); }, 5); return turn; }
   async unsubscribeThread() { this.calls.push(["unsubscribe"]); this.threadId = ""; }
   close() { this.closed = true; this.calls.push(["close"]); }
 }
@@ -61,18 +61,21 @@ test("openings are idempotent, durable, and pin the restricted App Server settin
   assert.equal(one.status, 202); assert.equal(two.status, 202);
   await eventually(async () => (await request(f, "/api/home/agent/openings/same-id")).body.status === "completed");
   const status = await request(f, "/api/home/agent/openings/same-id");
-  assert.deepEqual(status.body, { requestId: "same-id", status: "completed", threadId: "opening-thread", turnId: "opening-turn", text: "hello", sourceIds: ["s1"], reason: "prompt" });
+  assert.deepEqual(status.body, { requestId: "same-id", status: "completed", threadId: "opening-thread", turnId: "opening-turn", text: "hello", sourceIds: ["s1"], reason: "prompt", nextActions: [{ label: "继续查看材料", sourceId: "s1" }] });
   assert.equal(f.clients.length, 1);
   const thread = f.clients[0].calls.find(([kind]) => kind === "thread")[1];
   const turn = f.clients[0].calls.find(([kind]) => kind === "turn")[1];
   assert.equal(thread.sandbox, "read-only"); assert.equal(thread.approvalPolicy, "never");
   assert.deepEqual(thread.config.mcp_servers, { calendar: { enabled: false }, drive: { enabled: false } });
   assert.equal(thread.config.apps._default.enabled, false); assert.equal(thread.config.apps.calendar_app.enabled, false); assert.equal(thread.config.plugins.plugin_a.enabled, false); assert.equal(thread.config.features.shell_tool, false); assert.equal(thread.config.features.unified_exec, false); assert.deepEqual(turn.sandboxPolicy, { type: "readOnly", networkAccess: false });
+  assert.deepEqual(turn.outputSchema.required, ["text", "sourceIds", "reason", "nextActions"]);
+  assert.equal(turn.outputSchema.properties.nextActions.items.additionalProperties, false);
   await eventually(() => f.clients[0].calls.some(([kind]) => kind === "close"));
   assert.deepEqual(f.clients[0].calls.map(([kind]) => kind), ["start", "thread", "turn", "unsubscribe", "close"]);
   const changed = await request(f, "/api/home/agent/openings", "POST", { ...body, prompt: "different" });
   assert.equal(changed.status, 409);
-  assert.match(await readFile(f.statePath, "utf8"), /same-id/);
+  const ledger = JSON.parse(await readFile(f.statePath, "utf8"));
+  assert.deepEqual(ledger.records["same-id"].nextActions, [{ label: "继续查看材料", sourceId: "s1" }]);
   const history = f.gateway.presentConversation('opening-thread', { messages: [
     { id: 'machine', role: 'user', text: 'private machine context', turnId: 'opening-turn' },
     { id: 'json', role: 'assistant', text: '{"text":"hello"}', turnId: 'opening-turn' },
@@ -90,7 +93,7 @@ test('accepts a full 350-character opening without truncation', async t => {
     client.startTurn = async (_text, params) => {
       assert.equal(params.outputSchema.properties.text.maxLength, 350);
       setTimeout(() => {
-        client.emit('notification', { method: 'item/completed', params: { threadId: client.threadId, item: { type: 'agentMessage', phase: 'final_answer', text: JSON.stringify({ text, sourceIds: [], reason: 'grounded' }) } } });
+        client.emit('notification', { method: 'item/completed', params: { threadId: client.threadId, item: { type: 'agentMessage', phase: 'final_answer', text: JSON.stringify({ text, sourceIds: [], reason: 'grounded', nextActions: [] }) } } });
         client.emit('notification', { method: 'turn/completed', params: { threadId: client.threadId, turn: { id: 'opening-turn', status: 'completed' } } });
       }, 5);
       return { id: 'opening-turn' };
@@ -119,7 +122,7 @@ test("a restart keeps uncertain work fail closed", async (t) => {
   t.after(async () => { await new Promise((resolve) => server.close(resolve)); await first.close(); });
   const response = await fetch(`http://127.0.0.1:${server.address().port}/api/home/agent/openings/restart`);
   const recovered = await response.json();
-  assert.deepEqual(recovered, { requestId: "restart", status: "completed", threadId: "durable-thread", turnId: "expected-turn", text: "recovered", sourceIds: ["s"], reason: "durable" }); assert.equal(created, 0);
+  assert.deepEqual(recovered, { requestId: "restart", status: "completed", threadId: "durable-thread", turnId: "expected-turn", text: "recovered", sourceIds: ["s"], reason: "durable", nextActions: [] }); assert.equal(created, 0);
 });
 
 test("a deterministic pre-thread failure preserves its source for polling", async (t) => {
@@ -166,6 +169,19 @@ test("invalid oversized schema output is uncertain instead of silently truncated
   } }); t.after(f.close);
   await request(f, "/api/home/agent/openings", "POST", { requestId: "bad-output", prompt: "x", date: "2026-10-04", period: "morning" });
   const outcome = await eventually(async () => { const value = await request(f, "/api/home/agent/openings/bad-output"); return value.body.status === "uncertain" ? value : null; });
+  assert.match(outcome.body.reason, /required JSON result/);
+});
+
+test("rejects malformed generated next actions instead of dropping their fields", async (t) => {
+  const f = await fixture({ createClient: () => {
+    const client = new FakeClient();
+    client.startTurn = async () => { const turn = { id: "bad-action" }; setTimeout(() => {
+      client.emit("notification", { method: "item/completed", params: { threadId: client.threadId, item: { type: "agentMessage", phase: "final_answer", text: JSON.stringify({ text: "hello", sourceIds: ["s1"], reason: "x", nextActions: [{ label: "danger", sourceId: "s1", href: "https://untrusted.example" }] }) } } });
+      client.emit("notification", { method: "turn/completed", params: { threadId: client.threadId, turn: { id: turn.id, status: "completed" } } });
+    }, 5); return turn; }; return client;
+  } }); t.after(f.close);
+  await request(f, "/api/home/agent/openings", "POST", { requestId: "bad-action", prompt: "x", date: "2026-10-04", period: "morning" });
+  const outcome = await eventually(async () => { const value = await request(f, "/api/home/agent/openings/bad-action"); return value.body.status === "uncertain" ? value : null; });
   assert.match(outcome.body.reason, /required JSON result/);
 });
 

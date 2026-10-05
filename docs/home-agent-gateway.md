@@ -35,8 +35,8 @@ restricted durable thread. The Home product and API contract is in
 | Route | Behavior |
 | --- | --- |
 | `GET /api/home/agent/activity?from=…&to=…&limit=…` | Bounded recent conversations, with user/assistant authors, exact timestamps and partial coverage. Uses `[from,to)`. Initial opening turns are excluded; user continuation is included for all turn states. |
-| `POST /api/home/agent/openings` | `requestId`, `date`, `period` (`morning`/`evening`), bounded `prompt`; durable reservation before submission. Same request/payload is reused, a changed payload conflicts. One opening generation at a time; active interactive Sessions do not block admission to its independent thread. |
-| `GET /api/home/agent/openings/:requestId` | Read the completed/pending/failed/uncertain result. Uncertain jobs with an exact stored thread/turn ID may reconcile from durable history without submitting another turn. |
+| `POST /api/home/agent/openings` | `requestId`, `date`, `period` (`morning`/`evening`), bounded `prompt`; durable reservation before submission. A completed result includes `nextActions: [{ label, sourceId }]`. Same request/payload is reused, a changed payload conflicts. One opening generation at a time; active interactive Sessions do not block admission to its independent thread. |
+| `GET /api/home/agent/openings/:requestId` | Read the completed/pending/failed/uncertain result, including persisted `nextActions`. Uncertain jobs with an exact stored thread/turn ID may reconcile from durable history without submitting another turn. |
 
 Requests use a thread-scoped client over the existing shared App Server, never
 the mutable catalog client for `thread/start`. Configuration discovery is
@@ -106,6 +106,15 @@ conversation slots. Activity checks at most 36 recent candidates, each up to
 12 turns, and continues to report partial coverage. The opening schema and
 validation accept up to 350 Unicode characters (typically 150–350 according to
 available evidence, with shorter text allowed when evidence is sparse).
+
+Each new generated opening must also return `nextActions`, an array of zero to
+12 concrete next steps. Every item has exactly `label` (non-empty, at most 80
+Unicode characters) and `sourceId` (non-empty, at most 200 Unicode
+characters). Agent Web rejects malformed actions, including extra fields, so
+the model cannot supply a URL or `href`. It does not resolve `sourceId` itself:
+Home validates it against the saved context and binds the action to the trusted
+durable Agent session link. Existing ledger entries and durable turn output
+that predate this field read as `nextActions: []`.
 
 Conversation and activity user text pass through the shared Session reference
 parser before publication. Model-only reference envelopes and their context

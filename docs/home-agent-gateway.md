@@ -169,6 +169,12 @@ before final delivery or scoped-client release; unknown/denied calls receive a
 negative reply and fail safely. A timed-out submission remains uncertain and is
 not resubmitted during polling.
 
+Invalid arguments to an allowed native tool receive a persisted negative receipt
+and the exact schema, so the model can correct them within the same bounded turn.
+Rejected arguments read no source and grant no evidence or widgets. Permission,
+unknown-tool and budget violations remain fatal; a rejected native turn is
+interrupted using only its own exact thread/turn IDs before the client detaches.
+
 New responses expose `task`, `configRevision`, `text`, `reason`, actual-read
 `sourceIds`, `widgets` and bounded receipt metadata alongside original IDs and
 status. Text's schema accepts only text/reason, up to 4096 Unicode characters.

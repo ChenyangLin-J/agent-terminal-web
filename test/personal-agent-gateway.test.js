@@ -346,12 +346,13 @@ test("activity excludes model reference context and retains the user's message",
 });
 
 class NativePersonalClient extends FakeClient {
-  constructor({ failTool = false, complete = true, delayedRespond = false } = {}) { super(); this.responses = []; this.failTool = failTool; this.complete = complete; this.delayedRespond = delayedRespond; }
+  constructor({ failTool = false, complete = true, delayedRespond = false, invalidRead = false } = {}) { super(); this.responses = []; this.failTool = failTool; this.complete = complete; this.delayedRespond = delayedRespond; this.invalidRead = invalidRead; }
   async startTurn(_text, params) {
     this.calls.push(['turn', params]);
     setTimeout(() => {
       this.emit('server-request', { id: 'other', method: 'item/tool/call', params: { threadId: 'other-thread', turnId: 'opening-turn', callId: 'other', tool: 'home_show_tibetan', arguments: {} } });
       this.emit('server-request', { id: 'wrong-turn', method: 'item/tool/call', params: { threadId: this.threadId, turnId: 'different-turn', callId: 'wrong', tool: 'home_show_tibetan', arguments: {} } });
+      if (this.invalidRead) this.emit('server-request', { id: 'invalid-read', method: 'item/tool/call', params: { threadId: this.threadId, turnId: 'opening-turn', callId: 'invalid-read', tool: 'agent_sessions_read', arguments: { sourceId: 'records:one', limit: 6000 } } });
       this.emit('server-request', { id: 'read', method: 'item/tool/call', params: { threadId: this.threadId, turnId: 'opening-turn', callId: 'read', tool: this.failTool ? 'arbitrary_exec' : 'home_records_search', arguments: {} } });
       this.emit('server-request', { id: 'tibetan', method: 'item/tool/call', params: { threadId: this.threadId, turnId: 'opening-turn', callId: 'tibetan', tool: 'home_show_tibetan', arguments: {} } });
       if (this.complete) {
@@ -362,6 +363,7 @@ class NativePersonalClient extends FakeClient {
     return { id: 'opening-turn' };
   }
   async respond(id, result) { if (this.delayedRespond) await new Promise(resolve => setTimeout(resolve, 20)); this.responses.push({ id, result }); }
+  async interruptThreadTurn(threadId, turnId) { this.calls.push(['interrupt', { threadId, turnId }]); }
 }
 const nativeInput = { requestId: 'native-id', prompt: 'Use tools to prepare the opening.', date: '2026-10-05', period: 'morning', taskId: 'morning', configRevision: 0, toolContext: { sources: [{ id: 'records:one', kind: 'feeling', title: 'Feeling', text: 'User feeling', path: 'Life/Records.md' }], coverage: [{ source: 'records', status: 'partial' }], window: { from: '2026-10-05' } } };
 
@@ -387,6 +389,23 @@ test('unknown native tool responds negatively then fails safely and drains queue
   assert.deepEqual(f.clients[0].responses.map(response => response.id), ['read', 'tibetan']);
   assert.ok(f.clients[0].responses.every(response => response.result.success === false));
   assert.equal((await request(f, '/api/home/agent/openings/native-id')).body.text, undefined);
+  assert.deepEqual(f.clients[0].calls.find(([kind]) => kind === 'interrupt')[1], { threadId: 'opening-thread', turnId: 'opening-turn' });
+});
+
+test('invalid read arguments preserve limits, allow correction, and contribute no evidence', async t => {
+  const f = await fixture({ createClient: () => new NativePersonalClient({ invalidRead: true }) }); t.after(f.close);
+  await request(f, '/api/home/agent/openings', 'POST', nativeInput);
+  await eventually(async () => (await request(f, '/api/home/agent/openings/native-id')).body.status === 'completed');
+  const client = f.clients[0], denied = client.responses.find(response => response.id === 'invalid-read');
+  assert.equal(denied.result.success, false);
+  const error = JSON.parse(denied.result.contentItems[0].text);
+  assert.equal(error.inputSchema.properties.limit.maximum, 4000);
+  const result = (await request(f, '/api/home/agent/openings/native-id')).body;
+  assert.deepEqual(result.sourceIds, ['records:one']);
+  const receipt = result.toolReceipts.find(receipt => receipt.callId === 'invalid-read');
+  assert.equal(receipt.success, false); assert.equal(receipt.recoverable, true);
+  assert.equal(receipt.readSourceIds, undefined);
+  assert.equal(client.calls.some(([kind]) => kind === 'interrupt'), false);
 });
 
 test('config API validates CAS before fresh admission but retains prior request identity', async t => {

@@ -22,7 +22,8 @@ const threads=new Map();
 readline.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);const p=m.params||{};
 if(m.method==='initialize')send({id:m.id,result:{userAgent:'synthetic-candidate'}});
 else if(['thread/start','thread/resume','thread/fork'].includes(m.method)){const id=p.threadId||crypto.randomUUID();threads.set(id,[]);send({id:m.id,result:{thread:{id,turns:[]},initialTurnsPage:{data:[],nextCursor:null}}});}
-else if(m.method==='model/list')send({id:m.id,result:{data:[{id:'codex',model:'codex',displayName:'Codex',isDefault:true,defaultReasoningEffort:'medium',supportedReasoningEfforts:[{reasoningEffort:'medium'},{reasoningEffort:'high'}]}]}});
+else if(m.method==='model/list')send({id:m.id,result:{data:[{id:'gpt-6.1-sol',model:'gpt-6.1-sol',displayName:'GPT 6.1',isDefault:true,defaultReasoningEffort:'xhigh',supportedReasoningEfforts:[{reasoningEffort:'medium'},{reasoningEffort:'high'},{reasoningEffort:'xhigh'}]},{id:'codex',model:'codex',displayName:'Codex',defaultReasoningEffort:'medium',supportedReasoningEfforts:[{reasoningEffort:'medium'},{reasoningEffort:'high'}]}]}});
+else if(m.method==='config/read')send({id:m.id,result:{config:{model:'gpt-6.1-sol',model_reasoning_effort:'xhigh'}}});
 else if(m.method==='thread/list'||m.method==='thread/turns/list')send({id:m.id,result:{data:[],nextCursor:null}});
 else if(m.method==='account/read')send({id:m.id,result:{account:{type:'chatgpt',email:'synthetic@example.invalid'},requiresOpenaiAuth:false}});
 else if(m.method==='account/rateLimits/read')send({id:m.id,result:{rateLimits:null}});

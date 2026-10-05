@@ -50,7 +50,7 @@ Existing `server.js` remains the integration point for Runtime lifecycle and pro
 
 ## Build and candidate verification
 
-Agent Web pins Platform v0.34.0, which exports `./session-host` and the shared Session application. A normal install, build and test use the published package:
+Agent Web pins Platform v0.35.0, which exports `./session-host`, the shared Session application and the authoritative Runtime description/lease contract. A normal install, build and test use the published package:
 
 ```bash
 npm ci --include=dev

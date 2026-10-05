@@ -86,13 +86,14 @@ translation, thread isolation, product projections, persistence and side effects
 `agent-session-commands.test.js`, `agent-web-connection.test.js` and the service
 integration fixtures exercise those boundaries without inspecting function layout.
 
-For an unreleased paired build, set `AGENT_PLATFORM_CANDIDATE` to the Platform
-worktree for both the browser build and server tests. Isolated test launchers must
-forward that explicit path. The adapter requires the `describeRuntime()` contract
-(Platform 0.35.0+). The formal dependency changes only when the matching immutable
-package candidate is promoted/adopted; candidate success does not authorize
-production activation. Memory System remains an independent product dependency,
-resolved with `AGENT_MEMORY_SYSTEM_ROOT` outside a normal sibling checkout.
+The formal dependency is Platform v0.35.0, including the `describeRuntime()` and
+release/lease contracts used by this adapter. Normal builds and tests use that
+immutable published package. For an unreleased paired build, set
+`AGENT_PLATFORM_CANDIDATE` to the Platform worktree for both the browser build and
+server tests. Isolated test launchers must forward that explicit path; candidate
+success does not authorize production activation. Memory System remains an
+independent product dependency, resolved with `AGENT_MEMORY_SYSTEM_ROOT` outside
+a normal sibling checkout.
 
 Full test runs that launch many local fixture servers can use
 `npm test -- --test-concurrency=4` to bound process load. Finish tests/builds before

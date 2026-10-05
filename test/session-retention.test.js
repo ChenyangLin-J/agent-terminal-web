@@ -47,7 +47,7 @@ input.on("line", (line) => {
         method: "turn/completed",
         params: { threadId, turn: { ...turn, status: "completed" } },
       });
-    }, 2400);
+    }, 4000);
   } else if (message.id !== undefined) {
     send({ id: message.id, result: {} });
   }
@@ -107,7 +107,7 @@ input.on("line", (line) => {
     MESSAGE_TIMEOUT_MS,
   );
   working.ws.send(JSON.stringify({ type: "submit", data: "keep working while detached" }));
-  await working.next(
+  const submitted = await working.next(
     (message) => message.type === "control-ack" && message.payload.kind === "submit",
     MESSAGE_TIMEOUT_MS,
   );
@@ -127,7 +127,7 @@ input.on("line", (line) => {
       webSessionId: workingStatus.payload.id,
       event: {
         type: "agent-turn-complete",
-        "turn-id": "turn-working",
+        "turn-id": submitted.payload.turnState.turnId,
         "last-assistant-message": "Finished in the background.",
       },
     }),

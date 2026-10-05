@@ -220,11 +220,11 @@ test("threadless shared App Server notifications cannot refresh every Session ti
   const server = await readFile(new URL("../server.js", import.meta.url), "utf8");
   assert.match(
     server,
-    /if \(notificationThreadId && session\.sessionId && notificationThreadId !== session\.sessionId\) return;\s+if \(notificationThreadId\) session\.lastActivityAt = new Date\(\)\.toISOString\(\);/,
+    /if \(notificationThreadId && session\.sessionId && notificationThreadId !== session\.sessionId\) return;/,
   );
   assert.doesNotMatch(
     server,
-    /const \{ method, params = \{\} \} = message;\s+session\.lastActivityAt = new Date\(\)\.toISOString\(\);/,
+    /if \(notificationThreadId\) session\.lastActivityAt = new Date\(\)\.toISOString\(\);/,
   );
 });
 

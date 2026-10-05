@@ -526,7 +526,7 @@ function withMetadata(snapshot, catalog) {
   return { ...snapshot,
     executionProfile: { ...profile, model: profile.model || catalog?.currentModel || '', reasoningEffort: profile.reasoningEffort || catalog?.currentReasoningEffort || '',
       serviceTier: profile.serviceTier === undefined ? catalog?.serviceTier || null : profile.serviceTier },
-    models: (catalog?.models || snapshot.models || []).map(model => ({ ...model, label: model.name || model.label, serviceTiers: [{ id: 'priority', label: 'Fast' }] })),
+    models: (catalog?.models || snapshot.models || []).map(model => ({ ...model, label: model.name || model.label, serviceTiers: [{ id: 'priority', label: 'Fast', description: '优先处理请求' }] })),
     accessModes: [{ id: 'full', label: '完全访问' }, { id: 'restricted', label: '按需确认' }],
   };
 }

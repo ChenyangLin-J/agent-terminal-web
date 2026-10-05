@@ -1,4 +1,5 @@
 import { parseSessionReferenceEnvelopes } from '@agent-workbench/platform/session-references';
+import { mergeSessionHostSnapshot } from '@agent-workbench/platform/session-host';
 import { createAgentWebConnection } from './agent-web-connection.js';
 const WS_OPEN = 1;
 const RETRYABLE_ACTIONS = new Set([
@@ -64,10 +65,13 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
         const snapshot = previewSnapshot(id, value, { sourceSession, title });
         const metadata = await readMetadata(value.cwd || '.').catch(() => null);
         const enriched = withMetadata({ ...snapshot, executionProfile: historyProfiles.get(id) || snapshot.executionProfile }, metadata);
+        if (targets.has(id)) return adapter.readSession(id, { signal });
         previews.set(id, enriched);
         return withProcesses(enriched);
       }
-      let metadata = released.get(id) || summaries.get(id);
+      // Once promoted, the live target owns state. Sidebar summaries may still
+      // describe an older released attachment of the same native thread.
+      let metadata = released.get(id) || (!targets.has(id) ? summaries.get(id) : null);
       let result;
       if (!metadata?.released) {
         try { result = await json(`/api/platform/sessions/${encodeURIComponent(target)}`, { signal }); }
@@ -78,6 +82,7 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
         }
       }
       if (metadata?.released || result?.session?.released) {
+        if ((targets.get(id) || id) !== target) return adapter.readSession(id, { signal });
         metadata = result?.session || metadata;
         released.set(id, metadata);
         const value = await json(`/api/session-preview/${encodeURIComponent(metadata.sessionId)}`, { signal }).catch(error => {
@@ -86,11 +91,13 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
         });
         const snapshot = { ...previewSnapshot(`history:${metadata.sessionId}`, value, { title: metadata.title }), sessionId: id, threadId: metadata.sessionId, released: true, status: 'idle', session: metadata, tokenUsage: value.tokenUsage ?? metadata.tokenUsage ?? null };
         const enriched = withMetadata(snapshot, await readMetadata(metadata.cwd || value.cwd || '.').catch(() => null));
+        if ((targets.get(id) || id) !== target) return adapter.readSession(id, { signal });
         previews.set(id, enriched);
         return withProcesses(enriched);
       }
       const snapshot = normalizeSnapshot(result);
       const catalog = await readMetadata(result.session?.cwd || '.').catch(() => catalogs.get(result.session?.cwd || '.'));
+      if ((targets.get(id) || id) !== target) return adapter.readSession(id, { signal });
       return withProcesses({ ...withMetadata(snapshot, catalog), sessionId: id, webSessionId: target });
     },
 
@@ -141,11 +148,7 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
         if (!['send', 'append', 'queue'].includes(action)) throw new Error('发送消息后才能使用会话操作。');
         const profile = historyProfiles.get(id) || previews.get(id)?.executionProfile;
         if (profile) rememberPendingProfile(id, profile);
-        const created = await adapter.createSession({ sessionId: id.slice(8), access: serverAccess(profile?.accessMode || payload.access || 'full') }, { idempotencyKey: `resume:${id.slice(8)}` });
-        bindTarget(id, created.sessionId);
-        historySubscriptions.get(id)?.(); historySubscriptions.delete(id);
-        const waiting = draftSubscriptions.get(id);
-        if (waiting) waiting.cleanup = adapter.subscribeSession(id, waiting.options);
+        await retarget(id, { sessionId: id.slice(8), cwd: previews.get(id)?.cwd || '.', access: serverAccess(profile?.accessMode || payload.access || 'full'), executionProfile: profile }, `resume:${id.slice(8)}`);
       }
       if (drafts.has(id) && !targets.has(id)) {
         if (['executionProfile', 'favorite', 'archive', 'rename'].includes(action)) {
@@ -228,16 +231,26 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
 
     subscribeSession(id, { onEvent, onConnection, signal, afterRevision } = {}) {
       if (released.has(id) || ((drafts.has(id) || id.startsWith('history:')) && !targets.has(id))) {
+        let active = true;
         const poll = id.startsWith('history:') || released.has(id) ? setInterval(async () => {
-          try { const snapshot = await adapter.readSession(id, { signal }); onEvent?.({ type: 'preview-snapshot', sessionId: id, payload: snapshot }); } catch { /* Next interval recovers the read-only view. */ }
+          if (!active || signal?.aborted) return;
+          try {
+            const snapshot = await adapter.readSession(id, { signal });
+            if (active && !signal?.aborted) onEvent?.({ type: 'preview-snapshot', sessionId: id, payload: snapshot });
+          } catch { /* Next interval recovers the read-only view. */ }
         }, sourceSession ? 2000 : 5000) : null;
-        if (poll) historySubscriptions.set(id, () => clearInterval(poll));
+        const stopPreview = () => { active = false; if (poll) clearInterval(poll); };
+        if (poll) historySubscriptions.set(id, stopPreview);
         const waiting = { options: { onEvent, onConnection, signal, afterRevision }, cleanup: null };
         draftSubscriptions.set(id, waiting);
         if (drafts.has(id)) queueMicrotask(() => {
           if (draftSubscriptions.get(id) === waiting && !signal?.aborted) onEvent?.({ type: 'preview-snapshot', sessionId: id, payload: draftSnapshot(id) });
         });
-        const cleanup = () => { if (poll) clearInterval(poll); waiting.cleanup?.(); draftSubscriptions.delete(id); historySubscriptions.delete(id); };
+        const cleanup = () => {
+          stopPreview(); waiting.cleanup?.();
+          if (draftSubscriptions.get(id) === waiting) draftSubscriptions.delete(id);
+          if (historySubscriptions.get(id) === stopPreview) historySubscriptions.delete(id);
+        };
         signal?.addEventListener('abort', cleanup, { once: true });
         return cleanup;
       }
@@ -263,6 +276,12 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
 
     patchSummary(summaries, snapshot) {
       return summaries.map((summary) => summary.id === snapshot.sessionId ? { ...summary, title: snapshot.title, status: snapshot.status, updatedAt: snapshot.session?.lastActivityAt || summary.updatedAt, threadId: snapshot.threadId } : summary);
+    },
+
+    mergeSnapshot(current, latest) {
+      // Disk previews synthesize item IDs. The restored native transcript is
+      // authoritative, so merging both representations would duplicate messages.
+      return current.preview && !latest.preview ? latest : mergeSessionHostSnapshot(current, latest);
     },
 
     applyEvent(snapshot, event) {
@@ -338,11 +357,13 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
   }
   async function retarget(id, payload, key) {
     const waiting = draftSubscriptions.get(id);
-    waiting?.cleanup?.();
     const created = await adapter.createSession(payload, { idempotencyKey: key });
-    bindTarget(id, created.sessionId); released.delete(id);
+    historySubscriptions.get(id)?.(); historySubscriptions.delete(id);
+    waiting?.cleanup?.();
+    bindTarget(id, created.sessionId); released.delete(id); previews.delete(id);
+    summaries.set(id, { ...created.session, id });
     if (payload.executionProfile) rememberPendingProfile(id, payload.executionProfile);
-    if (waiting) adapter.subscribeSession(id, waiting.options);
+    if (waiting && !waiting.options.signal?.aborted) waiting.cleanup = adapter.subscribeSession(id, waiting.options);
   }
   function bindTarget(id, target) { targets.set(id, target); persistEntries('agent-web.session-aliases', targets); }
 
@@ -381,6 +402,9 @@ export function normalizeSnapshot(value = {}) {
   return {
     sessionId: String(session.id || session.sessionId || ""),
     isDraft: false,
+    preview: false,
+    readOnly: false,
+    composerDisabled: false,
     threadId: String(session.sessionId || ""),
     session: normalizeSession(session),
     items,
@@ -450,7 +474,7 @@ function technicalType(type) {
 export function applyAgentWebEvent(snapshot = {}, event = {}) {
   const payload = event.payload || {};
   if (event.type === 'preview-snapshot') return payload;
-  if (event.type === "status") return { ...snapshot, ...normalizeSnapshot({ ...snapshot, session: payload, items: snapshot.items }), sessionId: snapshot.sessionId };
+  if (event.type === "status") return { ...snapshot, ...normalizeSnapshot({ ...snapshot, session: payload, items: snapshot.items }), sessionId: snapshot.sessionId, preview: Boolean(snapshot.preview) };
   if (event.type === "app-transcript") return { ...snapshot, ...normalizeSnapshot({ ...snapshot, session: snapshot.session, transcript: payload }), sessionId: snapshot.sessionId };
   if (event.type === "app-transcript-upsert") {
     const item = payload.item || payload;

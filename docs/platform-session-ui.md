@@ -25,6 +25,8 @@ Platform owns common interaction and presentation, selection protection, snapsho
 
 Historical process details are read lazily through the authenticated product projection, including previews with no live Runtime. Reading a completed record never resumes a Codex thread. Editing a user message forwards its existing authorized attachments to the product's Edit/Fork validation.
 
+When a released or historical preview is resumed, its live attachment becomes authoritative. Stop preview polling, reject pending preview reads after promotion, and clear the released/paging caches before subscribing to live events. Native transcript IDs replace synthesized preview IDs rather than duplicating them. The catalog prefers a live attachment over released records of the same native thread, then the most recent attachment; subsequent sends and reloads keep that target.
+
 New Conversation opens a browser-local draft immediately, independently of the history request. Draft model, reasoning effort, permissions, Fast mode, text, favorite and archive state survive reload in the same browser. The authenticated metadata endpoint reads the actual Codex workspace defaults and selectable model catalog without allocating a native thread. First submission creates the backend Session once and applies the chosen execution profile before submitting the Turn. Empty drafts can be archived locally; both local drafts and backend Sessions disappear from Recent when archived and remain accessible through Search and History with Include Archived enabled.
 
 Context reads use token notifications or stored native usage and a reported/configured context window. Missing capacity remains unknown; an unsent draft shows Not Started. Context reads avoid the unrelated account quota/status bundle, and the shared Composer drops older popup results when the Host publishes a newer usage snapshot. Catalog/configuration reads share bounded caches and in-flight requests, including a timeout and short retry after failures.
@@ -72,6 +74,8 @@ Use the project-owned `scripts/testing/session-ui.flow.mjs` with `tools/workspac
 `scripts/testing/session-draft.flow.mjs` records desktop/mobile draft creation under a delayed history request, actual default/configuration selection, reload recovery, empty-draft archive and archived-history discovery. It asserts that none of these actions creates a backend Session. App Server canaries separately verify that the selected profile reaches the first Turn in both supported kernels.
 
 `scripts/testing/session-context.flow.mjs` submits one synthetic Turn, verifies that the App Server token notification reaches the Composer and checks the context dialog's same reported values. It opens Input Options on narrow screens, where the context control lives. The recording CLI's `--timeout` is in seconds.
+
+`candidate-preview.mjs --recovery` seeds isolated, released desktop/mobile Sessions and synthetic native history. `session-recovery.flow.mjs` records recovery, execution across the former preview polling interval, continuous sends and reload during execution. `test/platform-session-recovery.test.js` separately delays a preview read until after promotion and verifies subscription cleanup, target persistence, profile application and message uniqueness.
 
 Finish the selected package's build and full tests before recording browser flows: `pretest` rewrites `public/generated/`, so a simultaneous candidate build or recording can observe a different bundle during the same flow.
 

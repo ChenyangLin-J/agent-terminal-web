@@ -67,8 +67,10 @@ test("openings are idempotent, durable, and pin the restricted App Server settin
 
 test('accepts a full 350-character opening without truncation', async t => {
   const text = '开'.repeat(349) + '😀';
+  let openingClient;
   const f = await fixture({ createClient: () => {
     const client = new FakeClient();
+    openingClient = client;
     client.startTurn = async (_text, params) => {
       assert.equal(params.outputSchema.properties.text.maxLength, 350);
       setTimeout(() => {
@@ -85,6 +87,8 @@ test('accepts a full 350-character opening without truncation', async t => {
     return value.body.status === 'completed' && value;
   });
   assert.equal(result.body.text, text);
+  // Completed is visible before the final ledger write and client release finish.
+  await eventually(() => openingClient.closed);
 });
 
 test("a restart keeps uncertain work fail closed", async (t) => {

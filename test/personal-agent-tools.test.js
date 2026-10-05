@@ -75,3 +75,9 @@ test('required Session action can honestly report no eligible read conversation'
   invoke(r, 'home.show_tibetan'); assert.equal(personalResult(r, '{"text":"Hello","reason":"sparse"}').widgets.length, 2);
   invoke(r, 'agent.sessions.read', { sourceId: 'session:1' }); assert.throws(() => invoke(r, 'home.show_session_action', {}), /Choose/);
 });
+
+test('Session action optional label has a usable default', () => {
+  const r = record();
+  invoke(r, 'agent.sessions.read', { sourceId: 'session:1' });
+  assert.equal(invoke(r, 'home.show_session_action', { sourceId: 'session:1' }).widget.label, '继续这段讨论');
+});

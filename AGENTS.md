@@ -20,6 +20,11 @@
 
 ## Platform kernel switch
 
+- Before changing Runtime or product state boundaries, read
+  `docs/backend-architecture.md`. Platform owns the shared connection and, on the
+  Platform path, execution state/queue/approvals/leases. Do not nest the legacy
+  thread client inside that path; Web requirements are product projections.
+
 - `AGENT_PLATFORM_KERNEL` chooses the Session kernel: `new` puts new web
   Sessions on the Platform kernel, `all` puts every Session on it, and
   `legacy` forces every Session back to the old kernel, overriding the

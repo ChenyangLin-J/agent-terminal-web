@@ -14,7 +14,8 @@ const threadId = "019f9db5-cdfd-7c10-b477-4859c23313be";
 const activeThreadId = "019f9db5-cdfd-7c10-b477-4859c23313c0";
 const activeTurnId = "019f9db5-cdfd-7c10-b477-4859c23313c1";
 
-test("an idle App Server runtime is released even while its page remains connected", async (t) => {
+for (const runtimeKernel of ['legacy', 'all']) {
+test(`an idle App Server runtime is released while its page remains connected (${runtimeKernel})`, async (t) => {
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "agent-app-runtime-lease-"));
   const workspaceRoot = path.join(temporaryRoot, "workspace");
   const codexHome = path.join(temporaryRoot, "codex");
@@ -89,6 +90,7 @@ input.on("line", (line) => {
       CODEX_APP_SERVER_COMMAND: fakeCodex,
       AGENT_NATIVE_THREAD_CATALOG: "0",
       SESSION_TTL_MS: "1200",
+      AGENT_PLATFORM_KERNEL: runtimeKernel,
       PRIVATE_AUTH_VERIFY_URL: `http://127.0.0.1:${authServer.address().port}`,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -239,6 +241,7 @@ input.on("line", (line) => {
   assert.equal(await desktopPage.locator('.cwu-composer textarea').isEnabled(), true);
   viewedClient.ws.close();
 });
+}
 
 async function connect(url) {
   const ws = new WebSocket(url);

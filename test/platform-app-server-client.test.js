@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import test from "node:test";
 
 import { CodexAppServerConnection } from "../lib/codex-app-server-client.js";
 import {
   PlatformAppServerClient,
+  jsonFileBindingStore,
   platformKernelFor,
 } from "../lib/platform-app-server-client.js";
 
@@ -47,6 +51,7 @@ test("platform client starts a thread through the kernel and keeps extension cal
   });
 
   await client.start();
+  assert.equal("io" in client, false, "the adapter must not create a second legacy client state machine");
   const thread = await client.startThread({
     cwd: "/tmp",
     approvalPolicy: "on-request",
@@ -60,6 +65,101 @@ test("platform client starts a thread through the kernel and keeps extension cal
 
   const config = await client.readConfig({ cwd: "/tmp" });
   assert.equal(config.config.model, "gpt-test");
+});
+
+test("platform client reads active Turn state from the public kernel description", async (t) => {
+  const { fake, client, kernel } = createClient({ sessionId: "project-free" });
+  t.after(() => {
+    client.close();
+    kernel.close();
+  });
+  await client.start();
+  await client.startThread();
+
+  const review = await client.startReview();
+  assert.equal(review.turn.id, "turn-review");
+  assert.equal(client.activeTurnId, "turn-review");
+  assert.equal(kernel.describeRuntime("project-free").activeTurnId, "turn-review");
+
+  fake.send({
+    method: "turn/completed",
+    params: { threadId: client.threadId, turn: { id: "turn-review", status: "completed" } },
+  });
+  await tick();
+  assert.equal(client.activeTurnId, "");
+});
+
+test('kernel release is projected once and cannot leave an orphan Turn on a closed facade', async (t) => {
+  const { client, kernel } = createClient();
+  t.after(() => { client.close(); kernel.close(); });
+  await client.start();
+  await client.startThread();
+  assert.equal(client.managesRuntimeLease, true);
+  assert.equal(client.runtimeLeaseExpiresAt, kernel.describeRuntime('web-1').runtimeLeaseExpiresAt);
+  const releases = [];
+  client.on('runtime-released', (payload) => { releases.push(payload); client.close(); });
+  const release = kernel.releaseRuntime('web-1', { reason: 'idle-ttl' });
+  const concurrentTurn = client.startTurn('too late');
+  await assert.rejects(concurrentTurn, /client is closed/);
+  await release;
+  assert.equal(releases.length, 1);
+  assert.equal(releases[0].reason, 'idle-ttl');
+  assert.equal(kernel.describeRuntime('web-1').runtimeState, 'released');
+});
+
+test('a failed kernel unsubscribe remains observable and cannot fall through to a raw retry', async (t) => {
+  const { client, kernel } = createClient();
+  t.after(() => { client.close(); kernel.close(); });
+  await client.start();
+  await client.startThread();
+  const request = client.connection.request.bind(client.connection);
+  let unsubscribeCount = 0;
+  client.connection.request = async (method, params) => {
+    if (method === 'thread/unsubscribe') {
+      unsubscribeCount += 1;
+      throw new Error('unsubscribe failed');
+    }
+    return request(method, params);
+  };
+  await assert.rejects(client.request('thread/unsubscribe', { threadId: client.threadId }), /unsubscribe failed/);
+  assert.equal(unsubscribeCount, 1);
+  assert.equal(kernel.describeRuntime('web-1').runtimeState, 'live');
+});
+
+test("platform client preserves raw fork adoption while later Turns resume through the kernel", async (t) => {
+  const { fake, client, kernel } = createClient({ sessionId: "project-scoped", cwd: "/workspace/project" });
+  t.after(() => {
+    client.close();
+    kernel.close();
+  });
+  await client.start();
+  await client.startThread({ cwd: "/workspace/project" });
+
+  const forked = await client.forkThread({ lastTurnId: "turn-before", cwd: "/workspace/project" });
+  assert.equal(forked.thread.id, "thread-fork");
+  assert.equal(client.threadId, "thread-fork");
+  assert.equal(kernel.describeRuntime("project-scoped").runtimeState, "released");
+
+  const turn = await client.startTurn("Continue on the fork");
+  assert.equal(turn.id, "turn-1");
+  assert.equal(
+    fake.received.some(
+      (message) => message.method === "thread/resume" && message.params.threadId === "thread-fork",
+    ),
+    true,
+  );
+  assert.equal(kernel.describeRuntime("project-scoped").runtimeState, "live");
+});
+
+test("runtime binding storage refuses to overwrite malformed JSON", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "agent-web-bindings-"));
+  const file = path.join(directory, "runtime-bindings.json");
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeFile(file, "{malformed", "utf8");
+  const store = jsonFileBindingStore(file);
+
+  await assert.rejects(() => store.save("session-a", { status: "idle" }), /parse failed/);
+  assert.equal(await readFile(file, "utf8"), "{malformed");
 });
 
 test("platform client steers the exact active turn and surfaces late-steer errors", async (t) => {
@@ -362,12 +462,15 @@ function createFakeAppServer() {
       return;
     }
     if (message.method === "thread/resume") {
+      const activeTurns = message.params.threadId === "thread-large"
+        ? [{ id: "recent-turn", status: "inProgress", items: [] }]
+        : [];
       send({
         id: message.id,
         result: {
           thread: { id: message.params.threadId, turns: [] },
           initialTurnsPage: {
-            data: [{ id: "recent-turn", status: "inProgress", items: [] }],
+            data: activeTurns,
             nextCursor: "older",
           },
         },
@@ -377,6 +480,14 @@ function createFakeAppServer() {
     if (message.method === "turn/start") {
       turnNumber += 1;
       send({ id: message.id, result: { turn: { id: `turn-${turnNumber}` } } });
+      return;
+    }
+    if (message.method === "review/start") {
+      send({ id: message.id, result: { turn: { id: "turn-review" } } });
+      return;
+    }
+    if (message.method === "thread/fork") {
+      send({ id: message.id, result: { thread: { id: "thread-fork" } } });
       return;
     }
     if (message.method === "turn/steer") {

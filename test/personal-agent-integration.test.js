@@ -24,6 +24,7 @@ test(`restricted opening uses the shared protocol and can resume through the exi
     PATH: process.env.PATH, NODE_ENV: 'test', HOST: '127.0.0.1', PORT: String(port), WORKSPACE_ROOT: workspace,
     OBSIDIAN_VAULT_PATH: path.join(workspace, 'obsidian'), AGENT_CODEX_STATE_ROOT: state,
     AGENT_MEMORY_SYSTEM_ROOT: process.env.AGENT_MEMORY_SYSTEM_ROOT,
+    AGENT_PLATFORM_CANDIDATE: process.env.AGENT_PLATFORM_CANDIDATE,
     AGENT_PLATFORM_KERNEL: kernelMode,
     AGENT_INTEGRATIONS_DIR: path.join(temp, 'integrations'), AGENT_CUBOX_CONFIG_DIR: path.join(temp, 'cubox'),
     PRIVATE_AUTH_VERIFY_URL: 'http://127.0.0.1:9/disabled', HOME_AGENT_GATEWAY_TOKEN: 'fixture-only',
@@ -33,6 +34,7 @@ test(`restricted opening uses the shared protocol and can resume through the exi
   }, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '';
   child.stdout.on('data', data => output += data); child.stderr.on('data', data => output += data);
+  child.on('exit', code => { if (code) process.stderr.write(`Fixture exited (${code}): ${output}\n`); });
   t.after(async () => {
     if (child.exitCode === null) { child.kill('SIGTERM'); await new Promise(resolve => child.once('exit', resolve)); }
     await rm(temp, { recursive: true, force: true });

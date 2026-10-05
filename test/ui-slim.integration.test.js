@@ -126,6 +126,25 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     assert.equal(ready.payload.transport, "app-server");
     assert.equal(ready.payload.runtimeKernel, kernel === "all" ? "platform" : "legacy");
     assert.equal(ready.payload.sessionId, threadId);
+    for (const key of ['command-first-001', 'command-second-002']) {
+      client.ws.send(JSON.stringify({ type: 'command', data: '/permissions', idempotencyKey: key }));
+    }
+    for (const key of ['command-first-001', 'command-second-002']) {
+      const result = await client.next(message => message.type === 'app-command-result' && message.payload.idempotencyKey === key);
+      assert.equal(result.payload.command, '/permissions');
+    }
+    client.ws.send(JSON.stringify({ type: 'command', data: '/permissions', idempotencyKey: 'command-first-001' }));
+    const replay = await client.next(message => message.type === 'app-command-result' && message.payload.idempotencyKey === 'command-first-001' && message.payload.replayed);
+    assert.equal(replay.payload.command, '/permissions');
+    const stateFile = path.join(codexHome, 'agent-web-sessions.json');
+    const intactState = await readFile(stateFile, 'utf8');
+    await writeFile(stateFile, '{ damaged');
+    client.ws.send(JSON.stringify({ type: 'command', data: '/permissions', idempotencyKey: 'damaged-state-001' }));
+    const refused = await client.next(message => message.type === 'error' && message.payload.idempotencyKey === 'damaged-state-001');
+    assert.equal(refused.payload.receiptState, 'unknown');
+    assert.equal(await readFile(stateFile, 'utf8'), '{ damaged');
+    assert.equal((await fetch(`${origin}/healthz`)).status, 200, 'a damaged store must not terminate the gateway');
+    await writeFile(stateFile, intactState);
     const transcript = await client.next((message) => message.type === "app-transcript" &&
       JSON.stringify(message.payload).includes("historic answer"));
     assert.match(JSON.stringify(transcript.payload), /historic question/);

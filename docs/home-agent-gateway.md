@@ -174,6 +174,10 @@ and the exact schema, so the model can correct them within the same bounded turn
 Rejected arguments read no source and grant no evidence or widgets. Permission,
 unknown-tool and budget violations remain fatal; a rejected native turn is
 interrupted using only its own exact thread/turn IDs before the client detaches.
+Native task turns have a 150-second execution budget, matching the actual-material
+preview and leaving 30 seconds inside Home's 180-second polling budget. Legacy
+350-character openings retain their 90-second budget. Explicit test overrides
+remain bounded by their supplied timeout.
 
 New responses expose `task`, `configRevision`, `text`, `reason`, actual-read
 `sourceIds`, `widgets` and bounded receipt metadata alongside original IDs and

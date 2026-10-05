@@ -77,6 +77,8 @@ Use the project-owned `scripts/testing/session-ui.flow.mjs` with `tools/workspac
 
 `candidate-preview.mjs --recovery` seeds isolated, released desktop/mobile Sessions and synthetic native history. `session-recovery.flow.mjs` records recovery, execution across the former preview polling interval, continuous sends and reload during execution. `test/platform-session-recovery.test.js` separately delays a preview read until after promotion and verifies subscription cleanup, target persistence, profile application and message uniqueness.
 
+Opening an older web attachment reconciles its Turn state against the latest native Turn, including terminal states. A later completed Turn clears an older attachment's interruption without starting a Turn or dispatching its old requirements. Recent uses the native Turn's activity time; resume, thread status and token usage notifications cannot move an idle conversation to the top. `test/session-resume-state.integration.test.js` covers this through the real server in both kernels. `candidate-preview.mjs --restore-state` and `session-resume-state.flow.mjs` record desktop/mobile reopening, switching, refresh and first real submission against synthetic older attachments.
+
 Finish the selected package's build and full tests before recording browser flows: `pretest` rewrites `public/generated/`, so a simultaneous candidate build or recording can observe a different bundle during the same flow.
 
 `scripts/testing/session-chrome.flow.mjs` verifies the fixed sidebar toggle, contiguous list/detail layout, and account dialog against an existing Session in the isolated real preview. It reads usage without submitting a model Turn and records both desktop and mobile results.

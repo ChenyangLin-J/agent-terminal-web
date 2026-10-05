@@ -5,7 +5,8 @@ import path from 'node:path';
 import os from 'node:os';
 const root=process.env.CANDIDATE_PREVIEW_ROOT;
 const realBackend=process.argv.includes('--real');
-const recovery=process.argv.includes('--recovery');
+const restoreState=process.argv.includes('--restore-state');
+const recovery=process.argv.includes('--recovery')||restoreState;
 if(realBackend&&recovery) throw new Error('Recovery fixtures require the synthetic backend.');
 if(!root||!path.isAbsolute(root))throw new Error('Set an absolute isolated CANDIDATE_PREVIEW_ROOT.');
 for(const dir of ['workspace','codex','integrations']) await mkdir(path.join(root,dir),{recursive:true,mode:0o700});
@@ -14,10 +15,11 @@ if(recovery){
  const records={};
  for(const [index,profile] of ['desktop','mobile'].entries()){
   const digit=String(index+1), threadId=`${digit.repeat(8)}-${digit.repeat(4)}-4${digit.repeat(3)}-8${digit.repeat(3)}-${digit.repeat(12)}`;
-  const turnId=`old-${profile}`, cwd=path.join(root,'workspace'), timestamp=new Date(Date.now()-3600000).toISOString();
+  const turnId=`old-${profile}`, cwd=path.join(root,'workspace'), timestamp=new Date(Date.now()-(restoreState?86400000:3600000)).toISOString();
   const user=`旧会话问题 ${profile}`, answer=`旧会话回复 ${profile}`;
-  recoveryThreads[threadId]=[{id:turnId,status:'completed',items:[{id:`native-user-${profile}`,type:'userMessage',content:[{type:'text',text:user}]},{id:`native-answer-${profile}`,type:'agentMessage',phase:'final_answer',text:answer}]}];
+  recoveryThreads[threadId]=[{id:turnId,status:'completed',startedAt:Math.floor(Date.parse(timestamp)/1000)-30,completedAt:Math.floor(Date.parse(timestamp)/1000),items:[{id:`native-user-${profile}`,type:'userMessage',content:[{type:'text',text:user}]},{id:`native-answer-${profile}`,type:'agentMessage',phase:'final_answer',text:answer}]}];
   records[`recovery-${profile}`]={id:`recovery-${profile}`,sessionId:threadId,cwd,title:`旧会话 ${profile}`,transport:'app-server',runtimeKernel:'platform',mode:'resume-id',access:'full',args:['app-server'],released:true,releaseReason:'idle-ttl',startedAt:timestamp,lastActivityAt:timestamp,turnState:{active:false,lastCompletedTurnId:turnId}};
+  if(restoreState) Object.assign(records[`recovery-${profile}`],{released:false,releaseReason:'',turnState:{active:false,interrupted:true,turnId:`outdated-${profile}`,requirements:[{id:'stale',text:'旧连接里的中断要求',kind:'original',status:'interrupted'}]}});
   const directory=path.join(root,'codex','sessions','2026','10','05'); await mkdir(directory,{recursive:true});
   const lines=[{type:'session_meta',payload:{id:threadId,cwd,timestamp}},...[["user",user],["assistant",answer]].map(([role,text])=>({timestamp,type:'response_item',payload:{type:'message',role,phase:role==='assistant'?'final_answer':undefined,internal_chat_message_metadata_passthrough:{turn_id:turnId},content:[{type:role==='user'?'input_text':'output_text',text}]}}))];
   await writeFile(path.join(directory,`rollout-${threadId}.jsonl`),lines.map(JSON.stringify).join('\n')+'\n');
@@ -38,7 +40,7 @@ const readline=require('node:readline'); const crypto=require('node:crypto'); co
 const threads=new Map(Object.entries(${JSON.stringify(recoveryThreads)}));
 readline.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);const p=m.params||{};
 if(m.method==='initialize')send({id:m.id,result:{userAgent:'synthetic-candidate'}});
-else if(['thread/start','thread/resume','thread/fork'].includes(m.method)){const id=p.threadId||crypto.randomUUID();if(!threads.has(id))threads.set(id,[]);send({id:m.id,result:{thread:{id,turns:[]},initialTurnsPage:{data:threads.get(id),nextCursor:null}}});}
+else if(['thread/start','thread/resume','thread/fork'].includes(m.method)){const id=p.threadId||crypto.randomUUID();if(!threads.has(id))threads.set(id,[]);send({id:m.id,result:{thread:{id,turns:[]},initialTurnsPage:{data:threads.get(id),nextCursor:null}}});if(${restoreState}&&m.method==='thread/resume'){send({method:'thread/started',params:{thread:{id}}});send({method:'thread/tokenUsage/updated',params:{threadId:id,tokenUsage:{total:{totalTokens:6000},last:{totalTokens:6000},modelContextWindow:258400}}});}}
 else if(m.method==='model/list')send({id:m.id,result:{data:[{id:'gpt-6.1-sol',model:'gpt-6.1-sol',displayName:'GPT 6.1',isDefault:true,defaultReasoningEffort:'xhigh',supportedReasoningEfforts:[{reasoningEffort:'medium'},{reasoningEffort:'high'},{reasoningEffort:'xhigh'}]},{id:'codex',model:'codex',displayName:'Codex',defaultReasoningEffort:'medium',supportedReasoningEfforts:[{reasoningEffort:'medium'},{reasoningEffort:'high'}]}]}});
 else if(m.method==='config/read')send({id:m.id,result:{config:{model:'gpt-6.1-sol',model_reasoning_effort:'xhigh'}}});
 else if(m.method==='thread/list'||m.method==='thread/turns/list')send({id:m.id,result:{data:[],nextCursor:null}});

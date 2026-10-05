@@ -5014,13 +5014,39 @@ function restoreAppServerTranscript(session, thread, { resumed = false } = {}) {
 
 function restoreResumedActiveTurnState(session, turns) {
   const activeTurnId = String(session.appServer?.activeTurnId || "");
-  if (!activeTurnId) return;
   const activeTurn = (Array.isArray(turns) ? turns : []).find(
     (turn) => String(turn?.id || "") === activeTurnId && turn?.status === "inProgress",
   );
-  if (!activeTurn) return;
+  // An attachment may predate later turns on the same native thread. The native
+  // head owns workflow state; restoring only active turns leaves old interruptions.
+  if (activeTurnId && !activeTurn) return;
+  const latestTurn = activeTurn || (Array.isArray(turns) ? turns : []).reduce(
+    (latest, turn) => !latest || Number(turn?.startedAt || 0) > Number(latest?.startedAt || 0) ? turn : latest,
+    null,
+  );
+  if (!latestTurn?.id) return;
+  const nativeStatus = String(latestTurn.status || '').toLowerCase();
+  if (!activeTurn && !['completed', 'interrupted', 'cancelled', 'canceled', 'failed'].includes(nativeStatus)) return;
 
   const state = session.turnState;
+  const changedTurn = state.turnId !== latestTurn.id;
+  const timestamp = Number(latestTurn.completedAt || latestTurn.startedAt || 0);
+  const nativeActivityAt = timestamp > 0 ? new Date(timestamp < 1e12 ? timestamp * 1000 : timestamp).toISOString() : '';
+  if (nativeActivityAt) session.lastActivityAt = nativeActivityAt;
+  if (!activeTurn) {
+    state.active = false;
+    state.stopping = false;
+    state.turnId = latestTurn.id;
+    state.interrupted = nativeStatus === 'interrupted';
+    state.interruptedAt = state.interrupted ? nativeActivityAt || state.interruptedAt : '';
+    if (nativeStatus === 'completed') state.lastCompletedTurnId = latestTurn.id;
+    if (['cancelled', 'canceled'].includes(nativeStatus)) state.lastStoppedTurnId = latestTurn.id;
+    const status = nativeStatus === 'completed' ? 'completed' : nativeStatus === 'failed' ? 'failed' : state.interrupted ? 'interrupted' : 'cancelled';
+    const prompt = session.appTranscript.find(item => item.turnId === latestTurn.id && item.type === 'user')?.text?.trim();
+    if (changedTurn && prompt) state.requirements = [turnRequirement(state, prompt, 'original', status)];
+    else for (const requirement of state.requirements) requirement.status = status;
+    return;
+  }
   state.active = true;
   state.stopping = false;
   state.interrupted = false;
@@ -6457,7 +6483,9 @@ function handleAppServerNotification(session, message) {
     params.threadId || (method === "thread/started" ? params.thread?.id : "") || "",
   );
   if (notificationThreadId && session.sessionId && notificationThreadId !== session.sessionId) return;
-  if (notificationThreadId) session.lastActivityAt = new Date().toISOString();
+  // Resume/status/context notifications describe a thread; they are not new work.
+  // Only actual turn/item activity can move a conversation in Recent.
+  if (notificationThreadId && (method.startsWith('turn/') || method.startsWith('item/') || (method === 'error' && params.turnId))) session.lastActivityAt = new Date().toISOString();
 
   if (method === "thread/started" && params.thread?.id) {
     session.sessionId = params.thread.id;

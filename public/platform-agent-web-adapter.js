@@ -521,6 +521,18 @@ export function previewSnapshot(id, value, { sourceSession = '', title = '' } = 
 }
 
 function serverAccess(value) { return value === 'full' ? 'full' : 'safe'; }
+
+// Shared UI views contain presentation fields; product usage remains in the Host snapshot.
+export function agentWebSessionContext(controller, view) {
+  const snapshot = controller.getSnapshot().session;
+  return {
+    usage: snapshot?.sessionId === view.sessionId ? snapshot.tokenUsage ?? null : null,
+    isDraft: Boolean(view.isDraft),
+    onRead: () => controller.execute('readContext', {}, { sessionId: view.sessionId }),
+    onCompact: view.isDraft ? undefined : () => controller.execute('compact', {}, { sessionId: view.sessionId }),
+  };
+}
+
 function withMetadata(snapshot, catalog) {
   const profile = snapshot.executionProfile || {};
   return { ...snapshot,

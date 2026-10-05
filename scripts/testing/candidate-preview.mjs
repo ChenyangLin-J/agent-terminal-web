@@ -30,6 +30,7 @@ else if(m.method==='account/rateLimits/read')send({id:m.id,result:{rateLimits:nu
 else if(m.method==='turn/start'){const id=crypto.randomUUID(); const threadId=p.threadId;
 send({id:m.id,result:{turn:{id,status:'inProgress',items:[]}}});
 setTimeout(()=>send({method:'turn/started',params:{threadId,turn:{id,status:'inProgress'}}}),10);
+setTimeout(()=>send({method:'thread/tokenUsage/updated',params:{threadId,turnId:id,tokenUsage:{total:{totalTokens:6000,inputTokens:5000,outputTokens:1000},last:{totalTokens:6000,inputTokens:5000,outputTokens:1000},modelContextWindow:258400}}}),100);
 setTimeout(()=>send({method:'item/completed',params:{threadId,turnId:id,item:{id:'user-'+id,type:'userMessage',content:p.input||[]}}}),30);
 setTimeout(()=>send({method:'item/completed',params:{threadId,turnId:id,item:{id:'comment-'+id,type:'agentMessage',phase:'commentary',text:'正在检查附件预览和输入布局。'}}}),250);
 setTimeout(()=>send({method:'item/completed',params:{threadId,turnId:id,item:{id:'cmd-'+id,type:'commandExecution',command:'node inspect.js',status:'completed',aggregatedOutput:Array.from({length:90},(_,i)=>'输出 '+(i+1)+': 合成验收数据').join('\\n')}}}),550);

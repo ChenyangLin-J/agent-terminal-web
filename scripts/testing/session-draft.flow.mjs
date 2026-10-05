@@ -69,6 +69,16 @@ export default async function ({ page, evidence, baseUrl, profile }) {
   await finder.getByRole('button').filter({ hasText: '新对话' }).filter({ hasText: '已归档' }).waitFor();
   await evidence.checkpoint('归档草稿仍可在历史中查阅');
   await finder.getByRole('button', { name: '关闭搜索与历史', exact: true }).click();
+  await create.click();
+  await composer.fill('检查隔离会话的上下文投影');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await page.locator('button[aria-label="查看上下文"]:visible').filter({ hasText: '2%' }).waitFor();
+  assert.equal(creates.length, 1);
+  await evidence.checkpoint('首条消息才创建后端且实际通知用量进入Composer');
+  await page.locator('button[aria-label="查看上下文"]:visible').click();
+  await page.getByText('6,000 / 258,400 tokens · 2%', { exact: true }).waitFor();
+  await evidence.checkpoint('上下文弹窗显示同一份真实用量');
+  await page.getByRole('button', { name: '关闭上下文', exact: true }).click();
   assert.deepEqual(errors, []);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
 }

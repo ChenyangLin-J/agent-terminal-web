@@ -70,6 +70,7 @@ export default async function ({ page, evidence, baseUrl, profile }) {
   await evidence.checkpoint('归档草稿仍可在历史中查阅');
   await finder.getByRole('button', { name: '关闭搜索与历史', exact: true }).click();
   await create.click();
+  if (await page.locator('.cwu-browser.is-drawer-mode:not(.is-list-collapsed)').count()) await toggle.click();
   await composer.fill('检查隔离会话的上下文投影');
   await page.getByRole('button', { name: '发送', exact: true }).click();
   await page.locator('button[aria-label="查看上下文"]:visible').filter({ hasText: '2%' }).waitFor();

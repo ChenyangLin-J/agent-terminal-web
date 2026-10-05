@@ -23,6 +23,10 @@ export default async function ({ page, evidence, baseUrl }) {
         previewReads++;
         const fixture = fixtures.find(f => url.pathname.endsWith(f.threadId));
         body = { cwd: '/synthetic', conversation: await extractSessionConversationFromJsonl(fixture.file, { limit: 1, offset: Number(url.searchParams.get('before') || 0) }) };
+        if (fixture === fixtures[2]) body.transcript = { items: body.conversation.turns.flatMap(turn => [
+          { id: `${turn.id}-user`, type: 'user', text: turn.user, turnId: turn.id, historical: true },
+          ...turn.assistant.map((item, index) => ({ ...item, id: `native-${turn.id}-${index}`, type: 'assistant', turnId: turn.id, historical: item.phase !== 'commentary' })),
+        ]) };
       } else if (url.pathname.includes('/process/')) {
         const [, threadId, turnId] = url.pathname.match(/\/threads\/([^/]+)\/process\/(.+)$/) || [];
         const fixture = fixtures.find(f => f.threadId === threadId);

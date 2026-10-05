@@ -33,6 +33,13 @@ test('disk history uses native process IDs through the actual route, with refres
       return Response.json({ conversation: await extractSessionConversationFromJsonl(fixture.file, { limit: 1, offset: Number(url.searchParams.get('before') || 0) }) });
     }
     if (url.pathname === '/api/platform/session-metadata') return Response.json({});
+    if (url.pathname === '/api/platform/sessions/web-restored') return Response.json({
+      session: { id: 'web-restored', sessionId: fixtures[0].threadId, ready: true, turnState: { active: true, turnId: fixtures[0].turnIds[1] } },
+      items: [
+        { id: 'native-completed-progress', type: 'assistant', phase: 'commentary', text: 'Task: 晚间：检查执行结果 0', turnId: fixtures[0].turnIds[0] },
+        { id: 'native-current-progress', type: 'assistant', phase: 'commentary', text: 'Task: 晚间：检查执行结果 1', turnId: fixtures[0].turnIds[1], status: 'inProgress' },
+      ],
+    });
     processRequests.push(url.pathname);
     return originalFetch(url);
   };
@@ -76,4 +83,8 @@ test('disk history uses native process IDs through the actual route, with refres
   assert.equal(controller.getSnapshot().session.technicalItems.length, 1);
   await controller.execute('loadTechnicalDetails', { turnId: fixtures[0].turnIds[1] });
   assert.equal(controller.getSnapshot().session.technicalItems.filter(item => item.turnId === fixtures[0].turnIds[1]).length, 3);
+  await freshAdapter.execute('web-restored', 'loadTechnicalDetails', { turnId: fixtures[0].turnIds[0] });
+  const restored = await freshAdapter.readSession('web-restored');
+  assert.equal(restored.technicalItems.filter(item => item.type === 'assistant' && item.turnId === fixtures[0].turnIds[0]).length, 1);
+  assert.equal(restored.technicalItems.find(item => item.id === 'native-current-progress').status, 'inProgress');
 });

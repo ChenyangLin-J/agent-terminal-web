@@ -27,10 +27,19 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
     const entries = [...processes].filter(([key]) => key.startsWith(`${snapshot.threadId}:`));
     if (!entries.length) return snapshot;
     const loadedTurns = new Set(entries.map(([key]) => key.slice(snapshot.threadId.length + 1)));
+    const loaded = entries.flatMap(([, items]) => items);
+    const activeTurnId = snapshot.session?.turnState?.active ? snapshot.session.turnState.turnId : null;
     // Disk previews and process reads use different item IDs for the same progress.
     // Replace historical technical items only; public messages and live items stay.
-    const base = (snapshot.items || []).filter(item => !item.historical || !loadedTurns.has(item.turnId) || isPublicMessage(item));
-    const items = [...new Map([...base, ...entries.flatMap(([, items]) => items)].map(item => [item.id, item])).values()];
+    const base = (snapshot.items || []).filter(item => {
+      if (!loadedTurns.has(item.turnId) || isPublicMessage(item)) return true;
+      if (item.historical) return false;
+      // Restored native progress may lack the historical flag. Drop an identical
+      // completed copy, while preserving the active turn and any newer text.
+      return item.turnId === activeTurnId || item.type !== 'assistant' || item.phase !== 'commentary'
+        || !loaded.some(saved => saved.turnId === item.turnId && saved.type === 'assistant' && saved.phase === 'commentary' && saved.text === item.text);
+    });
+    const items = [...new Map([...base, ...loaded].map(item => [item.id, item])).values()];
     const presentation = presentationFromAgentWeb(snapshot.session || {}, items, snapshot.pendingRequests);
     return { ...snapshot, items, messages: presentation.messages, technicalItems: presentation.technicalItems, technicalDetailsAvailable: presentation.technicalDetailsAvailable, turnMetadata: presentation.turnMetadata };
   };

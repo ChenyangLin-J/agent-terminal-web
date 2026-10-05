@@ -35,7 +35,7 @@ restricted durable thread. The Home product and API contract is in
 | Route | Behavior |
 | --- | --- |
 | `GET /api/home/agent/activity?from=…&to=…&limit=…` | Bounded recent conversations, with user/assistant authors, exact timestamps and partial coverage. Uses `[from,to)`. Initial opening turns are excluded; user continuation is included for all turn states. |
-| `POST /api/home/agent/openings` | `requestId`, `date`, `period` (`morning`/`evening`), bounded `prompt`; durable reservation before submission. Same request/payload is reused, a changed payload conflicts. One background generation, interactive turns take precedence at admission. |
+| `POST /api/home/agent/openings` | `requestId`, `date`, `period` (`morning`/`evening`), bounded `prompt`; durable reservation before submission. Same request/payload is reused, a changed payload conflicts. One opening generation at a time; active interactive Sessions do not block admission to its independent thread. |
 | `GET /api/home/agent/openings/:requestId` | Read the completed/pending/failed/uncertain result. Uncertain jobs with an exact stored thread/turn ID may reconcile from durable history without submitting another turn. |
 
 Requests use a thread-scoped client over the existing shared App Server, never
@@ -44,8 +44,25 @@ required; shell, unified exec, discovered MCP, Apps, Plugins and web search are
 disabled for generation. The thread uses read-only sandbox and approval never;
 the turn uses the installed protocol's `sandboxPolicy` and a one-turn JSON
 output schema. Unsupported restrictions fail rather than falling back to full
-access. Actual native capability behavior and generation quality remain to be
-verified in a candidate environment with a real model.
+access. Real morning and evening turns have completed without tool calls;
+usage and longer-term policy behavior remain to be validated.
+
+Opening admission does not inspect other Sessions' active turns. It proceeds
+on a separate durable thread while users continue chatting. The opening
+reservation remains serialized, as does submitting a new turn to an already
+active target thread; neither condition depends on unrelated Sessions.
+The protocol integration test keeps an interactive turn active, completes an
+opening on a different thread, and verifies that the original turn stays active
+and both clients use one shared App Server. The targeted suite passes 18/18.
+The admission change requires an external Agent Web reload after commit;
+the successful production morning/evening acceptance predates this change.
+
+The opening watcher only accepts notifications explicitly attributed to its
+durable thread and checks a supplied turn ID. Completion requires the expected
+turn ID. Tool rejection uses actual execution items (`item/started` or
+`item/completed`), not capability startup/catalog/status names. Shared MCP
+metadata, other threads' events and unrelated approval requests are ignored;
+an approval request for this opening is declined and leaves delivery uncertain.
 
 The runtime cwd is `WORKSPACE_ROOT/.personal-agent-runtime`, created on demand.
 It stays inside the existing Home resume boundary. User continuation uses the
@@ -62,17 +79,23 @@ reconcile a result through its own endpoint using the original request ID.
 Validation uses an isolated state/workspace, fake App Server protocol and no
 production credentials. It covers admission, idempotency, restart recovery,
 source authors/timestamps and a complete opening-to-Home-reply flow while one
-shared App Server remains alive. The fixture tests do not activate production. Both services now load the shared
-gateway token from the private environment file. Home was reloaded at 22:17
-and Agent Web was restarted externally at 22:25 on 2026-10-04 (Asia/Shanghai);
-the authenticated Home session gateway returns 200. Real activity reads return
-bounded personal conversations with no failed reads in the checked page.
-Native generation and follow-up acceptance remain pending: real Home context
-exposed an overlong prompt, whose complete input budget is corrected and deployed in Home as of 22:40.
-A one-off live check now waits for all interactive Turns to finish before
-submitting generation; it does not bypass interactive admission or restart
-either production service.
-Agent Web itself does not need another restart for that Home fix. An Agent Web
+shared App Server remains alive. The fixture tests do not activate production.
+The latest targeted gateway, integration and shared-client checks passed 18/18.
+Both services load the shared token from their private environment file.
+Production deployment facts and evidence are maintained in
+`home-portal/docs/home-agent-entry.md` under 正式服务激活.
+
+Production validation recovered a real 208-character morning result through
+its original request, thread and turn, then verified source reads and a natural
+same-thread follow-up. The original rollout contains no tool calls: the former
+watcher's broad method-name match had rejected non-execution metadata. The
+exact triggering notification was not captured by that rollout. Recovery did
+not resubmit generation, and usage was not available from the early-ended
+watcher. The one-off idle check also completed a real 191-character evening
+opening, its three sources, automatic time selection, a natural same-thread
+reply and refreshed history. Its rollout has no tool calls. No usage was saved
+for either result, so cost remains unverified. The check exited successfully;
+it never bypassed interactive admission or restarted services. An Agent Web
 Session never restarts the Agent service.
 
 Home conversation responses for opening threads replace their initial machine

@@ -129,6 +129,9 @@ Node.js 对名为 `error` 的 event 有特殊处理：没有 listener 时直接�
 - 只有存在显式 `error` listener 时，才额外 emit `error`。
 - 协议解析失败使用独立的 `protocol-error`，并保留经过限制的原始日志。
 
+共享连接、原生客户端和 Platform 适配层都必须遵循这一规则。模型容量不足等
+会话错误仍通过 `notification` 显示在对应会话中；其他会话继续使用共享连接。
+
 不要把外部协议 method 不加判断地映射为 Node EventEmitter event。
 
 ### 6. App Server 会主动向客户端请求审批和用户输入

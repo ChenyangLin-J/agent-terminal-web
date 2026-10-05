@@ -18,7 +18,7 @@ async function fixture(options = {}) {
   const gateway = registerPersonalAgentGateway(app, {
     createClient, listSessions: options.listSessions || (async () => []), readTurnPage: options.readTurnPage || (async () => ({ data: [] })),
     statePath: path.join(root, "opening-ledger.json"), openingTimeoutMs: options.openingTimeoutMs || 200,
-    isInteractiveBusy: options.isInteractiveBusy, backgroundThreadIds: options.backgroundThreadIds,
+    backgroundThreadIds: options.backgroundThreadIds,
   });
   const server = http.createServer(app); await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   return { root, clients, gateway, statePath: path.join(root, "opening-ledger.json"), url: `http://127.0.0.1:${server.address().port}`, close: async () => { await new Promise((resolve) => server.close(resolve)); await rm(root, { recursive: true, force: true }); } };
@@ -87,9 +87,7 @@ test('accepts a full 350-character opening without truncation', async t => {
   assert.equal(result.body.text, text);
 });
 
-test("interactive busy rejects new work and a restart keeps uncertain work fail closed", async (t) => {
-  const busy = await fixture({ isInteractiveBusy: () => true }); t.after(busy.close);
-  assert.equal((await request(busy, "/api/home/agent/openings", "POST", { requestId: "busy", prompt: "x", date: "2026-10-04", period: "morning" })).status, 409);
+test("a restart keeps uncertain work fail closed", async (t) => {
   const first = await fixture({ createClient: () => new FakeClient() });
   const pending = { records: { restart: { requestId: "restart", fingerprint: "x", status: "running", threadId: "durable-thread", turnId: "expected-turn", prompt: "x", date: "2026-10-04", period: "morning" } } };
   await (await import("node:fs/promises")).writeFile(first.statePath, JSON.stringify(pending), { mode: 0o600 });
@@ -151,6 +149,82 @@ test("invalid oversized schema output is uncertain instead of silently truncated
   await request(f, "/api/home/agent/openings", "POST", { requestId: "bad-output", prompt: "x", date: "2026-10-04", period: "morning" });
   const outcome = await eventually(async () => { const value = await request(f, "/api/home/agent/openings/bad-output"); return value.body.status === "uncertain" ? value : null; });
   assert.match(outcome.body.reason, /required JSON result/);
+});
+
+test("opening ignores unscoped capability discovery and other-thread or other-turn notifications", async (t) => {
+  const f = await fixture({ createClient: () => {
+    const client = new FakeClient();
+    client.startTurn = async () => {
+      const turn = { id: "opening-turn" };
+      setTimeout(() => {
+        // These are connection-wide metadata or a different scoped turn. None
+        // may be mistaken for an opening tool call or its completion.
+        client.emit("notification", { method: "mcpServerStatus/list", params: { servers: [] } });
+        client.emit("notification", { method: "item/started", params: { threadId: "other-thread", turnId: "other-turn", item: { type: "mcpToolCall" } } });
+        client.emit("notification", { method: "item/completed", params: { threadId: client.threadId, turnId: "other-turn", item: { type: "agentMessage", phase: "final_answer", text: '{"text":"wrong","sourceIds":[],"reason":"wrong"}' } } });
+        client.emit("notification", { method: "turn/completed", params: { turn: { id: turn.id, status: "completed" } } });
+        client.emit("notification", { method: "item/completed", params: { threadId: client.threadId, turnId: turn.id, item: { type: "agentMessage", phase: "final_answer", text: '{"text":"hello","sourceIds":["s1"],"reason":"prompt"}' } } });
+        client.emit("notification", { method: "turn/completed", params: { threadId: client.threadId, turn: { id: turn.id, status: "completed" } } });
+      }, 5);
+      return turn;
+    };
+    return client;
+  } }); t.after(f.close);
+  await request(f, "/api/home/agent/openings", "POST", { requestId: "scoped-events", prompt: "x", date: "2026-10-04", period: "morning" });
+  const outcome = await eventually(async () => {
+    const value = await request(f, "/api/home/agent/openings/scoped-events");
+    return value.body.status === "completed" ? value : null;
+  });
+  assert.equal(outcome.body.text, "hello");
+});
+
+test("opening marks a scoped actual tool execution uncertain", async (t) => {
+  const f = await fixture({ createClient: () => {
+    const client = new FakeClient();
+    client.startTurn = async () => {
+      const turn = { id: "opening-turn" };
+      setTimeout(() => client.emit("notification", {
+        method: "item/started",
+        params: { threadId: client.threadId, turnId: turn.id, item: { type: "commandExecution" } },
+      }), 5);
+      return turn;
+    };
+    return client;
+  } }); t.after(f.close);
+  await request(f, "/api/home/agent/openings", "POST", { requestId: "actual-tool", prompt: "x", date: "2026-10-04", period: "morning" });
+  const outcome = await eventually(async () => {
+    const value = await request(f, "/api/home/agent/openings/actual-tool");
+    return value.body.status === "uncertain" ? value : null;
+  });
+  assert.match(outcome.body.reason, /attempted a tool action/);
+});
+
+test("opening does not answer other sessions' approval requests and declines its own", async (t) => {
+  for (const ownRequest of [false, true]) {
+    const responses = [];
+    const f = await fixture({ createClient: () => {
+      const client = new FakeClient();
+      client.respond = (id, value) => responses.push({ id, value });
+      client.startTurn = async () => {
+        setTimeout(() => {
+          client.emit('server-request', { id: 'global', method: 'item/commandExecution/requestApproval', params: {} });
+          client.emit('server-request', { id: 'other', method: 'item/commandExecution/requestApproval', params: { threadId: 'other-thread', turnId: 'other-turn' } });
+          if (ownRequest) client.emit('server-request', { id: 'own', method: 'item/commandExecution/requestApproval', params: { threadId: client.threadId, turnId: 'opening-turn' } });
+          else {
+            client.emit('notification', { method: 'item/completed', params: { threadId: client.threadId, turnId: 'opening-turn', item: { type: 'agentMessage', phase: 'final_answer', text: '{"text":"hello","sourceIds":[],"reason":"prompt"}' } } });
+            client.emit('notification', { method: 'turn/completed', params: { threadId: client.threadId, turn: { id: 'opening-turn', status: 'completed' } } });
+          }
+        }, 5);
+        return { id: 'opening-turn' };
+      };
+      return client;
+    } }); t.after(f.close);
+    const requestId = `approval-${ownRequest}`;
+    await request(f, '/api/home/agent/openings', 'POST', { requestId, prompt: 'x', date: '2026-10-04', period: 'morning' });
+    await eventually(async () => (await request(f, `/api/home/agent/openings/${requestId}`)).body.status === (ownRequest ? 'uncertain' : 'completed'));
+    assert.deepEqual(responses.map(item => item.id), ownRequest ? ['own'] : []);
+    if (ownRequest) assert.equal(responses[0].value.decision, 'decline');
+  }
 });
 
 test("activity preserves user and final-answer source dates and reports partial coverage", async (t) => {

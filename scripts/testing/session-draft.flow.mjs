@@ -32,7 +32,11 @@ export default async function ({ page, evidence, baseUrl, profile }) {
   await page.waitForFunction(() => document.querySelector('select[aria-label="模型"]')?.value === 'gpt-6.1-sol');
   assert.equal(await page.locator('select[aria-label="思考强度"]:visible').inputValue(), 'xhigh');
   assert.match(await page.locator('button[aria-label="查看上下文"]:visible').innerText(), /未开始/);
+  assert.equal(await page.locator('button[aria-label="Fast 模式"]:visible').getAttribute('title'), '优先处理请求');
   await evidence.checkpoint('读取真实默认模型及思考强度');
+  await page.locator('button[aria-label="查看上下文"]:visible').click();
+  assert.equal(await page.getByRole('button', { name: '压缩上下文', exact: true }).count(), 0);
+  await page.getByRole('button', { name: '关闭上下文', exact: true }).click();
   await model.selectOption('codex');
   await page.locator('select[aria-label="思考强度"]:visible').selectOption('high');
   await page.locator('select[aria-label="权限"]:visible').selectOption('restricted');

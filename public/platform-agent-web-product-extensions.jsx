@@ -204,7 +204,7 @@ function sessionContext(controller, session) {
     usage: session.tokenUsage ?? null,
     isDraft: Boolean(session.isDraft),
     onRead: () => controller.execute('readContext', {}, { sessionId: session.sessionId }),
-    onCompact: () => controller.execute('compact', {}, { sessionId: session.sessionId }),
+    onCompact: session.isDraft ? undefined : () => controller.execute('compact', {}, { sessionId: session.sessionId }),
   };
 }
 

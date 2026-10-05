@@ -41,6 +41,20 @@ test("Agent Session favorites reject invalid IDs", async (t) => {
   );
 });
 
+test("damaged favorites block mutation without replacing the source", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "agent-session-favorites-corrupt-"));
+  const filePath = path.join(root, "favorites.json");
+  const damaged = "{ not valid JSON\n";
+  await writeFile(filePath, damaged);
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  assert.throws(
+    () => setAgentSessionFavorite(filePath, firstSessionId, true),
+    /Agent Session favorites parse failed/,
+  );
+  assert.equal(await readFile(filePath, "utf8"), damaged);
+});
+
 test("the authenticated Agent API updates the shared favorites file", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "agent-session-favorites-api-"));
   const workspaceRoot = path.join(root, "workspace");

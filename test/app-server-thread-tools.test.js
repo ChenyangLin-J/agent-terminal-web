@@ -12,7 +12,6 @@ readFile(new URL("../lib/codex-app-server-client.js", import.meta.url), "utf8")
   assert.match(client, /"thread\/searchOccurrences"/);
   assert.match(client, /"thread\/fork"/);
   assert.match(client, /"thread\/list"/);
-  assert.match(server, /setPersistedThreadName\(id, title\)/);
   assert.match(server, /nativeThreadSessionMeta/);
   assert.match(server, /message\.type === "edit-and-fork"/);
   assert.match(server, /beforeTurnId/);

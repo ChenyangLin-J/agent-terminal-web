@@ -29,9 +29,10 @@ export function createAgentWebConnection(id, { clientId, afterRevision, WebSocke
       let event; try { event = JSON.parse(raw.data); } catch { return; }
       const payload = event.payload || {};
       const receipt = payload.idempotencyKey ? pending.get(payload.idempotencyKey) : null;
-      if (receipt && ['control-ack', 'error', 'side-chat-error', 'realtime-error'].includes(event.type)) {
-        cancel(receipt.timeout); receipt.cleanup?.(); pending.delete(payload.idempotencyKey);
-        if (event.type === 'control-ack') receipt.resolve(payload);
+      const failed = ['error', 'side-chat-error', 'realtime-error'].includes(event.type);
+      if (receipt && (failed || receipt.responseTypes.includes(event.type))) {
+        cancel(receipt.timeout); pending.delete(payload.idempotencyKey);
+        if (!failed) receipt.resolve(payload);
         else { const error = new Error(payload.message || 'Session action failed.'); error.knownResult = payload.receiptState === 'failed'; receipt.reject(error); }
       }
       for (const listener of listeners) listener({ ...event, sessionId: id, ...(payload.sessionRevision == null ? {} : { revision: payload.sessionRevision }) });
@@ -40,7 +41,7 @@ export function createAgentWebConnection(id, { clientId, afterRevision, WebSocke
     current.addEventListener('close', () => {
       if (disposed || current !== socket) return;
       announce({ status: 'reconnecting' }); rejectReady(new Error('Agent Web connection closed.'));
-      for (const operation of pending.values()) { cancel(operation.timeout); operation.cleanup?.(); operation.reject(new Error('Connection lost; the operation result is unknown. Retry retains its ID.')); }
+      for (const operation of pending.values()) { cancel(operation.timeout); operation.reject(new Error('Connection lost; the operation result is unknown. Retry retains its ID.')); }
       pending.clear();
       retryTimer = schedule(open, retryDelay); retryDelay = Math.min(5000, retryDelay * 2);
     });
@@ -55,21 +56,20 @@ export function createAgentWebConnection(id, { clientId, afterRevision, WebSocke
       await ready;
       if (disposed || socket.readyState !== 1) throw new Error('Session connection is recovering.');
       const key = idempotencyKey || message.idempotencyKey || globalThis.crypto.randomUUID();
+      if (pending.has(key)) throw new Error('An operation with this ID is already pending.');
       return new Promise((resolve, reject) => {
-        const timeout = schedule(() => { pending.get(key)?.cleanup?.(); pending.delete(key); reject(new Error('Operation receipt timed out; retry retains its ID.')); }, 20000);
-        pending.set(key, { resolve, reject, timeout });
+        const timeout = schedule(() => { pending.delete(key); reject(new Error('Operation receipt timed out; retry retains its ID.')); }, 20000);
+        pending.set(key, { resolve, reject, timeout, responseTypes });
         // Register before sending: a loopback/test transport may reply synchronously.
-        if (!responseTypes.includes('control-ack')) {
-          const once = (event) => { if (!responseTypes.includes(event.type)) return; listeners.delete(once); const receipt = pending.get(key); if (receipt) { cancel(receipt.timeout); pending.delete(key); resolve(event.payload); } };
-          listeners.add(once);
-          pending.get(key).cleanup = () => listeners.delete(once);
+        try { socket.send(JSON.stringify({ ...message, idempotencyKey: key })); }
+        catch (error) {
+          cancel(timeout); pending.delete(key); reject(error);
         }
-        socket.send(JSON.stringify({ ...message, idempotencyKey: key }));
       });
     },
     dispose() {
       disposed = true; cancel(retryTimer); socket?.close();
-      for (const operation of pending.values()) { cancel(operation.timeout); operation.cleanup?.(); operation.reject(new Error('Session connection released.')); }
+      for (const operation of pending.values()) { cancel(operation.timeout); operation.reject(new Error('Session connection released.')); }
       pending.clear(); listeners.clear(); stateListeners.clear();
     },
   };

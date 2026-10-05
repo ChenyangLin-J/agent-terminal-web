@@ -14,6 +14,9 @@ The shared Session UI candidate and local Platform build instructions are in
 [`docs/platform-session-ui.md`](docs/platform-session-ui.md). Build the browser
 assets before starting a fresh checkout.
 
+Backend ownership, Runtime reuse, product state and candidate verification are in
+[`docs/backend-architecture.md`](docs/backend-architecture.md).
+
 打开：
 
 ```text

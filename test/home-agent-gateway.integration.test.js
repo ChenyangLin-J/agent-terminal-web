@@ -37,6 +37,7 @@ test(`Home adapter keeps durable thread identity, exposes history, and rejects d
       PRIVATE_AUTH_VERIFY_URL: "http://127.0.0.1:9/disabled-auth",
       AGENT_CODEX_STATE_ROOT: codexStateRoot,
       AGENT_MEMORY_SYSTEM_ROOT: process.env.AGENT_MEMORY_SYSTEM_ROOT,
+      AGENT_PLATFORM_CANDIDATE: process.env.AGENT_PLATFORM_CANDIDATE,
       AGENT_PLATFORM_KERNEL: kernelMode,
       AGENT_INTEGRATIONS_DIR: path.join(temporaryRoot, "integrations"),
       AGENT_CUBOX_CONFIG_DIR: path.join(temporaryRoot, "cubox"),
@@ -52,6 +53,7 @@ test(`Home adapter keeps durable thread identity, exposes history, and rejects d
   let output = "";
   child.stdout.on("data", (chunk) => (output += chunk));
   child.stderr.on("data", (chunk) => (output += chunk));
+  child.on("exit", (code) => { if (code) process.stderr.write(`Fixture exited (${code}): ${output}\n`); });
   t.after(async () => {
     if (child.exitCode === null) child.kill("SIGTERM");
     await rm(temporaryRoot, { recursive: true, force: true });

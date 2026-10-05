@@ -38,8 +38,6 @@ test("interrupted App Server turns remain visible and can be continued", async (
   const server = await readFile(new URL("../server.js", import.meta.url), "utf8");
 
   assert.match(server, /interruptedTurnStateAfterProcessLoss\(record\.turnState, record\.lastActivityAt\)/);
-  assert.match(server, /state\.turnId !== state\.lastCompletedTurnId/);
-  assert.match(server, /requirement\.status === "working"\) requirement\.status = "interrupted"/);
   assert.match(server, /message\.type === "resume-interrupted"/);
   assert.match(server, /session\.interruptedResumePending = true/);
   assert.match(server, /session\.interruptedResumePending = false/);

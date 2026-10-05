@@ -3,12 +3,9 @@
 这份文档面向准备把现有 Workbench 改造成 Codex App Server 应用的同事。
 它总结的是 Agent Web 已经遇到并解决的问题，不是一套必须照搬的完整产品方案。
 
-当前实现验证环境：
-
-- Node.js `20.20.2`
-- npm `10.8.2`
-- `codex-cli 0.145.0`
-- Codex App Server 默认 JSONL stdio transport
+当前代码采用 Codex App Server 的 JSONL stdio transport。准确的候选版本与测试
+环境以所属 Change 的证据为准；这里不把早期接入时的 CLI 版本当成当前生产事实。
+当前模块边界见 [`backend-architecture.md`](backend-architecture.md)。
 
 Codex App Server 的协议和事件仍可能随 Codex CLI 更新。升级 CLI 后必须重新跑协议与并发测试。
 
@@ -54,9 +51,9 @@ codex app-server（JSONL stdio）
 
 当前解决方式：
 
-- 每个执行主机只维护一个按需启动的 `CodexAppServerConnection`。
-- 每个 Session 使用独立的 `CodexAppServerClient`，但共享底层 connection。
-- client 只保存自己的 `threadId`、`activeTurnId`、队列和事件监听。
+- 每个执行主机只维护一个按需启动的 connection，复用 Platform 的 `AppServerConnection`。
+- Platform 路径通过薄 client facade 使用 `AgentSessionKernel`，运行状态、队列和审批归 Platform。
+- legacy 路径保留独立的 `CodexAppServerClient` 用于回滚，同样复用共享 connection。
 - 关闭一个 Session 时先 `thread/unsubscribe`，不能关闭共享 connection。
 
 如果 Workbench 第一版只有单用户、单 Session，可以先不做 Pool；但接口层仍应把
@@ -71,7 +68,7 @@ App Server 的 notification 和 server request 都从同一个 stdout 返回。�
 
 - notification 和 server request 都先提取 `params.threadId`。
 - 只有 `threadId` 与 client 当前线程一致时才继续处理。
-- 每个 client 单独维护 active turn，子 Agent 的 turn 不能覆盖主线程状态。
+- Platform 提供每个 Runtime 的 active Turn；legacy client 保留自己的投影，子 Agent 的 Turn 不能覆盖主线程状态。
 - 释放 client 时移除全部 listener，防止旧 Session 继续收到事件。
 
 至少要用两个并发 thread 测试：

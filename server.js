@@ -1,4 +1,7 @@
 import { createSessionMetadataReader } from './lib/platform-session-metadata.js';
+import { AgentRuntimeReleaseCoordinator } from './lib/agent-runtime-release.js';
+import { createAgentSessionCommandHandler } from './lib/agent-session-commands.js';
+import { acceptTrackedTurnCompletion, completeTrackedTurn, turnRequirement, trimTrackedRequirements, restoreTurnState, interruptedTurnStateAfterProcessLoss, publicTurnState } from './lib/agent-turn-projection.js';
 import { createSessionReferenceEnvelopeInput, normalizeSessionReferences, parseSessionReferenceEnvelopes, requireReferences, resolveAgentWebReferences, sessionReferenceKey } from './lib/session-references.js';
 import { registerPlatformSessionRoutes } from './lib/platform-session-routes.js';
 import { execFile } from "node:child_process";
@@ -66,6 +69,11 @@ import {
   readAgentSessionFavorites,
   setAgentSessionFavorite,
 } from "./lib/agent-session-favorites.js";
+import {
+  createSessionTitleService,
+  createSyncObjectStateStore,
+  updateLiveSessionTitle,
+} from "./lib/agent-session-state.js";
 import {
   MEDIA_SESSION_AUTO_ARCHIVE_IDLE_MS,
   MediaSessionAutoArchiveStore,
@@ -193,7 +201,6 @@ const MAX_LOCAL_TEXT_BYTES = 2 * 1024 * 1024;
 const MAX_LOCAL_PREVIEW_BYTES = 50 * 1024 * 1024;
 const MAX_RAW_BUFFER = 1024 * 1024;
 const MAX_FULL_REPLAY_BYTES = 32 * 1024;
-const MAX_TURN_REQUIREMENTS = 20;
 const APP_INITIAL_TURN_LIMIT = 10;
 const APP_HISTORY_PAGE_LIMIT = 10;
 const APP_SEARCH_RESULT_LIMIT = 30;
@@ -279,6 +286,26 @@ server.prependListener("upgrade", (req) => {
   logAgentEvent("ws-upgrade-received", req.agentWebUpgradeLogFields);
 });
 const sessions = new Map();
+const webSessionState = createSyncObjectStateStore({
+  filePath: AGENT_WEB_SESSIONS_FILE,
+  label: "Agent Web sessions",
+  normalize: normalizePersistedWebSessions,
+});
+const agentSessionSettingsState = createSyncObjectStateStore({
+  filePath: AGENT_SESSION_SETTINGS_FILE,
+  label: "Agent Session settings",
+  normalize: normalizeAgentSessionSettings,
+});
+const sessionArchiveState = createSyncObjectStateStore({
+  filePath: CODEX_SESSION_ARCHIVE_FILE,
+  label: "Session archive",
+  normalize: normalizeSessionArchive,
+});
+const sessionTitleService = createSessionTitleService({
+  filePath: CODEX_SESSION_TITLES_FILE,
+  isValidSessionId,
+  normalizeTitle: cleanCustomTitle,
+});
 const homeTurnRequests = loadHomeTurnRequests();
 const homeTurnInflightRequests = new Map();
 const homeTurnAdmissions = new Map();
@@ -1885,6 +1912,23 @@ function newerSessionPreview(left, right) {
   return new Date(right.completedAt || 0) > new Date(left.completedAt || 0) ? right : left;
 }
 
+function setAgentSessionTitle(id, title) {
+  return updateLiveSessionTitle({
+    titleService: sessionTitleService,
+    sessionId: id,
+    title,
+    resolveFallbackTitle: async (sessionId) => (await readCodexSessionById(sessionId))?.originalTitle,
+    saveNativeName: setPersistedThreadName,
+    liveSessions: () => sessions.values(),
+    persist: persistRestorableWebSession,
+    broadcast: (session) => broadcast(session, "status", publicSession(session)),
+    onNativeNameError: (error) => logAgentEvent("thread-native-name-failed", {
+      codexSessionId: id,
+      message: cleanClientLogValue(error.message, 300),
+    }),
+  });
+}
+
 app.put("/api/codex-sessions/:id/title", async (req, res) => {
   const id = String(req.params.id || "").trim();
   const title = cleanCustomTitle(req.body?.title);
@@ -1895,29 +1939,9 @@ app.put("/api/codex-sessions/:id/title", async (req, res) => {
   }
 
   try {
-    const nativeNameSaved = await setPersistedThreadName(id, title).catch((error) => {
-      logAgentEvent("thread-native-name-failed", {
-        codexSessionId: id,
-        message: cleanClientLogValue(error.message, 300),
-      });
-      return false;
-    });
-    const titles = await readSessionTitles();
-    if (title) {
-      titles[id] = title;
-    } else {
-      delete titles[id];
-    }
-    await writeSessionTitles(titles);
-    for (const session of sessions.values()) {
-      if (session.sessionId === id && title) {
-        session.title = title;
-        persistRestorableWebSession(session);
-        broadcast(session, "status", publicSession(session));
-      }
-    }
+    const result = await setAgentSessionTitle(id, title);
     invalidateThreadCatalog();
-    res.json({ id, customTitle: title, nativeNameSaved });
+    res.json({ id, ...result });
   } catch (error) {
     res.status(500).json({ error: `Failed to save title: ${error.message}` });
   }
@@ -2394,6 +2418,10 @@ function sharedPlatformKernel() {
     bindingStore: jsonFileBindingStore(PLATFORM_BINDINGS_FILE),
     runtimeLeaseMs: SESSION_TTL_MS,
     detachedLeaseMs: SESSION_TTL_MS,
+    hasHostActiveWork: (sessionId) => {
+      const session = sessions.get(sessionId);
+      return Boolean(session && (!session.ready || sessionHasActiveWork(session)));
+    },
   });
   return platformKernel;
 }
@@ -2422,33 +2450,14 @@ function createAgentAppServerClient(cwd, webSessionId, { runtimeKernel = "legacy
   });
 }
 
-function releaseAgentAppServerClient(client, { interrupt = false } = {}) {
-  if (!client || client.closed) return;
-  if (client.ownsConnection) {
-    client.close();
-    return;
-  }
+const runtimeReleases = new AgentRuntimeReleaseCoordinator({
+  onError: ({ threadId, turnId, error }) => logAgentEvent('shared-app-server-detach-failed', {
+    threadId, turnId, message: cleanClientLogValue(error?.message, 300),
+  }),
+});
 
-  const threadId = String(client.threadId || "");
-  const turnId = String(client.activeTurnId || "");
-  void (async () => {
-    try {
-      if (interrupt && threadId && turnId) {
-        await client.request("turn/interrupt", { threadId, turnId });
-      }
-      if (threadId) {
-        await client.request("thread/unsubscribe", { threadId });
-      }
-    } catch (error) {
-      logAgentEvent("shared-app-server-detach-failed", {
-        threadId,
-        turnId,
-        message: cleanClientLogValue(error?.message, 300),
-      });
-    } finally {
-      client.close();
-    }
-  })();
+function releaseAgentAppServerClient(client, options = {}) {
+  return runtimeReleases.release(client, options);
 }
 
 function cleanClientLogValue(value, maxLength) {
@@ -2598,7 +2607,29 @@ function createAppServerSession(cwd, launch, restored = {}) {
 }
 
 function wireAppServerSession(session) {
-  session.appServer.on("notification", (message) => handleAppServerNotification(session, message));
+  session.appServer.on('runtime-released', ({ reason } = {}) => {
+    if (![APP_SERVER_RELEASE_REASON_IDLE_TTL, APP_SERVER_RELEASE_REASON_DETACHED_TTL].includes(reason)) return;
+    if (session.exited || sessions.get(session.id) !== session) return;
+    logAgentEvent('session-runtime-release', {
+      webSessionId: session.id,
+      codexSessionId: session.sessionId,
+      reason,
+      connectedClients: session.clients.size,
+    });
+    try {
+      releaseAppServerSessionRuntime(session, { reason, nativeReleased: true });
+      sessions.delete(session.id);
+    } catch (error) {
+      logAgentEvent('session-projection-failed', { webSessionId: session.id, message: cleanClientLogValue(error.message, 300) });
+    }
+  });
+  session.appServer.on("notification", (message) => {
+    try { handleAppServerNotification(session, message); }
+    catch (error) {
+      logAgentEvent('session-projection-failed', { webSessionId: session.id, message: cleanClientLogValue(error.message, 300) });
+      for (const client of session.clients) send(client, 'error', { message: 'Session 状态未能保存，请检查服务记录后重试。', receiptState: 'unknown' });
+    }
+  });
   session.appServer.on("server-request", (message) => handleAppServerRequest(session, message));
   session.appServer.on("stderr", (text) => {
     logAgentEvent("app-server-stderr", {
@@ -2613,6 +2644,7 @@ function wireAppServerSession(session) {
 async function initializeAppServerSession(session, launch) {
   try {
     const initializationStartedAt = Date.now();
+    if (launch.sessionId) await runtimeReleases.waitForThread(launch.sessionId);
     await session.appServer.start();
     session.pid = session.appServer.child?.pid || null;
     const params = {
@@ -3165,440 +3197,461 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
   }
 
   ws.on("message", async (raw) => {
-    let message;
+    let operationKey = '';
     try {
-      message = JSON.parse(raw.toString());
-    } catch {
-      return;
-    }
-
-    const operationKey = String(message.idempotencyKey || "");
-    const reply = (type, payload = {}) => {
-      const value = operationKey ? { ...payload, idempotencyKey: operationKey } : payload;
-      if (operationKey && type === "control-ack") settleSessionOperationReceipt(session, operationKey, { result: value }, () => persistRestorableWebSession(session));
-      if (operationKey && ["error", "side-chat-error", "realtime-error"].includes(type)) {
-        value.receiptState = "failed";
-        settleSessionOperationReceipt(session, operationKey, { error: value.message || type }, () => persistRestorableWebSession(session));
-      }
-      send(ws, type, value);
-    };
-
-    // A server receipt, rather than a browser-only UUID, makes retries after
-    // an unknown result safe across reconnects and process restoration.
-    if (isIdempotentSessionMessage(message)) {
-      const key = String(message.idempotencyKey || "");
-      if (key) {
-        if (!isValidOperationReceiptKey(key)) { reply("error", { message: "Invalid operation ID." }); return; }
-        const previous = session.operationReceipts?.get(key);
-        if (previous) {
-          if (previous.fingerprint && previous.fingerprint !== operationPayloadFingerprint(message)) {
-            send(ws, "error", { message: "同一个操作 ID 的内容不一致，请生成新的操作 ID。", idempotencyKey: key, receiptState: "failed" });
-            return;
-          }
-          if (previous.state === "failed") { reply("error", { message: previous.failure || "Operation was rejected.", receiptState: "failed" }); return; }
-          send(ws, "control-ack", { ...(previous.result || {}), kind: previous.kind, idempotencyKey: key, replayed: true, pending: previous.state === "pending", idempotent: true, receivedAt: previous.receivedAt });
-          return;
-        }
-        rememberSessionOperationReceipt(session, key, { kind: message.type, fingerprint: operationPayloadFingerprint(message) }, () => persistRestorableWebSession(session));
-      }
-    }
-
-    if (message.expectedTurnId && ['interrupt-turn', 'agent-response', 'resume-interrupted'].includes(message.type) && message.expectedTurnId !== session.turnState.turnId) {
-      reply('error', { message: 'The requested Turn is no longer current.' }); return;
-    }
-    if (message.type === "client-ping") {
-      reply("client-pong", { sentAt: message.sentAt || null, receivedAt: Date.now() });
-      return;
-    }
-
-    if (session.exited) { reply("error", { message: "Session is no longer available." }); return; }
-
-    if (message.type === "input" && typeof message.data === "string") {
-      reply("error", { message: "Raw terminal keys are unavailable in App Server mode." });
-      return;
-    }
-
-    if (message.type === "submit" && typeof message.data === "string") {
-      if (realtimeBusy(session.realtime)) {
-        reply("error", { message: "实时语音正在使用当前 Session，请先结束语音对话。", preservePrompt: true });
-        return;
-      }
-      const normalized = message.data.trim();
-      let attachments;
-      let references;
+      let message;
       try {
-        attachments = normalizeSubmittedAttachments(message.attachments);
-        const requestedReferences = requireReferences(message.references);
-        references = await resolveSessionReferences(session.sessionId, requestedReferences);
-        if (references.length !== requestedReferences.length) throw new Error('有 Session 引用已不可用，请移除后再发送。');
-      } catch (error) {
-        reply("error", { message: error.message, preservePrompt: true });
+        message = JSON.parse(raw.toString());
+      } catch {
         return;
       }
-      if (normalized || attachments.length) {
-        const requirementText = normalized || attachmentRequirementText(attachments);
-        rememberNotificationTarget(session, message.notificationApp, message.notificationDeviceId);
-        renewSessionRetention(session);
-        logControlMessage(session, ws, "submit", requirementText, {
-          attachmentCount: attachments.length,
-          attachmentBytes: attachments.reduce((total, attachment) => total + attachment.size, 0),
-        });
-        if (!session.title || ['新对话', 'New Codex session'].includes(session.title)) session.title = cleanTitle(requirementText) || "New Codex session";
-        const prompt = prepareSessionPrompt(session, normalized);
-        const skillNames = requestedAppSkillNames(prompt.text, message.skills);
-        rememberMediaSessionPrompt(session, requirementText, skillNames);
-        if (prompt.activatesThink) session.thinkSkillActivationPending = true;
-        rememberSubmittedAttachments(session, attachments);
-        if (!session.ready) {
-          if (operationKey) {
-            reply('error', { message: 'Session 仍在启动，请稍后重试。', preservePrompt: true });
+
+      operationKey = String(message.idempotencyKey || "");
+      const reply = (type, payload = {}) => {
+        const value = operationKey ? { ...payload, idempotencyKey: operationKey } : payload;
+        try {
+          if (operationKey && type === 'app-command-result') settleSessionOperationReceipt(session, operationKey, { result: value }, () => persistRestorableWebSession(session));
+          if (operationKey && type === "control-ack") {
+            const priorResult = session.operationReceipts?.get(operationKey)?.result;
+            settleSessionOperationReceipt(session, operationKey, { result: { ...priorResult, ...value } }, () => persistRestorableWebSession(session));
+          }
+          if (operationKey && ["error", "side-chat-error", "realtime-error"].includes(type)) {
+            value.receiptState = "failed";
+            settleSessionOperationReceipt(session, operationKey, { error: value.message || type }, () => persistRestorableWebSession(session));
+          }
+          send(ws, type, value);
+        } catch (error) {
+          logAgentEvent('operation-receipt-save-failed', { webSessionId: session.id, message: cleanClientLogValue(error.message, 300) });
+          send(ws, 'error', { idempotencyKey: operationKey, message: '操作结果未能持久保存，请检查服务记录后重试。', receiptState: 'unknown' });
+        }
+      };
+
+      // A server receipt, rather than a browser-only UUID, makes retries after
+      // an unknown result safe across reconnects and process restoration.
+      if (isIdempotentSessionMessage(message)) {
+        const key = String(message.idempotencyKey || "");
+        if (key) {
+          if (!isValidOperationReceiptKey(key)) { reply("error", { message: "Invalid operation ID." }); return; }
+          const previous = session.operationReceipts?.get(key);
+          if (previous) {
+            if (previous.fingerprint && previous.fingerprint !== operationPayloadFingerprint(message)) {
+              send(ws, "error", { message: "同一个操作 ID 的内容不一致，请生成新的操作 ID。", idempotencyKey: key, receiptState: "failed" });
+              return;
+            }
+            if (previous.state === "failed") { reply("error", { message: previous.failure || "Operation was rejected.", receiptState: "failed" }); return; }
+            if (previous.kind === 'command' && previous.state === 'accepted') {
+              // Persist only public receipt metadata, never command inventories or
+              // account details. A replay confirms execution without doing it again.
+              send(ws, 'app-command-result', { command: previous.result?.command || 'command', kind: 'notice', title: previous.result?.title || 'Command', content: '此命令已执行；重复请求不会再次执行。', idempotencyKey: key, replayed: true });
+              return;
+            }
+            send(ws, "control-ack", { ...(previous.result || {}), kind: previous.kind, idempotencyKey: key, replayed: true, pending: previous.state === "pending", idempotent: true, receivedAt: previous.receivedAt });
             return;
           }
-          session.pendingStartupPrompts.push({
-            text: prompt.text,
-            requirementText,
-            attachments,
-            deliveryMode: message.deliveryMode,
-            activatesThink: prompt.activatesThink,
-            skillNames,
-            references,
-          });
-          reply("control-ack", {
-            kind: "submit",
-            receivedAt: Date.now(),
-            deliveryMode: "startup-queue",
-            turnState: publicTurnState(session.turnState),
-          });
+          rememberSessionOperationReceipt(session, key, { kind: message.type, fingerprint: operationPayloadFingerprint(message) }, () => persistRestorableWebSession(session));
+        }
+      }
+
+      if (message.expectedTurnId && ['interrupt-turn', 'agent-response', 'resume-interrupted'].includes(message.type) && message.expectedTurnId !== session.turnState.turnId) {
+        reply('error', { message: 'The requested Turn is no longer current.' }); return;
+      }
+      if (message.type === "client-ping") {
+        reply("client-pong", { sentAt: message.sentAt || null, receivedAt: Date.now() });
+        return;
+      }
+
+      if (session.exited) { reply("error", { message: "Session is no longer available." }); return; }
+
+      if (message.type === "input" && typeof message.data === "string") {
+        reply("error", { message: "Raw terminal keys are unavailable in App Server mode." });
+        return;
+      }
+
+      if (message.type === "submit" && typeof message.data === "string") {
+        if (realtimeBusy(session.realtime)) {
+          reply("error", { message: "实时语音正在使用当前 Session，请先结束语音对话。", preservePrompt: true });
           return;
         }
-        await mediaSessionArchiveOperations.get(agentSessionSettingsKey(session.sessionId))?.catch(() => {});
-        if (session.exited) {
-          reply("error", { message: "Session 已归档，请恢复后重试。", preservePrompt: true });
+        const normalized = message.data.trim();
+        let attachments;
+        let references;
+        try {
+          attachments = normalizeSubmittedAttachments(message.attachments);
+          const requestedReferences = requireReferences(message.references);
+          references = await resolveSessionReferences(session.sessionId, requestedReferences);
+          if (references.length !== requestedReferences.length) throw new Error('有 Session 引用已不可用，请移除后再发送。');
+        } catch (error) {
+          reply("error", { message: error.message, preservePrompt: true });
           return;
         }
-        void submitAppServerPrompt(session, prompt.text, message.deliveryMode, skillNames, attachments, requirementText, { references })
-          .then((submission) => {
-            if (prompt.activatesThink) {
-              session.thinkSkillActivated = true;
-              session.thinkSkillActivationPending = false;
+        if (normalized || attachments.length) {
+          const requirementText = normalized || attachmentRequirementText(attachments);
+          rememberNotificationTarget(session, message.notificationApp, message.notificationDeviceId);
+          renewSessionRetention(session);
+          logControlMessage(session, ws, "submit", requirementText, {
+            attachmentCount: attachments.length,
+            attachmentBytes: attachments.reduce((total, attachment) => total + attachment.size, 0),
+          });
+          if (!session.title || ['新对话', 'New Codex session'].includes(session.title)) session.title = cleanTitle(requirementText) || "New Codex session";
+          const prompt = prepareSessionPrompt(session, normalized);
+          const skillNames = requestedAppSkillNames(prompt.text, message.skills);
+          rememberMediaSessionPrompt(session, requirementText, skillNames);
+          if (prompt.activatesThink) session.thinkSkillActivationPending = true;
+          rememberSubmittedAttachments(session, attachments);
+          if (!session.ready) {
+            if (operationKey) {
+              reply('error', { message: 'Session 仍在启动，请稍后重试。', preservePrompt: true });
+              return;
             }
-            session.lastActivityAt = new Date().toISOString();
-            persistRestorableWebSession(session);
-            broadcast(session, "status", publicSession(session));
+            session.pendingStartupPrompts.push({
+              text: prompt.text,
+              requirementText,
+              attachments,
+              deliveryMode: message.deliveryMode,
+              activatesThink: prompt.activatesThink,
+              skillNames,
+              references,
+            });
             reply("control-ack", {
               kind: "submit",
               receivedAt: Date.now(),
-              deliveryMode: submission.deliveryMode,
-              skills: submission.skills,
+              deliveryMode: "startup-queue",
+              turnState: publicTurnState(session.turnState),
+            });
+            return;
+          }
+          await mediaSessionArchiveOperations.get(agentSessionSettingsKey(session.sessionId))?.catch(() => {});
+          if (session.exited) {
+            reply("error", { message: "Session 已归档，请恢复后重试。", preservePrompt: true });
+            return;
+          }
+          void submitAppServerPrompt(session, prompt.text, message.deliveryMode, skillNames, attachments, requirementText, { references })
+            .then((submission) => {
+              if (prompt.activatesThink) {
+                session.thinkSkillActivated = true;
+                session.thinkSkillActivationPending = false;
+              }
+              session.lastActivityAt = new Date().toISOString();
+              persistRestorableWebSession(session);
+              broadcast(session, "status", publicSession(session));
+              reply("control-ack", {
+                kind: "submit",
+                receivedAt: Date.now(),
+                deliveryMode: submission.deliveryMode,
+                skills: submission.skills,
+                turnState: publicTurnState(session.turnState),
+              });
+            })
+            .catch((error) => {
+              if (prompt.activatesThink) session.thinkSkillActivationPending = false;
+              reply("error", { message: `Prompt was not sent: ${error.message}`, preservePrompt: true });
+            });
+        } else { reply("error", { message: "Message cannot be empty.", preservePrompt: true }); }
+        return;
+      }
+
+      if (message.type === "load-app-history") {
+        void loadEarlierAppServerHistory(session).then(() => reply('control-ack', { kind: 'load-app-history' })).catch((error) => {
+          reply("error", { message: `Earlier history was not loaded: ${error.message}` });
+        });
+        return;
+      }
+
+      if (message.type === "edit-and-fork") {
+        if (session.turnState.active || session.appServer.activeTurnId) {
+          reply("error", { message: "当前任务仍在处理，完成后才能编辑历史消息并分支。", preservePrompt: true });
+          return;
+        }
+        const editedText = String(message.data || "").trim();
+        const beforeTurnId = String(message.turnId || "");
+        const sourceItem = session.appTranscript.find(
+          (item) => item.type === "user" && item.turnId === beforeTurnId && item.id === String(message.itemId || ""),
+        );
+        if (!sourceItem || !isCodexTurnId(beforeTurnId)) {
+          reply("error", { message: "找不到要编辑的历史消息，请刷新后重试。", preservePrompt: true });
+          return;
+        }
+        let attachments;
+        let references;
+        try {
+          attachments = normalizeEditForkAttachments(message.attachments, sourceItem);
+          const requestedReferences = requireReferences(message.references ?? sourceItem.references);
+          references = await resolveSessionReferences(session.sessionId, requestedReferences);
+          if (references.length !== requestedReferences.length) throw new Error('有 Session 引用已不可用，请移除后再发送。');
+        } catch (error) {
+          reply("error", { message: error.message, preservePrompt: true });
+          return;
+        }
+        if (!editedText && !attachments.length) {
+          reply("error", { message: "编辑后的消息不能为空。", preservePrompt: true });
+          return;
+        }
+
+        rememberNotificationTarget(session, message.notificationApp, message.notificationDeviceId);
+        renewSessionRetention(session);
+        rememberSubmittedAttachments(session, attachments);
+        void editAndForkAppServerSession(session, {
+          beforeTurnId,
+          editedText,
+          attachments,
+          references,
+          sourceTitle: session.title,
+        })
+          .then((result) => {
+            reply("control-ack", {
+              kind: "edit-and-fork",
+              receivedAt: Date.now(),
+              ...result,
               turnState: publicTurnState(session.turnState),
             });
           })
           .catch((error) => {
-            if (prompt.activatesThink) session.thinkSkillActivationPending = false;
-            reply("error", { message: `Prompt was not sent: ${error.message}`, preservePrompt: true });
+            reply("error", {
+              message: error.branchCreated
+                ? `编辑分支已在 Codex 中创建，但当前窗口切换或消息提交失败：${error.message}`
+                : `编辑分支没有创建：${error.message}`,
+              preservePrompt: true,
+              branchCreated: Boolean(error.branchCreated),
+              sessionId: error.branchCreated ? String(error.forkedThreadId || session.sessionId || "") : "",
+              title: error.branchCreated ? session.title : "",
+            });
           });
-      } else { reply("error", { message: "Message cannot be empty.", preservePrompt: true }); }
-      return;
-    }
-
-    if (message.type === "load-app-history") {
-      void loadEarlierAppServerHistory(session).then(() => reply('control-ack', { kind: 'load-app-history' })).catch((error) => {
-        reply("error", { message: `Earlier history was not loaded: ${error.message}` });
-      });
-      return;
-    }
-
-    if (message.type === "edit-and-fork") {
-      if (session.turnState.active || session.appServer.activeTurnId) {
-        reply("error", { message: "当前任务仍在处理，完成后才能编辑历史消息并分支。", preservePrompt: true });
-        return;
-      }
-      const editedText = String(message.data || "").trim();
-      const beforeTurnId = String(message.turnId || "");
-      const sourceItem = session.appTranscript.find(
-        (item) => item.type === "user" && item.turnId === beforeTurnId && item.id === String(message.itemId || ""),
-      );
-      if (!sourceItem || !isCodexTurnId(beforeTurnId)) {
-        reply("error", { message: "找不到要编辑的历史消息，请刷新后重试。", preservePrompt: true });
-        return;
-      }
-      let attachments;
-      let references;
-      try {
-        attachments = normalizeEditForkAttachments(message.attachments, sourceItem);
-        const requestedReferences = requireReferences(message.references ?? sourceItem.references);
-        references = await resolveSessionReferences(session.sessionId, requestedReferences);
-        if (references.length !== requestedReferences.length) throw new Error('有 Session 引用已不可用，请移除后再发送。');
-      } catch (error) {
-        reply("error", { message: error.message, preservePrompt: true });
-        return;
-      }
-      if (!editedText && !attachments.length) {
-        reply("error", { message: "编辑后的消息不能为空。", preservePrompt: true });
         return;
       }
 
-      rememberNotificationTarget(session, message.notificationApp, message.notificationDeviceId);
-      renewSessionRetention(session);
-      rememberSubmittedAttachments(session, attachments);
-      void editAndForkAppServerSession(session, {
-        beforeTurnId,
-        editedText,
-        attachments,
-        references,
-        sourceTitle: session.title,
-      })
-        .then((result) => {
-          reply("control-ack", {
-            kind: "edit-and-fork",
-            receivedAt: Date.now(),
-            ...result,
-            turnState: publicTurnState(session.turnState),
-          });
-        })
-        .catch((error) => {
-          reply("error", {
-            message: error.branchCreated
-              ? `编辑分支已在 Codex 中创建，但当前窗口切换或消息提交失败：${error.message}`
-              : `编辑分支没有创建：${error.message}`,
-            preservePrompt: true,
-            branchCreated: Boolean(error.branchCreated),
-            sessionId: error.branchCreated ? String(error.forkedThreadId || session.sessionId || "") : "",
-            title: error.branchCreated ? session.title : "",
-          });
+      if (message.type === "subagents-list") {
+        void sendAppServerSubagents(session, ws, reply).catch((error) => {
+          reply("error", { message: `子 Agent 列表暂时不可用：${error.message}` });
         });
-      return;
-    }
-
-    if (message.type === "subagents-list") {
-      void sendAppServerSubagents(session, ws).catch((error) => {
-        reply("error", { message: `子 Agent 列表暂时不可用：${error.message}` });
-      });
-      return;
-    }
-
-    if (message.type === "subagent-stop") {
-      void stopAppServerSubagent(session, String(message.threadId || ""))
-        .then((result) => {
-          reply("control-ack", { kind: "subagent-stop", receivedAt: Date.now(), ...result });
-          return sendAppServerSubagents(session, ws);
-        })
-        .catch((error) => reply("error", { message: `子 Agent 没有停止：${error.message}` }));
-      return;
-    }
-
-    if (message.type === "session-tree") {
-      void sendAppServerThreadTree(session, ws).catch((error) => {
-        reply("error", { message: `Session 关系图暂时不可用：${error.message}` });
-      });
-      return;
-    }
-
-    if (message.type === "side-chat-open") {
-      reply("side-chat-state", publicSideChatState(session.sideChat));
-      return;
-    }
-
-    if (message.type === "side-chat-submit") {
-      const text = String(message.data || "").trim();
-      if (!text) {
-        reply("error", { message: "临时侧问不能为空。" });
         return;
       }
-      renewSessionRetention(session);
-      void submitSideChatPrompt(session, text)
-        .then((result) => reply("control-ack", { kind: "side-chat-submit", receivedAt: Date.now(), ...result }))
-        .catch((error) => reply("side-chat-error", { message: `临时侧问失败：${error.message}` }));
-      return;
-    }
 
-    if (message.type === "side-chat-stop") {
-      void stopSideChat(session)
-        .then(() => reply("control-ack", { kind: "side-chat-stop", receivedAt: Date.now() }))
-        .catch((error) => reply("side-chat-error", { message: `临时侧问没有停止：${error.message}` }));
-      return;
-    }
-
-    if (message.type === "side-chat-close") {
-      closeSideChat(session);
-      reply("control-ack", { kind: "side-chat-close", receivedAt: Date.now() });
-      return;
-    }
-
-    if (message.type === "realtime-voices") {
-      void sendRealtimeVoices(session, ws).catch((error) => {
-        reply("realtime-error", { message: `实时语音列表不可用：${error.message}` });
-      });
-      return;
-    }
-
-    if (message.type === "realtime-start") {
-      renewSessionRetention(session);
-      void startRealtimeConversation(session, { voice: message.voice, transport: message.transport })
-        .then(() => reply("control-ack", { kind: "realtime-start", receivedAt: Date.now() }))
-        .catch((error) => { failRealtimeConversation(session, error); reply("realtime-error", { message: error.message }); });
-      return;
-    }
-
-    if (message.type === "realtime-audio") {
-      try {
-        if (session.realtime?.status !== "live") throw new Error("实时对话还没有进入连接状态。");
-        const audio = normalizeRealtimeAudioChunk(message.audio);
-        void session.appServer.appendRealtimeAudio(audio).catch((error) => failRealtimeConversation(session, error));
-      } catch (error) {
-        failRealtimeConversation(session, error);
-      }
-      return;
-    }
-
-    if (message.type === "realtime-stop") {
-      void stopRealtimeConversation(session)
-        .then(() => reply("control-ack", { kind: "realtime-stop", receivedAt: Date.now() }))
-        .catch((error) => { failRealtimeConversation(session, error); reply("realtime-error", { message: error.message }); });
-      return;
-    }
-
-    if (message.type === "resume-interrupted") {
-      if (session.interruptedResumePending) {
-        reply("error", { message: "The interrupted turn is already being continued." });
+      if (message.type === "subagent-stop") {
+        void stopAppServerSubagent(session, String(message.threadId || ""))
+          .then((result) => {
+            reply("control-ack", { kind: "subagent-stop", receivedAt: Date.now(), ...result });
+            return sendAppServerSubagents(session, ws);
+          })
+          .catch((error) => reply("error", { message: `子 Agent 没有停止：${error.message}` }));
         return;
       }
-      if (!session.turnState.interrupted || session.turnState.active) {
-        reply("error", { message: "This session no longer has an interrupted turn to continue." });
-        return;
-      }
-      const continuation = interruptedContinuationPrompt(session.turnState);
-      renewSessionRetention(session);
-      session.interruptedResumePending = true;
-      void submitAppServerPrompt(session, continuation, "auto")
-        .then((submission) => {
-          session.lastActivityAt = new Date().toISOString();
-          persistRestorableWebSession(session);
-          broadcast(session, "status", publicSession(session));
-          reply("control-ack", {
-            kind: "resume-interrupted",
-            receivedAt: Date.now(),
-            deliveryMode: submission.deliveryMode,
-            turnState: publicTurnState(session.turnState),
-          });
-        })
-        .catch((error) => {
-          reply("error", { message: `Interrupted turn was not continued: ${error.message}` });
-        })
-        .finally(() => {
-          session.interruptedResumePending = false;
+
+      if (message.type === "session-tree") {
+        void sendAppServerThreadTree(session, ws, reply).catch((error) => {
+          reply("error", { message: `Session 关系图暂时不可用：${error.message}` });
         });
-      return;
-    }
-
-    if (message.type === "interrupt-turn") {
-      if (session.turnInterruptPending || session.turnState.stopping) {
-        reply("control-ack", { kind: "interrupt-turn", receivedAt: Date.now() });
         return;
       }
-      const turnId = session.appServer.activeTurnId || session.turnState.turnId;
-      if (!session.turnState.active || !turnId) {
-        reply("error", { message: "There is no active task to interrupt." });
+
+      if (message.type === "side-chat-open") {
+        reply("side-chat-state", publicSideChatState(session.sideChat));
         return;
       }
-      session.turnInterruptPending = true;
-      session.turnState.stopping = true;
-      renewSessionRetention(session);
-      persistRestorableWebSession(session);
-      broadcast(session, "status", publicSession(session));
-      void session.appServer
-        .interruptTurn()
-        .then(() => {
-          reply("control-ack", { kind: "interrupt-turn", receivedAt: Date.now(), turnId });
-        })
-        .catch((error) => {
-          session.turnInterruptPending = false;
-          session.turnState.stopping = false;
-          persistRestorableWebSession(session);
-          broadcast(session, "status", publicSession(session));
-          reply("error", { message: `Current task was not interrupted: ${error.message}` });
-        });
-      return;
-    }
 
-    if (message.type === "skills-list") {
-      void sendAppServerSkills(session, ws, { forceReload: Boolean(message.forceReload) }).catch((error) => {
-        reply("error", { message: `Skills were not loaded: ${error.message}` });
-      });
-      return;
-    }
-
-    if (message.type === "set-access") {
-      renewSessionRetention(session);
-      session.access = normalizeAccessMode(message.access);
-      rememberAgentSessionAccess(session.sessionId, session.access);
-      session.lastActivityAt = new Date().toISOString();
-      persistRestorableWebSession(session);
-      broadcast(session, "status", publicSession(session));
-      reply("control-ack", {
-        kind: "access",
-        access: session.access,
-        receivedAt: Date.now(),
-      });
-      return;
-    }
-
-    if (message.type === "set-memory-projects") {
-      renewSessionRetention(session);
-      void updateSessionMemoryRouting(session, {
-        mode: message.mode,
-        projects: message.projects,
-      })
-        .then(() => {
-          session.lastActivityAt = new Date().toISOString();
-          persistRestorableWebSession(session);
-          broadcast(session, "status", publicSession(session));
-          reply("control-ack", {
-            kind: "memory-projects",
-            mode: session.memoryProjectMode,
-            projects: session.memoryProjects,
-            receivedAt: Date.now(),
-          });
-        })
-        .catch((error) => reply("error", { message: `记忆项目没有修改：${error.message}` }));
-      return;
-    }
-
-    if (message.type === "command" && typeof message.data === "string") {
-      renewSessionRetention(session);
-      void handleAppServerCommand(session, ws, message.data).then(() => reply('control-ack', { kind: 'command' })).catch((error) => {
-        reply("error", { message: `Command failed: ${error.message}` });
-      });
-      return;
-    }
-
-    if (message.type === "resize") {
-      const cols = clampInteger(message.cols, 20, 240, 100);
-      const rows = clampInteger(message.rows, 8, 80, 30);
-      session.cols = cols;
-      session.rows = rows;
-      broadcast(session, "status", publicSession(session));
-      return;
-    }
-
-    if (message.type === "agent-response") {
-      try {
+      if (message.type === "side-chat-submit") {
+        const text = String(message.data || "").trim();
+        if (!text) {
+          reply("error", { message: "临时侧问不能为空。" });
+          return;
+        }
         renewSessionRetention(session);
-        handleAppServerResponse(session, message);
-        reply("control-ack", { kind: "agent-response", receivedAt: Date.now() });
-      } catch (error) {
-        reply("error", { message: error.message });
+        void submitSideChatPrompt(session, text)
+          .then((result) => reply("control-ack", { kind: "side-chat-submit", receivedAt: Date.now(), ...result }))
+          .catch((error) => reply("side-chat-error", { message: `临时侧问失败：${error.message}` }));
+        return;
       }
-      return;
-    }
 
-    if (message.type === "kill") {
-      logAgentEvent("terminal-kill", {
-        webSessionId: session.id,
-        codexSessionId: session.sessionId,
-        reason: "client-request",
-      });
-      killSessionTerminal(session);
+      if (message.type === "side-chat-stop") {
+        void stopSideChat(session)
+          .then(() => reply("control-ack", { kind: "side-chat-stop", receivedAt: Date.now() }))
+          .catch((error) => reply("side-chat-error", { message: `临时侧问没有停止：${error.message}` }));
+        return;
+      }
+
+      if (message.type === "side-chat-close") {
+        closeSideChat(session);
+        reply("control-ack", { kind: "side-chat-close", receivedAt: Date.now() });
+        return;
+      }
+
+      if (message.type === "realtime-voices") {
+        void sendRealtimeVoices(session, ws, reply).catch((error) => {
+          reply("realtime-error", { message: `实时语音列表不可用：${error.message}` });
+        });
+        return;
+      }
+
+      if (message.type === "realtime-start") {
+        renewSessionRetention(session);
+        void startRealtimeConversation(session, { voice: message.voice, transport: message.transport })
+          .then(() => reply("control-ack", { kind: "realtime-start", receivedAt: Date.now() }))
+          .catch((error) => { failRealtimeConversation(session, error); reply("realtime-error", { message: error.message }); });
+        return;
+      }
+
+      if (message.type === "realtime-audio") {
+        try {
+          if (session.realtime?.status !== "live") throw new Error("实时对话还没有进入连接状态。");
+          const audio = normalizeRealtimeAudioChunk(message.audio);
+          void session.appServer.appendRealtimeAudio(audio).catch((error) => failRealtimeConversation(session, error));
+        } catch (error) {
+          failRealtimeConversation(session, error);
+        }
+        return;
+      }
+
+      if (message.type === "realtime-stop") {
+        void stopRealtimeConversation(session)
+          .then(() => reply("control-ack", { kind: "realtime-stop", receivedAt: Date.now() }))
+          .catch((error) => { failRealtimeConversation(session, error); reply("realtime-error", { message: error.message }); });
+        return;
+      }
+
+      if (message.type === "resume-interrupted") {
+        if (session.interruptedResumePending) {
+          reply("error", { message: "The interrupted turn is already being continued." });
+          return;
+        }
+        if (!session.turnState.interrupted || session.turnState.active) {
+          reply("error", { message: "This session no longer has an interrupted turn to continue." });
+          return;
+        }
+        const continuation = interruptedContinuationPrompt(session.turnState);
+        renewSessionRetention(session);
+        session.interruptedResumePending = true;
+        void submitAppServerPrompt(session, continuation, "auto")
+          .then((submission) => {
+            session.lastActivityAt = new Date().toISOString();
+            persistRestorableWebSession(session);
+            broadcast(session, "status", publicSession(session));
+            reply("control-ack", {
+              kind: "resume-interrupted",
+              receivedAt: Date.now(),
+              deliveryMode: submission.deliveryMode,
+              turnState: publicTurnState(session.turnState),
+            });
+          })
+          .catch((error) => {
+            reply("error", { message: `Interrupted turn was not continued: ${error.message}` });
+          })
+          .finally(() => {
+            session.interruptedResumePending = false;
+          });
+        return;
+      }
+
+      if (message.type === "interrupt-turn") {
+        if (session.turnInterruptPending || session.turnState.stopping) {
+          reply("control-ack", { kind: "interrupt-turn", receivedAt: Date.now() });
+          return;
+        }
+        const turnId = session.appServer.activeTurnId || session.turnState.turnId;
+        if (!session.turnState.active || !turnId) {
+          reply("error", { message: "There is no active task to interrupt." });
+          return;
+        }
+        session.turnInterruptPending = true;
+        session.turnState.stopping = true;
+        renewSessionRetention(session);
+        persistRestorableWebSession(session);
+        broadcast(session, "status", publicSession(session));
+        void session.appServer
+          .interruptTurn()
+          .then(() => {
+            reply("control-ack", { kind: "interrupt-turn", receivedAt: Date.now(), turnId });
+          })
+          .catch((error) => {
+            session.turnInterruptPending = false;
+            session.turnState.stopping = false;
+            persistRestorableWebSession(session);
+            broadcast(session, "status", publicSession(session));
+            reply("error", { message: `Current task was not interrupted: ${error.message}` });
+          });
+        return;
+      }
+
+      if (message.type === "skills-list") {
+        void sendAppServerSkills(session, ws, { forceReload: Boolean(message.forceReload) }).catch((error) => {
+          reply("error", { message: `Skills were not loaded: ${error.message}` });
+        });
+        return;
+      }
+
+      if (message.type === "set-access") {
+        renewSessionRetention(session);
+        session.access = normalizeAccessMode(message.access);
+        rememberAgentSessionAccess(session.sessionId, session.access);
+        session.lastActivityAt = new Date().toISOString();
+        persistRestorableWebSession(session);
+        broadcast(session, "status", publicSession(session));
+        reply("control-ack", {
+          kind: "access",
+          access: session.access,
+          receivedAt: Date.now(),
+        });
+        return;
+      }
+
+      if (message.type === "set-memory-projects") {
+        renewSessionRetention(session);
+        void updateSessionMemoryRouting(session, {
+          mode: message.mode,
+          projects: message.projects,
+        })
+          .then(() => {
+            session.lastActivityAt = new Date().toISOString();
+            persistRestorableWebSession(session);
+            broadcast(session, "status", publicSession(session));
+            reply("control-ack", {
+              kind: "memory-projects",
+              mode: session.memoryProjectMode,
+              projects: session.memoryProjects,
+              receivedAt: Date.now(),
+            });
+          })
+          .catch((error) => reply("error", { message: `记忆项目没有修改：${error.message}` }));
+        return;
+      }
+
+      if (message.type === "command" && typeof message.data === "string") {
+        renewSessionRetention(session);
+        void handleAppServerCommand(session, ws, message.data, reply).then(() => reply('control-ack', { kind: 'command' })).catch((error) => {
+          reply("error", { message: `Command failed: ${error.message}` });
+        });
+        return;
+      }
+
+      if (message.type === "resize") {
+        const cols = clampInteger(message.cols, 20, 240, 100);
+        const rows = clampInteger(message.rows, 8, 80, 30);
+        session.cols = cols;
+        session.rows = rows;
+        broadcast(session, "status", publicSession(session));
+        return;
+      }
+
+      if (message.type === "agent-response") {
+        try {
+          renewSessionRetention(session);
+          handleAppServerResponse(session, message);
+          reply("control-ack", { kind: "agent-response", receivedAt: Date.now() });
+        } catch (error) {
+          reply("error", { message: error.message });
+        }
+        return;
+      }
+
+      if (message.type === "kill") {
+        logAgentEvent("terminal-kill", {
+          webSessionId: session.id,
+          codexSessionId: session.sessionId,
+          reason: "client-request",
+        });
+        killSessionTerminal(session);
+      }
+    } catch (error) {
+      logAgentEvent('session-message-failed', { webSessionId: session.id, message: cleanClientLogValue(error.message, 300) });
+      send(ws, 'error', { idempotencyKey: operationKey, message: 'Session 操作未完成，请检查服务记录后重试。', receiptState: 'unknown' });
     }
   });
 
@@ -3876,6 +3929,11 @@ function renewAppServerRuntimeLease(session) {
 
 function scheduleAppServerRuntimeLease(session, { reset = false } = {}) {
   if (!session || session.exited || session.released) return;
+  if (session.appServer?.managesRuntimeLease) {
+    if (session.runtimeLeaseTimer) clearTimeout(session.runtimeLeaseTimer);
+    session.runtimeLeaseTimer = null;
+    return;
+  }
   if (session.runtimeLeaseTimer && !reset) return;
   if (session.runtimeLeaseTimer) clearTimeout(session.runtimeLeaseTimer);
   const lastMeaningfulAt =
@@ -4172,116 +4230,23 @@ function rememberSubmittedAttachments(session, attachments) {
   }
 }
 
-async function handleAppServerCommand(session, ws, value) {
-  const raw = String(value || "").trim();
-  const command = raw.split(/\s+/)[0].toLowerCase();
-  const argument = raw.slice(command.length).trim();
-
-  if (command === "/permissions") {
-    send(ws, "app-command-result", {
-      command,
-      kind: "permissions",
-      access: session.access,
-      activeTurn: Boolean(session.turnState?.active),
-    });
-    return;
-  }
-
-  if (command === "/skills") {
-    await sendAppServerSkills(session, ws, { openPicker: true });
-    return;
-  }
-
-  if (command === "/status") {
-    const payload = await appServerStatus(session);
-    send(ws, "app-command-result", { command, kind: "status", ...payload });
-    return;
-  }
-
-  if (command === "/usage") {
-    send(ws, "app-command-result", { command, kind: "usage", ...(await appServerUsage(session)) });
-    return;
-  }
-
-  if (command === "/model") {
-    send(ws, "app-command-result", { command, kind: "models", ...(await appServerModels(session, argument)) });
-    return;
-  }
-
-  if (command === "/fast") {
-    const config = (await session.appServer.readConfig({ cwd: session.cwd }))?.config || {};
-    const current = session.appServiceTier || config.service_tier || "default";
-    session.appServiceTier = current === "priority" ? "default" : "priority";
-    persistRestorableWebSession(session);
-    send(ws, "app-command-result", {
-      command,
-      kind: "notice",
-      title: "Fast mode",
-      content: session.appServiceTier === "priority" ? "Fast 已开启，将从下一轮任务生效。" : "Fast 已关闭，将从下一轮任务生效。",
-    });
-    return;
-  }
-
-  if (command === "/goal") {
-    send(ws, "app-command-result", { command, kind: "goal", ...(await appServerGoal(session, argument)) });
-    return;
-  }
-
-  if (command === "/rename") {
-    const title = cleanCustomTitle(argument);
-    if (!title) throw new Error("请使用 /rename 新名称。");
-    await session.appServer.setThreadName(title);
-    session.title = title;
-    await rememberSessionTitle(session.sessionId, title);
-    persistRestorableWebSession(session);
-    broadcast(session, "status", publicSession(session));
-    send(ws, "app-command-result", { command, kind: "notice", title: "Rename", content: `Session 已重命名为“${title}”。` });
-    return;
-  }
-
-  if (command === "/compact") {
-    if (session.turnState.active || session.appServer.activeTurnId) throw new Error("当前任务仍在处理，完成后再压缩上下文。");
-    await session.appServer.compactThread();
-    send(ws, "app-command-result", { command, kind: "notice", title: "Compact", content: "已开始压缩当前 Session 的上下文。" });
-    return;
-  }
-
-  if (command === "/diff") {
-    send(ws, "app-command-result", { command, kind: "text", title: "Working tree diff", ...(await appServerGitDiff(session.cwd)) });
-    return;
-  }
-
-  if (command === "/review") {
-    if (session.turnState.active || session.appServer.activeTurnId) throw new Error("当前任务仍在处理，完成后再启动 Review。");
-    const result = await session.appServer.startReview({ type: "uncommittedChanges" });
-    session.turnState.sequence += 1;
-    session.turnState.active = true;
-    const requirement = turnRequirement(session.turnState, "Review uncommitted changes", "original", "working");
-    session.turnState.requirements = [requirement];
-    session.turnState.turnId = result?.turn?.id || session.appServer.activeTurnId || "";
-    persistRestorableWebSession(session);
-    broadcast(session, "status", publicSession(session));
-    send(ws, "app-command-result", { command, kind: "notice", title: "Review", content: "已开始检查当前工作区的未提交修改。" });
-    return;
-  }
-
-  if (command === "/mcp") {
-    send(ws, "app-command-result", { command, kind: "inventory", title: "MCP servers", ...(await appServerMcpInventory(session)) });
-    return;
-  }
-
-  if (command === "/plugins") {
-    send(ws, "app-command-result", { command, kind: "inventory", title: "Plugins", ...(await appServerPluginInventory(session)) });
-    return;
-  }
-
-  if (command === "/hooks") {
-    send(ws, "app-command-result", { command, kind: "inventory", title: "Hooks", ...(await appServerHookInventory(session)) });
-    return;
-  }
-
-  throw new Error(`${command || "This command"} is not available in App Server mode.`);
-}
+const handleAppServerCommand = createAgentSessionCommandHandler({
+  send,
+  cleanCustomTitle,
+  getAppServerSkills,
+  renameSession: (session, title) => setAgentSessionTitle(session.sessionId, title),
+  persistRestorableWebSession,
+  broadcast,
+  publicSession,
+  appServerStatus,
+  appServerUsage,
+  appServerModels,
+  appServerGoal,
+  appServerGitDiff,
+  appServerMcpInventory,
+  appServerPluginInventory,
+  appServerHookInventory,
+});
 
 async function appServerStatus(session) {
   const requests = session.ready
@@ -5281,7 +5246,7 @@ async function editAndForkAppServerSession(session, { beforeTurnId, editedText, 
   }
 }
 
-async function sendAppServerSubagents(session, ws) {
+async function sendAppServerSubagents(session, ws, reply = (type, payload) => send(ws, type, payload)) {
   const response = await session.appServer.listThreads({
     ancestorThreadId: session.sessionId,
     limit: APP_THREAD_TREE_PAGE_LIMIT,
@@ -5321,7 +5286,7 @@ async function sendAppServerSubagents(session, ws) {
       };
     }),
   );
-  send(ws, "app-command-result", {
+  reply("app-command-result", {
     kind: "subagents",
     title: "Agent 管理",
     agents,
@@ -5463,7 +5428,7 @@ function firstValidThreadId(...values) {
   return values.map((value) => String(value || "")).find(isValidSessionId) || "";
 }
 
-async function sendAppServerThreadTree(session, ws) {
+async function sendAppServerThreadTree(session, ws, reply = (type, payload) => send(ws, type, payload)) {
   const catalog = await Promise.all([
     listAllAppServerThreads(session.appServer, false),
     listAllAppServerThreads(session.appServer, true),
@@ -5568,7 +5533,7 @@ async function sendAppServerThreadTree(session, ws) {
     })
     .filter(Boolean);
 
-  send(ws, "app-command-result", {
+  reply("app-command-result", {
     kind: "thread-tree",
     title: "Session 关系",
     currentThreadId: session.sessionId,
@@ -5842,8 +5807,8 @@ function realtimeBusy(realtime) {
   return ["starting", "live", "stopping"].includes(String(realtime?.status || ""));
 }
 
-async function sendRealtimeVoices(session, ws) {
-  send(ws, "realtime-voices", {
+async function sendRealtimeVoices(session, ws, reply = (type, payload) => send(ws, type, payload)) {
+  reply("realtime-voices", {
     voices: REALTIME_V3_VOICES,
     defaultVoice: DEFAULT_REALTIME_V3_VOICE,
     version: "v3",
@@ -6011,9 +5976,7 @@ function branchThreadTitle(sourceTitle, suffix) {
 async function rememberSessionTitle(threadId, title) {
   const cleaned = cleanCustomTitle(title);
   if (!threadId || !cleaned) return;
-  const titles = await readSessionTitles();
-  titles[threadId] = cleaned;
-  await writeSessionTitles(titles);
+  await sessionTitleService.set(threadId, cleaned);
 }
 
 function appTranscriptItemsFromTurns(session, turns, { historical = false } = {}) {
@@ -6483,6 +6446,9 @@ function handleAppServerNotification(session, message) {
     params.threadId || (method === "thread/started" ? params.thread?.id : "") || "",
   );
   if (notificationThreadId && session.sessionId && notificationThreadId !== session.sessionId) return;
+  // Old/duplicate completions must not mutate the current product projection or
+  // trigger previews, memory processing and notifications a second time.
+  if (method === 'turn/completed' && !acceptTrackedTurnCompletion(session.turnState, cleanTurnId(params.turn?.id))) return;
   // Resume/status/context notifications describe a thread; they are not new work.
   // Only actual turn/item activity can move a conversation in Recent.
   if (notificationThreadId && (method.startsWith('turn/') || method.startsWith('item/') || (method === 'error' && params.turnId))) session.lastActivityAt = new Date().toISOString();
@@ -6909,29 +6875,6 @@ function prepareSessionPrompt(session, text) {
   };
 }
 
-function completeTrackedTurn(session, turnId, { stopped = false } = {}) {
-  const state = session.turnState;
-  if (!state) return;
-  if (turnId && turnId === state.lastCompletedTurnId) return;
-  state.lastCompletedTurnId = turnId || state.lastCompletedTurnId;
-  state.turnId = turnId || state.turnId;
-  state.stopping = false;
-  if (stopped) state.lastStoppedTurnId = turnId || state.turnId;
-  state.interrupted = false;
-  state.interruptedAt = "";
-  for (const requirement of state.requirements) requirement.status = stopped ? "cancelled" : "completed";
-
-  const next = state.queuedTurns.shift();
-  if (next) {
-    state.sequence += 1;
-    next.status = "working";
-    state.requirements = [next];
-    state.active = true;
-    state.turnId = "";
-  } else {
-    state.active = false;
-  }
-}
 
 function steerPromptText(text, number) {
   return [
@@ -6953,73 +6896,10 @@ function lateFollowupPromptText(text) {
   ].join("\n\n");
 }
 
-function turnRequirement(state, text, kind, status) {
-  state.requirementSequence += 1;
-  return {
-    id: `requirement-${state.requirementSequence}`,
-    text: String(text).slice(0, 4_000),
-    kind,
-    status,
-  };
-}
 
-function trimTrackedRequirements(state) {
-  if (state.requirements.length > MAX_TURN_REQUIREMENTS) {
-    state.requirements.splice(1, state.requirements.length - MAX_TURN_REQUIREMENTS);
-  }
-  if (state.queuedTurns.length > MAX_TURN_REQUIREMENTS) {
-    state.queuedTurns.splice(0, state.queuedTurns.length - MAX_TURN_REQUIREMENTS);
-  }
-}
 
-function restoreTurnState(value) {
-  const input = value && typeof value === "object" ? value : {};
-  return {
-    active: Boolean(input.active),
-    stopping: false,
-    interrupted: Boolean(input.interrupted),
-    interruptedAt: cleanClientLogValue(input.interruptedAt, 100),
-    turnId: cleanClientLogValue(input.turnId, 100),
-    lastCompletedTurnId: cleanClientLogValue(input.lastCompletedTurnId, 100),
-    lastStoppedTurnId: cleanClientLogValue(input.lastStoppedTurnId, 100),
-    sequence: clampInteger(input.sequence, 0, 1_000_000, 0),
-    requirementSequence: clampInteger(input.requirementSequence, 0, 1_000_000, 0),
-    requirements: restoreRequirements(input.requirements),
-    queuedTurns: restoreRequirements(input.queuedTurns),
-  };
-}
 
-function restoreRequirements(items) {
-  if (!Array.isArray(items)) return [];
-  return items.slice(-MAX_TURN_REQUIREMENTS).map((item, index) => ({
-    id: cleanClientLogValue(item?.id, 100) || `restored-requirement-${index + 1}`,
-    text: String(item?.text || "").slice(0, 4_000),
-    kind: ["original", "followup", "queued"].includes(item?.kind) ? item.kind : "followup",
-    status: ["working", "queued", "completed", "failed", "interrupted", "cancelled"].includes(item?.status)
-      ? item.status
-      : "working",
-  }));
-}
 
-function interruptedTurnStateAfterProcessLoss(value, fallbackTime = "") {
-  const state = restoreTurnState(value);
-  const hasUnfinishedRequirement = state.requirements.some((item) =>
-    ["working", "queued", "interrupted"].includes(item.status),
-  );
-  const incompleteTurn =
-    state.active ||
-    state.interrupted ||
-    Boolean(state.turnId && state.turnId !== state.lastCompletedTurnId && hasUnfinishedRequirement);
-  state.active = false;
-  if (!incompleteTurn) return state;
-
-  state.interrupted = true;
-  state.interruptedAt = state.interruptedAt || cleanClientLogValue(fallbackTime, 100) || new Date().toISOString();
-  for (const requirement of state.requirements) {
-    if (requirement.status === "working") requirement.status = "interrupted";
-  }
-  return state;
-}
 
 function interruptedContinuationPrompt(state) {
   const requirements = (state.requirements || [])
@@ -7034,19 +6914,6 @@ function interruptedContinuationPrompt(state) {
   ].join("\n\n");
 }
 
-function publicTurnState(state) {
-  return {
-    active: Boolean(state?.active),
-    stopping: Boolean(state?.stopping),
-    interrupted: Boolean(state?.interrupted),
-    interruptedAt: state?.interruptedAt || "",
-    turnId: state?.turnId || "",
-    lastCompletedTurnId: state?.lastCompletedTurnId || "",
-    lastStoppedTurnId: state?.lastStoppedTurnId || "",
-    requirements: state?.requirements || [],
-    queuedTurns: state?.queuedTurns || [],
-  };
-}
 
 function operationPayloadFingerprint(message) {
   const canonical = (value) => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
@@ -7156,7 +7023,9 @@ function publicSession(session) {
     releaseReason: String(session.releaseReason || ""),
     runtimeExpiresAt:
       !session.released && !session.exited
-        ? new Date(
+        ? session.appServer?.managesRuntimeLease
+          ? session.appServer.runtimeLeaseExpiresAt
+          : new Date(
             Date.parse(validSessionTimestamp(session.lastMeaningfulActivityAt) || new Date().toISOString()) +
               SESSION_TTL_MS,
           ).toISOString()
@@ -7224,7 +7093,7 @@ function killSessionTerminal(session) {
 
 function releaseAppServerSessionRuntime(
   session,
-  { reason = APP_SERVER_RELEASE_REASON_DETACHED_TTL } = {},
+  { reason = APP_SERVER_RELEASE_REASON_DETACHED_TTL, nativeReleased = false } = {},
 ) {
   if (session.runtimeLeaseTimer) {
     clearTimeout(session.runtimeLeaseTimer);
@@ -7238,8 +7107,9 @@ function releaseAppServerSessionRuntime(
   session.exited = true;
   session.exitCode = 0;
   session.signal = null;
+  if (nativeReleased) session.appServer.close();
   persistWebSession(session);
-  releaseAgentAppServerClient(session.appServer);
+  if (!nativeReleased) releaseAgentAppServerClient(session.appServer);
   broadcast(session, "status", publicSession(session));
   emitCatalogControlEvent();
 }
@@ -7320,39 +7190,23 @@ function removePersistedWebSessionsForCodexSession(sessionId, hostId = PERSONAL_
 }
 
 function readPersistedWebSessions() {
-  try {
-    const parsed = JSON.parse(fsSync.readFileSync(AGENT_WEB_SESSIONS_FILE, "utf8"));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    return parsed;
-  } catch {
-    return {};
-  }
+  return webSessionState.read();
 }
 
 function writePersistedWebSessions(records) {
-  try {
-    fsSync.mkdirSync(path.dirname(AGENT_WEB_SESSIONS_FILE), { recursive: true });
-    const cleaned = Object.fromEntries(
-      Object.entries(records)
-        .filter(([id, record]) => isValidWebSessionId(id) && record && typeof record === "object")
-        .sort(([a], [b]) => a.localeCompare(b)),
-    );
-    const tempFile = `${AGENT_WEB_SESSIONS_FILE}.${process.pid}.tmp`;
-    fsSync.writeFileSync(tempFile, `${JSON.stringify(cleaned, null, 2)}\n`, { mode: 0o600 });
-    fsSync.renameSync(tempFile, AGENT_WEB_SESSIONS_FILE);
-  } catch (error) {
-    console.error(`Failed to write agent web sessions: ${error.message}`);
-  }
+  webSessionState.write(records);
+}
+
+function normalizePersistedWebSessions(records) {
+  return Object.fromEntries(
+    Object.entries(records)
+      .filter(([id, record]) => isValidWebSessionId(id) && record && typeof record === "object")
+      .sort(([left], [right]) => left.localeCompare(right)),
+  );
 }
 
 function readAgentSessionSettings() {
-  try {
-    const parsed = JSON.parse(fsSync.readFileSync(AGENT_SESSION_SETTINGS_FILE, "utf8"));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    return parsed;
-  } catch {
-    return {};
-  }
+  return agentSessionSettingsState.read();
 }
 
 function agentSessionSettingsKey(sessionId, hostId = PERSONAL_AGENT_HOST.id) {
@@ -7551,40 +7405,34 @@ function rememberAgentSessionMemoryRouting(session) {
 }
 
 function writeAgentSessionSettings(settings) {
-  try {
-    fsSync.mkdirSync(path.dirname(AGENT_SESSION_SETTINGS_FILE), { recursive: true });
-    const cleaned = Object.fromEntries(
-      Object.entries(settings)
-        .filter(([id, setting]) => isValidAgentSessionSettingsKey(id) && ["safe", "full"].includes(setting?.access))
-        .map(([id, setting]) => [
-          id,
-          {
-            ...setting,
-            access: normalizeAccessMode(setting.access),
-            memoryProjectMode: setting.memoryProjectMode === "manual" ? "manual" : "auto",
-            memoryProjects: normalizeMemoryProjectNames(setting.memoryProjects),
-            memoryProjectSource: normalizeMemoryProjectSource(setting.memoryProjectSource),
-            forkedFromId: isValidSessionId(setting.forkedFromId) ? String(setting.forkedFromId) : "",
-            forkedFromTitle: cleanCustomTitle(setting.forkedFromTitle),
-            parentThreadId: isValidSessionId(setting.parentThreadId) ? String(setting.parentThreadId) : "",
-            parentThreadTitle: cleanCustomTitle(setting.parentThreadTitle),
-            lastCompletedTurnId: cleanTurnId(setting.lastCompletedTurnId),
-            lastCompletedAt: validIsoTimestamp(setting.lastCompletedAt),
-            recentCompletedTurnIds: normalizeRecentCompletedTurnIds(
-              setting.recentCompletedTurnIds,
-            ),
-            lastViewedTurnId: cleanTurnId(setting.lastViewedTurnId),
-            lastViewedAt: validIsoTimestamp(setting.lastViewedAt),
-          },
-        ])
-        .sort(([a], [b]) => a.localeCompare(b)),
-    );
-    const tempFile = `${AGENT_SESSION_SETTINGS_FILE}.${process.pid}.tmp`;
-    fsSync.writeFileSync(tempFile, `${JSON.stringify(cleaned, null, 2)}\n`, { mode: 0o600 });
-    fsSync.renameSync(tempFile, AGENT_SESSION_SETTINGS_FILE);
-  } catch (error) {
-    console.error(`Failed to write agent session settings: ${error.message}`);
-  }
+  agentSessionSettingsState.write(settings);
+}
+
+function normalizeAgentSessionSettings(settings) {
+  return Object.fromEntries(
+    Object.entries(settings)
+      .filter(([id, setting]) => isValidAgentSessionSettingsKey(id) && ["safe", "full"].includes(setting?.access))
+      .map(([id, setting]) => [
+        id,
+        {
+          ...setting,
+          access: normalizeAccessMode(setting.access),
+          memoryProjectMode: setting.memoryProjectMode === "manual" ? "manual" : "auto",
+          memoryProjects: normalizeMemoryProjectNames(setting.memoryProjects),
+          memoryProjectSource: normalizeMemoryProjectSource(setting.memoryProjectSource),
+          forkedFromId: isValidSessionId(setting.forkedFromId) ? String(setting.forkedFromId) : "",
+          forkedFromTitle: cleanCustomTitle(setting.forkedFromTitle),
+          parentThreadId: isValidSessionId(setting.parentThreadId) ? String(setting.parentThreadId) : "",
+          parentThreadTitle: cleanCustomTitle(setting.parentThreadTitle),
+          lastCompletedTurnId: cleanTurnId(setting.lastCompletedTurnId),
+          lastCompletedAt: validIsoTimestamp(setting.lastCompletedAt),
+          recentCompletedTurnIds: normalizeRecentCompletedTurnIds(setting.recentCompletedTurnIds),
+          lastViewedTurnId: cleanTurnId(setting.lastViewedTurnId),
+          lastViewedAt: validIsoTimestamp(setting.lastViewedAt),
+        },
+      ])
+      .sort(([left], [right]) => left.localeCompare(right)),
+  );
 }
 
 function initialSessionMemoryRouting(sessionId, restored = {}) {
@@ -8315,55 +8163,15 @@ async function readCodexSessionMeta(file, customTitles = {}, archivedSessions = 
 }
 
 async function readSessionTitles() {
-  try {
-    const raw = await fs.readFile(CODEX_SESSION_TITLES_FILE, "utf8");
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-
-    return Object.fromEntries(
-      Object.entries(parsed)
-        .map(([id, title]) => [String(id), cleanCustomTitle(title)])
-        .filter(([id, title]) => isValidSessionId(id) && title),
-    );
-  } catch (error) {
-    if (error.code === "ENOENT") return {};
-    console.error(`Failed to read session titles: ${error.message}`);
-    return {};
-  }
-}
-
-async function writeSessionTitles(titles) {
-  await fs.mkdir(path.dirname(CODEX_SESSION_TITLES_FILE), { recursive: true });
-  const cleaned = Object.fromEntries(
-    Object.entries(titles)
-      .map(([id, title]) => [String(id), cleanCustomTitle(title)])
-      .filter(([id, title]) => isValidSessionId(id) && title)
-      .sort(([a], [b]) => a.localeCompare(b)),
-  );
-  const tempFile = `${CODEX_SESSION_TITLES_FILE}.${process.pid}.tmp`;
-  await fs.writeFile(tempFile, `${JSON.stringify(cleaned, null, 2)}\n`, { mode: 0o600 });
-  await fs.rename(tempFile, CODEX_SESSION_TITLES_FILE);
+  return sessionTitleService.read();
 }
 
 async function readSessionArchive() {
-  try {
-    const raw = await fs.readFile(CODEX_SESSION_ARCHIVE_FILE, "utf8");
-    return normalizeSessionArchive(JSON.parse(raw));
-  } catch (error) {
-    if (error.code === "ENOENT") return {};
-    console.error(`Failed to read session archive: ${error.message}`);
-    return {};
-  }
+  return sessionArchiveState.read();
 }
 
 function readSessionArchiveSync() {
-  try {
-    return normalizeSessionArchive(JSON.parse(fsSync.readFileSync(CODEX_SESSION_ARCHIVE_FILE, "utf8")));
-  } catch (error) {
-    if (error.code === "ENOENT") return {};
-    console.error(`Failed to read session archive: ${error.message}`);
-    return {};
-  }
+  return sessionArchiveState.read();
 }
 
 function normalizeSessionArchive(value) {
@@ -8385,24 +8193,7 @@ function updateLocalSessionArchive(id, archived) {
   const archive = readSessionArchiveSync();
   if (archived) archive[id] = { archivedAt: new Date().toISOString() };
   else delete archive[id];
-  fsSync.mkdirSync(path.dirname(CODEX_SESSION_ARCHIVE_FILE), { recursive: true });
-  const cleaned = Object.fromEntries(
-    Object.entries(archive)
-      .map(([id, record]) => [
-        String(id),
-        { archivedAt: String(record?.archivedAt || new Date().toISOString()) },
-      ])
-      .filter(([id]) => isValidSessionId(id))
-      .sort(([a], [b]) => a.localeCompare(b)),
-  );
-  const tempFile = `${CODEX_SESSION_ARCHIVE_FILE}.${process.pid}.${cryptoRandomId()}.tmp`;
-  try {
-    fsSync.writeFileSync(tempFile, `${JSON.stringify(cleaned, null, 2)}\n`, { mode: 0o600 });
-    fsSync.renameSync(tempFile, CODEX_SESSION_ARCHIVE_FILE);
-  } catch (error) {
-    try { fsSync.unlinkSync(tempFile); } catch { /* Preserve the original write error. */ }
-    throw error;
-  }
+  sessionArchiveState.write(archive);
 }
 
 async function setSessionArchived(id, archived) {

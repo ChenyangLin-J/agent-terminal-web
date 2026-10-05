@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -64,6 +64,25 @@ test("Session share tokens are hashed, replaceable, revocable, and expire after 
   now += 24 * 60 * 60 * 1000 + 1;
   assert.equal(await store.resolve(expiring.token), null);
   assert.deepEqual(JSON.parse(await readFile(file, "utf8")).shares, []);
+});
+
+test("a damaged Session share store blocks mutation without replacing the source", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "agent-session-shares-corrupt-"));
+  const file = path.join(root, "session-shares.json");
+  const damaged = "{ not valid JSON\n";
+  await writeFile(file, damaged);
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const store = new SessionShareStore(file);
+  await assert.rejects(
+    store.create({
+      sessionId: "019f9db4-cdfd-7c10-b477-4859c23313be",
+      title: "不得覆盖",
+      messages: [{ role: "user", text: "hello" }],
+    }),
+    /Session shares parse failed/,
+  );
+  assert.equal(await readFile(file, "utf8"), damaged);
 });
 
 test("the public snapshot renders safe text without local links, scripts, or remote images", () => {

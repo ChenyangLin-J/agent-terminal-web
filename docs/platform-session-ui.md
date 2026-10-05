@@ -21,6 +21,9 @@ Agent Web consumes Platform's `SessionApplication`, Session Host controller, Com
 | `lib/memory-system-library.js` | Product memory dependency location |
 | `lib/personal-agent-gateway.js` | Product personal openings and bounded public conversation activity |
 
+Backend Runtime and product service ownership is documented in
+[`backend-architecture.md`](backend-architecture.md).
+
 Platform owns common interaction and presentation, selection protection, snapshot/event recovery, retry identity, and UI state. Agent Web owns its server/API/WS protocol, Runtime choice, authentication, native thread identity, persistence, memory, integrations, local-file access, notification service and deployment. Product endpoints and recording/account services must not be embedded in Platform components.
 
 Historical process details are read lazily through the authenticated product projection, including previews with no live Runtime. Reading a completed record never resumes a Codex thread. Editing a user message forwards its existing authorized attachments to the product's Edit/Fork validation.
@@ -47,7 +50,7 @@ Existing `server.js` remains the integration point for Runtime lifecycle and pro
 
 ## Build and candidate verification
 
-Agent Web pins Platform v0.34.0, which exports `./session-host` and the shared Session application. A normal install, build and test use the published package:
+Agent Web pins Platform v0.35.0, which exports `./session-host`, the shared Session application and the authoritative Runtime description/lease contract. A normal install, build and test use the published package:
 
 ```bash
 npm ci --include=dev

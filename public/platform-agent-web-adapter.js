@@ -10,6 +10,11 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
   const connections = new Map();
   const targets = storedEntries('agent-web.session-aliases');
   const catalogs = new Map();
+  const metadataReads = new Map();
+  const launches = new Map();
+  const pendingProfiles = storedEntries('agent-web.pending-profiles');
+  const profileApplications = new Map();
+  const historyProfiles = new Map();
   const drafts = storedEntries('agent-web.session-drafts');
   const draftSubscriptions = new Map();
   const historySubscriptions = new Map();
@@ -36,7 +41,7 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
       const aliases = new Map([...targets].map(([alias, target]) => [target, alias]));
       const values = (result.sessions || []).map((value) => normalizeSession({ ...value, id: aliases.get(value.id) || value.id }));
       for (const value of values) summaries.set(value.id, value);
-      for (const draft of drafts.values()) if (!targets.has(draft.id) && (!query || draft.title.includes(query))) values.unshift(draft);
+      for (const draft of drafts.values()) if (!targets.has(draft.id) && (archived || !draft.archived) && (!query || draft.title.toLowerCase().includes(query.toLowerCase()))) values.unshift(draft);
       return { ...result, sessions: values };
     },
 
@@ -49,7 +54,7 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
     openSessionReference: (reference) => [...summaries.values()].find(item => item.reference?.threadId === reference.threadId)?.id || `history:${reference.threadId}`,
 
     async readSession(id, { signal } = {}) {
-      if (drafts.has(id) && !targets.has(id)) return { ...drafts.get(id), sessionId: id, status: 'idle', messages: [], technicalItems: [], executionProfile: drafts.get(id).executionProfile || { accessMode: 'full' }, accessModes: [{ id: 'full', label: '完全访问' }, { id: 'restricted', label: '按需确认' }] };
+      if (drafts.has(id) && !targets.has(id)) { enrichDraft(id); return draftSnapshot(id); }
       let target = targets.get(id) || id;
       if (id.startsWith('history:') && !targets.has(id)) {
         const params = new URLSearchParams(sourceSession ? { sourceSession } : {});
@@ -57,8 +62,10 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
         try { value = await json(`/api/session-preview/${encodeURIComponent(id.slice(8))}?${params}`, { signal }); }
         catch (error) { if (!error.knownResult) throw error; value = { conversation: { turns: [] } }; }
         const snapshot = previewSnapshot(id, value, { sourceSession, title });
-        previews.set(id, snapshot);
-        return withProcesses(snapshot);
+        const metadata = await readMetadata(value.cwd || '.').catch(() => null);
+        const enriched = withMetadata({ ...snapshot, executionProfile: historyProfiles.get(id) || snapshot.executionProfile }, metadata);
+        previews.set(id, enriched);
+        return withProcesses(enriched);
       }
       let metadata = released.get(id) || summaries.get(id);
       let result;
@@ -77,34 +84,31 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
           if (!error.knownResult) throw error;
           return { conversation: { turns: [] } };
         });
-        const snapshot = { ...previewSnapshot(`history:${metadata.sessionId}`, value, { title: metadata.title }), sessionId: id, threadId: metadata.sessionId, released: true, status: 'idle', session: metadata };
-        previews.set(id, snapshot);
-        return withProcesses(snapshot);
+        const snapshot = { ...previewSnapshot(`history:${metadata.sessionId}`, value, { title: metadata.title }), sessionId: id, threadId: metadata.sessionId, released: true, status: 'idle', session: metadata, tokenUsage: value.tokenUsage ?? metadata.tokenUsage ?? null };
+        const enriched = withMetadata(snapshot, await readMetadata(metadata.cwd || value.cwd || '.').catch(() => null));
+        previews.set(id, enriched);
+        return withProcesses(enriched);
       }
       const snapshot = normalizeSnapshot(result);
-      if (result.session?.ready && !catalogs.has(target)) {
-        try { catalogs.set(target, await json(`/api/platform/sessions/${encodeURIComponent(target)}/actions/models`, { signal })); } catch { /* A catalog failure must not hide the conversation. */ }
-      }
-      const catalog = catalogs.get(target);
-      return withProcesses({ ...snapshot, sessionId: id, webSessionId: target,
-        models: (catalog?.models || []).map((model) => ({ ...model, label: model.name, serviceTiers: [{ id: 'priority', label: 'Fast' }] })),
-        accessModes: [{ id: 'full', label: '完全访问' }, { id: 'restricted', label: '按需确认' }],
-      });
+      const catalog = await readMetadata(result.session?.cwd || '.').catch(() => catalogs.get(result.session?.cwd || '.'));
+      return withProcesses({ ...withMetadata(snapshot, catalog), sessionId: id, webSessionId: target });
     },
 
     async createSession(payload = {}, { idempotencyKey } = {}) {
       if (!payload.sessionId && payload.startRuntime !== true) {
         const id = `draft:${idempotencyKey || crypto.randomUUID()}`;
+        if (drafts.has(id)) { enrichDraft(id); return draftSnapshot(id); }
         const draft = { ...payload, id, sessionId: id, isDraft: true, contextLabel: '', title: payload.title || '新对话', status: 'idle', updatedAt: new Date().toISOString() };
         drafts.set(id, draft);
         persistEntries('agent-web.session-drafts', drafts);
-        return draft;
+        enrichDraft(id);
+        return draftSnapshot(id);
       }
       const result = await json("/api/platform/sessions", {
         method: "POST",
         body: JSON.stringify({ ...payload, idempotencyKey }),
       });
-      if (result.pending) return result;
+      if (result.pending) throw new Error('会话仍在恢复，请稍后重试。');
       let current = result;
       for (let attempt = 0; current.session?.ready === false && attempt < 150; attempt++) {
         await new Promise((resolve) => setTimeout(resolve, 200));
@@ -126,28 +130,57 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
       }
       if (released.has(id) && ['send', 'append', 'queue', 'restart'].includes(action)) {
         const metadata = released.get(id);
-        await retarget(id, { sessionId: metadata.sessionId, cwd: metadata.cwd, title: metadata.title, access: metadata.access }, `recover:${idempotencyKey}`);
+        await retarget(id, { sessionId: metadata.sessionId, cwd: metadata.cwd, title: metadata.title, access: metadata.access, executionProfile: previews.get(id)?.executionProfile }, `recover:${idempotencyKey}`);
       }
       if (id.startsWith('history:') && !targets.has(id)) {
         if (sourceSession) throw new Error('子 Agent 预览为只读。');
         if (['favorite', 'archive'].includes(action)) return json(`/api/codex-sessions/${encodeURIComponent(id.slice(8))}/${action}`, { method: 'PUT', body: JSON.stringify(payload) });
+        if (action === 'executionProfile') { const profile = { ...previews.get(id)?.executionProfile, ...(payload.executionProfile || payload) }; historyProfiles.set(id, profile); return { executionProfile: profile }; }
+        if (action === 'readContext') return { tokenUsage: (await adapter.readSession(id)).tokenUsage };
+        if (action === 'models') return readMetadata(previews.get(id)?.cwd || '.');
         if (!['send', 'append', 'queue'].includes(action)) throw new Error('发送消息后才能使用会话操作。');
-        const created = await adapter.createSession({ sessionId: id.slice(8), access: payload.access || 'full' }, { idempotencyKey: `resume:${id.slice(8)}` });
+        const profile = historyProfiles.get(id) || previews.get(id)?.executionProfile;
+        if (profile) rememberPendingProfile(id, profile);
+        const created = await adapter.createSession({ sessionId: id.slice(8), access: serverAccess(profile?.accessMode || payload.access || 'full') }, { idempotencyKey: `resume:${id.slice(8)}` });
         bindTarget(id, created.sessionId);
         historySubscriptions.get(id)?.(); historySubscriptions.delete(id);
         const waiting = draftSubscriptions.get(id);
         if (waiting) waiting.cleanup = adapter.subscribeSession(id, waiting.options);
       }
       if (drafts.has(id) && !targets.has(id)) {
-        if (action === 'executionProfile') { drafts.set(id, { ...drafts.get(id), executionProfile: payload }); persistEntries('agent-web.session-drafts', drafts); return payload; }
+        if (['executionProfile', 'favorite', 'archive', 'rename'].includes(action)) {
+          const current = drafts.get(id);
+          const patch = action === 'executionProfile' ? { executionProfile: { ...draftSnapshot(id).executionProfile, ...(payload.executionProfile || payload) } }
+            : action === 'favorite' ? { favorited: Boolean(payload.favorited) } : action === 'archive' ? { archived: Boolean(payload.archived) } : { title: payload.title || current.title };
+          drafts.set(id, { ...current, ...patch }); persistEntries('agent-web.session-drafts', drafts);
+          draftSubscriptions.get(id)?.options.onEvent?.({ type: 'preview-snapshot', sessionId: id, payload: draftSnapshot(id) });
+          return patch;
+        }
+        if (action === 'readContext' || action === 'models') { enrichDraft(id); return action === 'models' ? catalogs.get(drafts.get(id).cwd || '.') || {} : { tokenUsage: draftSnapshot(id).tokenUsage, isDraft: true }; }
         if (!['send', 'append', 'queue'].includes(action)) throw new Error('先发送一条消息，再使用会话工具。');
-        const draft = drafts.get(id);
-        const created = await adapter.createSession({ ...draft, sessionId: '', access: draft.executionProfile?.accessMode || draft.access || 'full', startRuntime: true }, { idempotencyKey: `launch:${id.slice(6)}` });
-        bindTarget(id, created.sessionId);
-        const waiting = draftSubscriptions.get(id);
-        if (waiting) waiting.cleanup = adapter.subscribeSession(id, waiting.options);
+        if (!launches.has(id)) {
+          const launch = (async () => {
+            const draft = drafts.get(id);
+            rememberPendingProfile(id, draftSnapshot(id).executionProfile);
+            const created = await adapter.createSession({ ...draft, sessionId: '', access: serverAccess(pendingProfiles.get(id).accessMode), startRuntime: true }, { idempotencyKey: `launch:${id.slice(6)}` });
+            bindTarget(id, created.sessionId);
+            const waiting = draftSubscriptions.get(id);
+            if (waiting) waiting.cleanup = adapter.subscribeSession(id, waiting.options);
+          })().finally(() => launches.delete(id));
+          launches.set(id, launch);
+        }
+        await launches.get(id);
       }
       const target = targets.get(id) || id;
+      if (pendingProfiles.has(id) && ['send', 'append', 'queue'].includes(action)) {
+        if (!profileApplications.has(id)) {
+          const applying = json(`/api/platform/sessions/${encodeURIComponent(target)}/actions/executionProfile`, { method: 'POST', body: JSON.stringify({ ...pendingProfiles.get(id), idempotencyKey: `profile:${target}` }) })
+            .then(result => { if (result.pending) throw new Error('执行设置仍在应用，请稍后重试。'); forgetPendingProfile(id); })
+            .finally(() => profileApplications.delete(id));
+          profileApplications.set(id, applying);
+        }
+        await profileApplications.get(id);
+      }
       if (action === 'rename') {
         const snapshot = await adapter.readSession(id);
         return json(`/api/codex-sessions/${encodeURIComponent(snapshot.threadId)}/title`, { method: 'PUT', body: JSON.stringify(payload) });
@@ -163,7 +196,9 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
         return json(`/api/codex-sessions/${encodeURIComponent(snapshot.threadId)}/${action}`, { method: 'PUT', body: JSON.stringify(payload) });
       }
       if (['deleteQueuedTurn', 'executionProfile', 'compact', 'readContext', 'models'].includes(action)) {
-        return json(`/api/platform/sessions/${encodeURIComponent(target)}/actions/${action}`, { method: action === 'readContext' || action === 'models' ? 'GET' : 'POST', ...(action === 'readContext' || action === 'models' ? {} : { body: JSON.stringify({ ...payload, idempotencyKey }) }) });
+        const result = await json(`/api/platform/sessions/${encodeURIComponent(target)}/actions/${action}`, { method: action === 'readContext' || action === 'models' ? 'GET' : 'POST', ...(action === 'readContext' || action === 'models' ? {} : { body: JSON.stringify({ ...payload, idempotencyKey }) }) });
+        if (action === 'executionProfile') forgetPendingProfile(id);
+        return result;
       }
       if (action === 'raw') {
         const connection = await ensureConnection(target);
@@ -199,6 +234,9 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
         if (poll) historySubscriptions.set(id, () => clearInterval(poll));
         const waiting = { options: { onEvent, onConnection, signal, afterRevision }, cleanup: null };
         draftSubscriptions.set(id, waiting);
+        if (drafts.has(id)) queueMicrotask(() => {
+          if (draftSubscriptions.get(id) === waiting && !signal?.aborted) onEvent?.({ type: 'preview-snapshot', sessionId: id, payload: draftSnapshot(id) });
+        });
         const cleanup = () => { if (poll) clearInterval(poll); waiting.cleanup?.(); draftSubscriptions.delete(id); historySubscriptions.delete(id); };
         signal?.addEventListener('abort', cleanup, { once: true });
         return cleanup;
@@ -230,8 +268,8 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
     applyEvent(snapshot, event) {
       if (event.type === 'status' && event.payload?.released) released.set(snapshot.sessionId, event.payload);
       const next = applyAgentWebEvent(snapshot, event);
-      const catalog = catalogs.get(targets.get(snapshot.sessionId) || snapshot.webSessionId || snapshot.sessionId);
-      return catalog ? { ...next, models: (catalog.models || []).map(model => ({ ...model, label: model.name, serviceTiers: [{ id: 'priority', label: 'Fast' }] })) } : next;
+      const catalog = catalogs.get(next.session?.cwd || next.cwd || '.');
+      return withMetadata(next, catalog);
     },
 
     async loadHistory(id, options = {}) {
@@ -275,11 +313,35 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
   };
   return adapter;
 
+  function rememberPendingProfile(id, profile) { pendingProfiles.set(id, profile); persistEntries('agent-web.pending-profiles', pendingProfiles); }
+  function forgetPendingProfile(id) { pendingProfiles.delete(id); persistEntries('agent-web.pending-profiles', pendingProfiles); }
+
+  function readMetadata(cwd) {
+    if (catalogs.has(cwd)) return Promise.resolve(catalogs.get(cwd));
+    if (metadataReads.has(cwd)) return metadataReads.get(cwd);
+    const promise = json(`/api/platform/session-metadata?${new URLSearchParams({ cwd })}`).then(value => { catalogs.set(cwd, value); return value; }).finally(() => metadataReads.delete(cwd));
+    metadataReads.set(cwd, promise); return promise;
+  }
+  function enrichDraft(id) {
+    const cwd = drafts.get(id).cwd || '.';
+    if (catalogs.has(cwd)) return;
+    void readMetadata(cwd).then(() => {
+      if (!targets.has(id) && drafts.has(id)) draftSubscriptions.get(id)?.options.onEvent?.({ type: 'preview-snapshot', sessionId: id, payload: draftSnapshot(id) });
+    }).catch(() => {});
+  }
+  function draftSnapshot(id) {
+    const draft = drafts.get(id);
+    const metadata = catalogs.get(draft.cwd || '.');
+    return { ...withMetadata({ ...draft, sessionId: id, status: 'idle', messages: [], technicalItems: [], executionProfile: {
+      model: '', reasoningEffort: '', accessMode: draft.access === 'safe' || draft.access === 'restricted' ? 'restricted' : 'full', ...draft.executionProfile,
+    } }, metadata), tokenUsage: metadata?.modelContextWindow > 0 ? { contextUsedTokens: 0, modelContextWindow: metadata.modelContextWindow } : null };
+  }
   async function retarget(id, payload, key) {
     const waiting = draftSubscriptions.get(id);
     waiting?.cleanup?.();
     const created = await adapter.createSession(payload, { idempotencyKey: key });
     bindTarget(id, created.sessionId); released.delete(id);
+    if (payload.executionProfile) rememberPendingProfile(id, payload.executionProfile);
     if (waiting) adapter.subscribeSession(id, waiting.options);
   }
   function bindTarget(id, target) { targets.set(id, target); persistEntries('agent-web.session-aliases', targets); }
@@ -454,6 +516,17 @@ export function previewSnapshot(id, value, { sourceSession = '', title = '' } = 
     ...(turn.user ? [{ id: `${turn.id}-user`, type: 'user', text: turn.user, turnId: turn.id, turnStatus: 'completed', historical: true }] : []),
     ...(turn.assistant || []).map((item, index) => ({ ...item, id: item.id || `${turn.id}-assistant-${index}`, type: 'assistant', turnId: turn.id, phase: item.phase || 'final_answer', historical: true })),
   ]);
-  return { ...normalizeSnapshot({ session: { id, sessionId: id.slice(8), title: title || value.preview?.title || '历史对话', ready: true, turnState: { active: Boolean(value.active) } }, items }),
-    readOnly: Boolean(sourceSession), composerDisabled: Boolean(sourceSession), preview: true, turnsCursor: value.conversation?.nextCursor || null, hasEarlierTurns: Boolean(value.conversation?.hasEarlier || value.transcript?.hasEarlierTurns) };
+  return { ...normalizeSnapshot({ session: { id, sessionId: id.slice(8), cwd: value.cwd, model: value.model, reasoningEffort: value.reasoningEffort, tokenUsage: value.tokenUsage, access: value.access || 'full', title: title || value.preview?.title || '历史对话', ready: true, turnState: { active: Boolean(value.active) } }, items }),
+    cwd: value.cwd, readOnly: Boolean(sourceSession), composerDisabled: Boolean(sourceSession), preview: true, turnsCursor: value.conversation?.nextCursor || null, hasEarlierTurns: Boolean(value.conversation?.hasEarlier || value.transcript?.hasEarlierTurns) };
+}
+
+function serverAccess(value) { return value === 'full' ? 'full' : 'safe'; }
+function withMetadata(snapshot, catalog) {
+  const profile = snapshot.executionProfile || {};
+  return { ...snapshot,
+    executionProfile: { ...profile, model: profile.model || catalog?.currentModel || '', reasoningEffort: profile.reasoningEffort || catalog?.currentReasoningEffort || '',
+      serviceTier: profile.serviceTier === undefined ? catalog?.serviceTier || null : profile.serviceTier },
+    models: (catalog?.models || snapshot.models || []).map(model => ({ ...model, label: model.name || model.label, serviceTiers: [{ id: 'priority', label: 'Fast' }] })),
+    accessModes: [{ id: 'full', label: '完全访问' }, { id: 'restricted', label: '按需确认' }],
+  };
 }

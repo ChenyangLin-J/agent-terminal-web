@@ -17,6 +17,7 @@ test("platform kernel canary serves new sessions and force-legacy rolls them bac
   const workspaceRoot = path.join(temporaryRoot, "workspace");
   const codexHome = path.join(temporaryRoot, "codex");
   const fakeCodex = path.join(temporaryRoot, "fake-codex.js");
+  const requestLog = path.join(temporaryRoot, "requests.jsonl");
   await mkdir(workspaceRoot, { recursive: true });
   await mkdir(codexHome, { recursive: true });
   await writeFile(
@@ -27,8 +28,13 @@ const input = readline.createInterface({ input: process.stdin });
 const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
 input.on("line", (line) => {
   const message = JSON.parse(line);
+  require("node:fs").appendFileSync(${JSON.stringify(requestLog)}, JSON.stringify(message) + "\\n");
   if (message.method === "initialize") {
     send({ id: message.id, result: { userAgent: "fake" } });
+  } else if (message.method === "model/list") {
+    send({ id: message.id, result: { data: [{ id: "gpt-6.1-sol", model: "gpt-6.1-sol", displayName: "6.1", defaultReasoningEffort: "xhigh", supportedReasoningEfforts: [{ reasoningEffort: "xhigh" }] }, { id: "codex", model: "codex", defaultReasoningEffort: "medium", supportedReasoningEfforts: [{ reasoningEffort: "medium" }] }] } });
+  } else if (message.method === "config/read") {
+    send({ id: message.id, result: { config: { model: "gpt-6.1-sol", model_reasoning_effort: "xhigh", model_context_window: 200000 } } });
   } else if (message.method === "thread/start") {
     send({ id: message.id, result: { thread: { id: "${threadId}", turns: [] } } });
   } else if (message.method === "thread/resume") {
@@ -44,6 +50,7 @@ input.on("line", (line) => {
     send({ id: message.id, result: { turn } });
     setTimeout(() => {
       send({ method: "turn/started", params: { threadId: "${threadId}", turn } });
+      send({ method: "thread/tokenUsage/updated", params: { threadId: "${threadId}", tokenUsage: { total: { totalTokens: 3000 }, last: { totalTokens: 2000 }, modelContextWindow: 200000 } } });
       send({ method: "turn/completed", params: { threadId: "${threadId}", turn } });
     }, 10);
   } else if (message.id !== undefined) {
@@ -92,6 +99,11 @@ input.on("line", (line) => {
     if (canary.child.exitCode === null) canary.child.kill("SIGTERM");
   });
 
+  const metadata = await (await fetch(`http://127.0.0.1:${canary.agentPort}/api/platform/session-metadata?cwd=.`)).json();
+  assert.equal(metadata.currentModel, 'gpt-6.1-sol'); assert.equal(metadata.currentReasoningEffort, 'xhigh');
+  assert.equal((await (await fetch(`http://127.0.0.1:${canary.agentPort}/api/sessions`)).json()).sessions.length, 0);
+  assert.equal((await readFile(requestLog, 'utf8')).includes('thread/start'), false);
+
   const client = await connect(
     `ws://127.0.0.1:${canary.agentPort}/terminal?cwd=.&transport=app-server&access=safe&clientId=platform-canary`,
   );
@@ -103,6 +115,11 @@ input.on("line", (line) => {
   assert.equal(ready.payload.runtimeKernel, "platform");
   assert.equal(ready.payload.sessionId, threadId);
   assert.match(canary.getOutput(), /"event":"session-start".*"runtimeKernel":"platform"/);
+
+  const profileResponse = await fetch(`http://127.0.0.1:${canary.agentPort}/api/platform/sessions/${ready.payload.id}/actions/executionProfile`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'codex', reasoningEffort: 'medium', accessMode: 'full', serviceTier: 'priority', idempotencyKey: 'canary-profile' }) });
+  assert.equal(profileResponse.status, 200);
+  const projected = await (await fetch(`http://127.0.0.1:${canary.agentPort}/api/platform/sessions/${ready.payload.id}`)).json();
+  assert.equal(projected.session.model, 'codex'); assert.equal(projected.session.reasoningEffort, 'medium');
 
   client.ws.send(JSON.stringify({ type: "submit", data: "hello platform kernel" }));
   await client.next(
@@ -116,6 +133,11 @@ input.on("line", (line) => {
     5_000,
   );
   assert.equal(completed.payload.runtimeKernel, "platform");
+  const context = await (await fetch(`http://127.0.0.1:${canary.agentPort}/api/platform/sessions/${ready.payload.id}/actions/readContext`)).json();
+  assert.equal(context.tokenUsage.contextUsedTokens, 2000); assert.equal(context.tokenUsage.modelContextWindow, 200000);
+  const starts = (await readFile(requestLog, 'utf8')).trim().split('\n').map(line => JSON.parse(line)).filter(message => message.method === 'turn/start');
+  assert.equal(starts[0].params.model, 'codex'); assert.equal(starts[0].params.effort, 'medium'); assert.equal(starts[0].params.serviceTier, 'priority');
+
 
   const released = await client.next(
     (message) => message.type === "status" && message.payload.released,
@@ -168,6 +190,10 @@ input.on("line", (line) => {
   );
   assert.equal(rolledBack.payload.runtimeKernel, "legacy");
   assert.equal(rolledBack.payload.sessionId, threadId);
+  const legacyContext = await (await fetch(`http://127.0.0.1:${rollback.agentPort}/api/platform/sessions/${webSessionId}`)).json();
+  assert.equal(legacyContext.session.model, 'codex'); assert.equal(legacyContext.session.reasoningEffort, 'medium');
+  assert.equal(legacyContext.session.serviceTier, 'priority');
+
   rollbackClient.ws.close();
 });
 

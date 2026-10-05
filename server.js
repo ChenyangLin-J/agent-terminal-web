@@ -1,3 +1,4 @@
+import { createSessionMetadataReader } from './lib/platform-session-metadata.js';
 import { createSessionReferenceEnvelopeInput, normalizeSessionReferences, parseSessionReferenceEnvelopes, requireReferences, resolveAgentWebReferences, sessionReferenceKey } from './lib/session-references.js';
 import { registerPlatformSessionRoutes } from './lib/platform-session-routes.js';
 import { execFile } from "node:child_process";
@@ -1410,6 +1411,8 @@ async function resolveSessionReferences(sourceThreadId, values) {
   return resolveAgentWebReferences(sourceThreadId, values, readSessionReferenceTarget);
 }
 
+const sessionMetadataReader = createSessionMetadataReader({ withClient: withSharedAppServer });
+
 registerPlatformSessionRoutes(app, {
   sessions, restore: restorePersistedSession, records: readPersistedWebSessions,
   create: createAppServerSession, findReusable: findReusableSession,
@@ -1417,7 +1420,9 @@ registerPlatformSessionRoutes(app, {
   snapshot: platformSessionSnapshot, persist: persistWebSession,
   listWebSessions: () => [...[...sessions.values()].filter((session) => !session.exited).map(publicSession), ...listDetachedSessions()],
   listCodexSessions, searchSessions: searchCodexSessions, favoriteIds: favoriteSessionIdsForHost,
-  status: appServerStatus, models: appServerModels,
+  status: appServerStatus, models: appServerModels, metadata: appServerSessionMetadata,
+  context: appServerContext, prepareSnapshot: appServerContext,
+  archiveIds: () => new Set(Object.keys(readSessionArchiveSync())),
   resolveReferences: resolveSessionReferences,
   validThread: isValidSessionId, validTurn: isCodexTurnId, readProcess: loadHistoricalSessionProcess,
   broadcast: (session) => broadcast(session, 'status', publicSession(session)),
@@ -1693,6 +1698,19 @@ app.get("/api/session-preview/:id", async (req, res) => {
 
   try {
     const liveSource = liveSessionPreviewSource(req);
+    let contextSession = [...sessions.values()].find(session => session.sessionId === id && !session.exited)
+      || Object.values(readPersistedWebSessions()).find(session => session.sessionId === id);
+    if (!contextSession) {
+      const contextFile = await findCodexSessionFile(id);
+      if (contextFile) {
+        try { const metadata = JSON.parse(await readFirstLine(contextFile));
+          if (metadata.payload?.cwd) contextSession = { sessionId: id, cwd: metadata.payload.cwd };
+        } catch { /* Preserve unknown workspace metadata. */ }
+      }
+    }
+    const context = contextSession
+      ? await appServerContext(contextSession)
+      : { tokenUsage: publicAppTokenUsage(await appServerDiskTokenUsage(id)) };
     if (historyCursor) {
       let conversation;
       if (liveSource) {
@@ -1721,14 +1739,14 @@ app.get("/api/session-preview/:id", async (req, res) => {
         });
       }
       res.set("Cache-Control", "private, no-store");
-      res.json({ conversation });
+      res.json({ conversation, ...context });
       return;
     }
     if (liveSource) {
       try {
         const live = await readLiveSessionPreview(liveSource, id);
         res.set("Cache-Control", "private, no-store");
-        res.json(live);
+        res.json({ ...live, ...context });
         return;
       } catch (error) {
         logAgentEvent("live-session-preview-fallback", {
@@ -1770,6 +1788,9 @@ app.get("/api/session-preview/:id", async (req, res) => {
       : null;
     if (liveSource) res.set("Cache-Control", "private, no-store");
     res.json({
+      ...context,
+      cwd: contextSession?.cwd,
+      access: contextSession?.access,
       preview,
       conversation: conversation || { turns: [], hasEarlier: false },
       ...(liveSource ? { live: true, active: true } : {}),
@@ -4412,21 +4433,50 @@ function appServerInstructionFiles(cwd) {
   return files;
 }
 
-async function appServerModels(session, argument) {
-  const [modelsResponse, configResponse] = await Promise.all([
-    session.appServer.listModels(),
-    session.appServer.readConfig({ cwd: session.cwd }),
+async function appServerSessionMetadata(cwd) {
+  const [catalog, config] = await Promise.all([sessionMetadataReader.models(), sessionMetadataReader.config(cwd)]);
+  return {
+    cwd,
+    currentModel: String(config.model || ''),
+    currentReasoningEffort: String(config.model_reasoning_effort || ''),
+    serviceTier: config.service_tier === 'priority' ? 'priority' : null,
+    modelContextWindow: Number(config.model_context_window || 0),
+    models: catalog.filter(model => !model.hidden).map(model => ({
+      id: String(model.model || model.id || ''), name: String(model.displayName || model.id || model.model || ''),
+      description: String(model.description || ''), defaultReasoningEffort: String(model.defaultReasoningEffort || ''),
+      reasoningEfforts: (model.supportedReasoningEfforts || []).map(entry => String(entry.reasoningEffort || '')).filter(Boolean),
+    })),
+  };
+}
+
+async function appServerContext(session) {
+  const [config, diskUsage] = await Promise.all([
+    sessionMetadataReader.config(session.cwd).catch(() => ({})),
+    session.appTokenUsage ? null : appServerDiskTokenUsage(session.sessionId),
   ]);
-  const models = (Array.isArray(modelsResponse?.data) ? modelsResponse.data : []).filter((model) => !model.hidden);
-  const config = configResponse?.config || {};
+  session.appConfiguredModel = String(config.model || '');
+  session.appConfiguredReasoningEffort = String(config.model_reasoning_effort || '');
+  session.appConfiguredServiceTier = config.service_tier === 'priority' ? 'priority' : 'default';
+  session.appConfiguredContextWindow = Number(config.model_context_window || 0);
+  // A notification arriving during the disk read is newer than that read.
+  if (!session.appTokenUsage && diskUsage) session.appDiskTokenUsage = diskUsage;
+  return { sessionId: session.sessionId, model: session.appModel || session.appConfiguredModel,
+    reasoningEffort: session.appReasoningEffort || session.appConfiguredReasoningEffort,
+    tokenUsage: publicAppTokenUsage(session.appTokenUsage || session.appDiskTokenUsage, session.appConfiguredContextWindow) };
+}
+
+async function appServerModels(session, argument) {
+  const metadata = await appServerSessionMetadata(session.cwd);
+  const models = metadata.models;
+  const config = { model: metadata.currentModel, model_reasoning_effort: metadata.currentReasoningEffort };
   if (argument) {
     const [requestedModel, requestedEffort] = argument.split(/\s+/);
     const selected = models.find((model) => model.id === requestedModel || model.model === requestedModel);
     if (!selected) throw new Error(`未知模型：${requestedModel}`);
-    const efforts = (selected.supportedReasoningEfforts || []).map((entry) => entry.reasoningEffort);
+    const efforts = selected.reasoningEfforts;
     const effort = requestedEffort || (efforts.includes(session.appReasoningEffort || config.model_reasoning_effort) ? session.appReasoningEffort || config.model_reasoning_effort : selected.defaultReasoningEffort);
     if (effort && !efforts.includes(effort)) throw new Error(`${selected.displayName || selected.id} 不支持 ${effort} reasoning。`);
-    session.appModel = selected.model || selected.id;
+    session.appModel = selected.id;
     session.appReasoningEffort = effort || "";
     persistRestorableWebSession(session);
   }
@@ -4434,13 +4484,9 @@ async function appServerModels(session, argument) {
     currentModel: session.appModel || config.model || "default",
     currentReasoningEffort: session.appReasoningEffort || config.model_reasoning_effort || "default",
     activeTurn: Boolean(session.turnState.active),
-    models: models.map((model) => ({
-      id: String(model.id || model.model || ""),
-      name: String(model.displayName || model.id || model.model || ""),
-      description: String(model.description || ""),
-      defaultReasoningEffort: String(model.defaultReasoningEffort || ""),
-      reasoningEfforts: (model.supportedReasoningEfforts || []).map((entry) => String(entry.reasoningEffort || "")).filter(Boolean),
-    })),
+    models,
+    serviceTier: session.appServiceTier === "priority" ? "priority" : session.appServiceTier === "default" ? null : metadata.serviceTier,
+    modelContextWindow: metadata.modelContextWindow,
   };
 }
 
@@ -7065,10 +7111,10 @@ function publicSession(session) {
     memoryProjectMode: session.memoryProjectMode === "manual" ? "manual" : "auto",
     memoryProjects: normalizeMemoryProjectNames(session.memoryProjects),
     memoryProjectSource: normalizeMemoryProjectSource(session.memoryProjectSource),
-    model: String(session.appModel || ""),
-    reasoningEffort: String(session.appReasoningEffort || ""),
-    serviceTier: session.appServiceTier === 'priority' ? 'priority' : 'default',
-    tokenUsage: publicAppTokenUsage(session.appTokenUsage),
+    model: String(session.appModel || session.appConfiguredModel || ""),
+    reasoningEffort: String(session.appReasoningEffort || session.appConfiguredReasoningEffort || ""),
+    serviceTier: session.appServiceTier || session.appConfiguredServiceTier || "default",
+    tokenUsage: publicAppTokenUsage(session.appTokenUsage || session.appDiskTokenUsage, session.appConfiguredContextWindow),
     startedAt: session.startedAt,
     lastActivityAt: session.lastActivityAt,
     cols: session.cols,

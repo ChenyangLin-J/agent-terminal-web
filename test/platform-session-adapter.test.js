@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { applyAgentWebEvent, normalizeSnapshot, previewSnapshot } from "../public/platform-agent-web-adapter.js";
+import { applyAgentWebEvent, createAgentWebSessionAdapter, normalizeSnapshot, previewSnapshot } from "../public/platform-agent-web-adapter.js";
 import { agentWebSessionContext } from '../public/platform-agent-web-adapter.js';
 
 test('Composer receives product context usage from the selected Host snapshot, independently of UI presentation fields', async () => {
@@ -23,6 +23,73 @@ test('historical preview exposes each turn for lazy process loading without a li
  assert.deepEqual(snapshot.technicalDetailsAvailable,['turn-1']);
  assert.deepEqual(snapshot.technicalItems,[]);
  assert.equal(snapshot.threadId,'thread-1');
+});
+
+test('opening, refreshing and paging historical sessions retain their catalog titles', async t => {
+  const originalFetch = globalThis.fetch;
+  const adapter = createAgentWebSessionAdapter({ clientId: 'history-title-test' });
+  const calls = [];
+  const titles = ['Task: 晚间', '我们继续讨论 personal agent'];
+  globalThis.fetch = async raw => {
+    const url = new URL(raw, 'http://test.invalid');
+    calls.push(url.pathname + url.search);
+    if (url.pathname === '/api/platform/sessions') return Response.json({ sessions: titles.map((title, index) => ({ id: `history:thread-${index}`, sessionId: `thread-${index}`, title })) });
+    if (url.pathname.startsWith('/api/session-preview/')) return Response.json({ conversation: { turns: [{ id: url.searchParams.has('before') ? 'older' : 'latest', user: 'question', assistant: [{ text: 'answer' }] }], nextCursor: url.searchParams.has('before') ? null : '10', hasEarlier: !url.searchParams.has('before') } });
+    if (url.pathname === '/api/platform/session-metadata') return Response.json({});
+    throw new Error(`Unexpected fetch ${raw}`);
+  };
+  t.after(() => { adapter.dispose(); globalThis.fetch = originalFetch; });
+  let summaries = (await adapter.listSessions()).sessions;
+  for (const [index, title] of titles.entries()) {
+    const id = `history:thread-${index}`;
+    for (const snapshot of [await adapter.readSession(id), await adapter.readSession(id), await adapter.loadHistory(id)]) {
+      assert.equal(snapshot.title, title);
+      assert.equal(snapshot.titleIsFallback, false);
+      summaries = adapter.patchSummary(summaries, snapshot);
+      assert.equal(summaries.find(summary => summary.id === id).title, title);
+    }
+  }
+  assert.equal(calls.some(url => url.includes('before=10')), true);
+  assert.equal(calls.some(url => /\/api\/platform\/sessions\/[^?]/.test(url)), false);
+});
+
+test('a preview opened before its catalog cannot replace the title with its placeholder', async t => {
+  const originalFetch = globalThis.fetch;
+  const adapter = createAgentWebSessionAdapter({ clientId: 'history-title-race-test' });
+  const id = 'history:thread-race';
+  globalThis.fetch = async raw => {
+    const url = new URL(raw, 'http://test.invalid');
+    if (url.pathname === '/api/platform/sessions') return Response.json({ sessions: [{ id, sessionId: 'thread-race', title: 'Task: 晚间' }] });
+    if (url.pathname.startsWith('/api/session-preview/')) return Response.json({ conversation: { turns: [], nextCursor: url.searchParams.has('before') ? null : '10' } });
+    if (url.pathname === '/api/platform/session-metadata') return Response.json({}, { status: 404 });
+    throw new Error(`Unexpected fetch ${raw}`);
+  };
+  t.after(() => { adapter.dispose(); globalThis.fetch = originalFetch; });
+  const summary = { id, title: 'Task: 晚间' };
+  const first = await adapter.readSession(id);
+  assert.equal(first.title, '历史对话');
+  assert.equal(first.titleIsFallback, true);
+  assert.equal(adapter.patchSummary([summary], first)[0].title, summary.title);
+  const earlier = await adapter.loadHistory(id);
+  assert.equal(earlier.titleIsFallback, true);
+  assert.equal(adapter.patchSummary([summary], earlier)[0].title, summary.title);
+  await adapter.listSessions();
+  const loaded = await adapter.readSession(id);
+  assert.equal(loaded.title, summary.title);
+  assert.equal(loaded.titleIsFallback, false);
+});
+
+test('a genuine historical title may be exactly the placeholder text', () => {
+  const adapter = createAgentWebSessionAdapter({ clientId: 'history-real-title-test' });
+  try {
+    for (const snapshot of [
+      previewSnapshot('history:thread-real', { conversation: { turns: [] } }, { title: '历史对话' }),
+      previewSnapshot('history:thread-real', { preview: { title: '历史对话' }, conversation: { turns: [] } }),
+    ]) {
+      assert.equal(snapshot.titleIsFallback, false);
+      assert.equal(adapter.patchSummary([{ id: snapshot.sessionId, title: 'Old title' }], snapshot)[0].title, '历史对话');
+    }
+  } finally { adapter.dispose(); }
 });
 
 test("Platform adapter retains Agent Web session and Codex thread identities", () => {

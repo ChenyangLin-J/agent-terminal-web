@@ -62,7 +62,9 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
         let value;
         try { value = await json(`/api/session-preview/${encodeURIComponent(id.slice(8))}?${params}`, { signal }); }
         catch (error) { if (!error.knownResult) throw error; value = { conversation: { turns: [] } }; }
-        const snapshot = previewSnapshot(id, value, { sourceSession, title });
+        const previous = previews.get(id);
+        const previewTitle = summaries.get(id)?.title || (previous?.titleIsFallback ? '' : previous?.title) || title;
+        const snapshot = previewSnapshot(id, value, { sourceSession, title: previewTitle });
         const metadata = await readMetadata(value.cwd || '.').catch(() => null);
         const enriched = withMetadata({ ...snapshot, executionProfile: historyProfiles.get(id) || snapshot.executionProfile }, metadata);
         if (targets.has(id)) return adapter.readSession(id, { signal });
@@ -275,7 +277,7 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
     },
 
     patchSummary(summaries, snapshot) {
-      return summaries.map((summary) => summary.id === snapshot.sessionId ? { ...summary, title: snapshot.title, status: snapshot.status, updatedAt: snapshot.session?.lastActivityAt || summary.updatedAt, threadId: snapshot.threadId } : summary);
+      return summaries.map((summary) => summary.id === snapshot.sessionId ? { ...summary, title: snapshot.titleIsFallback ? summary.title : snapshot.title, status: snapshot.status, updatedAt: snapshot.session?.lastActivityAt || summary.updatedAt, threadId: snapshot.threadId } : summary);
     },
 
     mergeSnapshot(current, latest) {
@@ -297,7 +299,7 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
         if (!previous.turnsCursor) return previous;
         const threadId = previous.threadId || id.slice(8);
         const params = new URLSearchParams({ before: previous.turnsCursor, ...(sourceSession ? { sourceSession } : {}) });
-        const page = previewSnapshot(`history:${threadId}`, await json(`/api/session-preview/${encodeURIComponent(threadId)}?${params}`), { sourceSession, title: previous.title });
+        const page = previewSnapshot(`history:${threadId}`, await json(`/api/session-preview/${encodeURIComponent(threadId)}?${params}`), { sourceSession, title: previous.titleIsFallback ? '' : previous.title });
         const items = [...page.items, ...previous.items].filter((item, index, values) => values.findIndex(value => value.id === item.id) === index);
         const merged = { ...normalizeSnapshot({ session: { ...previous.session, id, sessionId: threadId }, items }), ...page, sessionId: id, items,
           messages: [...page.messages, ...previous.messages].filter((item, index, values) => values.findIndex(value => value.id === item.id) === index),
@@ -536,11 +538,13 @@ function persistEntries(key, values) {
 }
 
 export function previewSnapshot(id, value, { sourceSession = '', title = '' } = {}) {
+  const previewTitle = title || value.preview?.title;
   const items = value.transcript?.items || (value.conversation?.turns || []).flatMap((turn) => [
     ...(turn.user ? [{ id: `${turn.id}-user`, type: 'user', text: turn.user, turnId: turn.id, turnStatus: 'completed', historical: true }] : []),
     ...(turn.assistant || []).map((item, index) => ({ ...item, id: item.id || `${turn.id}-assistant-${index}`, type: 'assistant', turnId: turn.id, phase: item.phase || 'final_answer', historical: true })),
   ]);
-  return { ...normalizeSnapshot({ session: { id, sessionId: id.slice(8), cwd: value.cwd, model: value.model, reasoningEffort: value.reasoningEffort, tokenUsage: value.tokenUsage, access: value.access || 'full', title: title || value.preview?.title || '历史对话', ready: true, turnState: { active: Boolean(value.active) } }, items }),
+  return { ...normalizeSnapshot({ session: { id, sessionId: id.slice(8), cwd: value.cwd, model: value.model, reasoningEffort: value.reasoningEffort, tokenUsage: value.tokenUsage, access: value.access || 'full', title: previewTitle || '历史对话', ready: true, turnState: { active: Boolean(value.active) } }, items }),
+    titleIsFallback: !previewTitle,
     cwd: value.cwd, readOnly: Boolean(sourceSession), composerDisabled: Boolean(sourceSession), preview: true, turnsCursor: value.conversation?.nextCursor || null, hasEarlierTurns: Boolean(value.conversation?.hasEarlier || value.transcript?.hasEarlierTurns) };
 }
 

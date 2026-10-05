@@ -54,6 +54,23 @@ test('live full-text search finds message bodies and rejects invalid paging', as
   assert.equal((await request('/api/platform/sessions?cursor=-1')).status, 400);
 });
 
+test('the catalog keeps the live attachment over older released records for the same thread', async t => {
+  const { request, host } = await fixture(t);
+  const live = { id: 'live', sessionId: 'thread-a', title: 'Existing', lastActivityAt: '2026-10-05T06:26:00Z', turnState: { active: true } };
+  const old = { ...live, id: 'old', released: true, lastActivityAt: '2026-10-05T02:36:00Z', turnState: { active: false } };
+  const older = { ...old, id: 'older', lastActivityAt: '2026-10-04T02:36:00Z' };
+  host.listCodexSessions = async () => [{ id: 'thread-a', title: 'Existing' }];
+  for (const values of [[live, old, older], [older, old, live]]) {
+    host.listWebSessions = () => values;
+    const result = await request('/api/platform/sessions');
+    assert.equal(result.body.sessions.length, 1);
+    assert.equal(result.body.sessions[0].id, live.id);
+    assert.equal(result.body.sessions[0].turnState.active, true);
+  }
+  host.listWebSessions = () => [old, older];
+  assert.equal((await request('/api/platform/sessions')).body.sessions[0].id, old.id);
+});
+
 test('reading historical process does not allocate a live Session and validates identities', async t => {
  const {request,counts}=await fixture(t);
  const result=await request('/api/platform/threads/thread-a/process/turn-a');

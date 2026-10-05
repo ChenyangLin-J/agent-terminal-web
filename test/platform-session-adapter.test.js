@@ -19,10 +19,18 @@ test('Composer receives product context usage from the selected Host snapshot, i
   assert.equal(agentWebSessionContext(controller, { sessionId: 'web-a', isDraft: true }).onCompact, undefined);
 });
 test('historical preview exposes each turn for lazy process loading without a live Runtime',()=>{
- const snapshot=previewSnapshot('history:thread-1',{conversation:{turns:[{id:'turn-1',user:'question',assistant:[{text:'answer'}]}]}});
- assert.deepEqual(snapshot.technicalDetailsAvailable,['turn-1']);
+ const turnId='019f8d05-7a2d-7f43-a52c-caa9f5dcd1cf';
+ const snapshot=previewSnapshot('history:thread-1',{conversation:{turns:[{id:turnId,user:'question',assistant:[{text:'answer'}]}]}});
+ assert.deepEqual(snapshot.technicalDetailsAvailable,[turnId]);
  assert.deepEqual(snapshot.technicalItems,[]);
  assert.equal(snapshot.threadId,'thread-1');
+});
+
+test('historical display IDs without a native turn do not advertise an invalid process request', () => {
+ const snapshot=previewSnapshot('history:thread-1',{conversation:{turns:[{id:'disk-response-user-1',user:'question',assistant:[{text:'progress',phase:'commentary'},{text:'answer'}]}]}});
+ assert.deepEqual(snapshot.technicalDetailsAvailable,[]);
+ assert.equal(snapshot.technicalItems[0].title,'进度说明');
+ assert.equal(snapshot.messages.length,2);
 });
 
 test('opening, refreshing and paging historical sessions retain their catalog titles', async t => {

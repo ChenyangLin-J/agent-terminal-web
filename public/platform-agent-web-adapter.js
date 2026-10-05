@@ -24,11 +24,15 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
   const previews = new Map();
   const processes = new Map();
   const withProcesses = (snapshot) => {
-    const loaded = [...processes].filter(([key]) => key.startsWith(`${snapshot.threadId}:`)).flatMap(([, items]) => items);
-    if (!loaded.length) return snapshot;
-    const items = [...new Map([...(snapshot.items || []), ...loaded].map(item => [item.id, item])).values()];
+    const entries = [...processes].filter(([key]) => key.startsWith(`${snapshot.threadId}:`));
+    if (!entries.length) return snapshot;
+    const loadedTurns = new Set(entries.map(([key]) => key.slice(snapshot.threadId.length + 1)));
+    // Disk previews and process reads use different item IDs for the same progress.
+    // Replace historical technical items only; public messages and live items stay.
+    const base = (snapshot.items || []).filter(item => !item.historical || !loadedTurns.has(item.turnId) || isPublicMessage(item));
+    const items = [...new Map([...base, ...entries.flatMap(([, items]) => items)].map(item => [item.id, item])).values()];
     const presentation = presentationFromAgentWeb(snapshot.session || {}, items, snapshot.pendingRequests);
-    return { ...snapshot, items, messages: presentation.messages, technicalItems: presentation.technicalItems, turnMetadata: presentation.turnMetadata };
+    return { ...snapshot, items, messages: presentation.messages, technicalItems: presentation.technicalItems, technicalDetailsAvailable: presentation.technicalDetailsAvailable, turnMetadata: presentation.turnMetadata };
   };
 
   const emit = (event) => listeners.forEach((listener) => listener(event));
@@ -283,7 +287,7 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
     mergeSnapshot(current, latest) {
       // Disk previews synthesize item IDs. The restored native transcript is
       // authoritative, so merging both representations would duplicate messages.
-      return current.preview && !latest.preview ? latest : mergeSessionHostSnapshot(current, latest);
+      return current.preview && !latest.preview ? latest : withProcesses(mergeSessionHostSnapshot(current, latest));
     },
 
     applyEvent(snapshot, event) {
@@ -296,15 +300,16 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
     async loadHistory(id, options = {}) {
       if (previews.has(id)) {
         const previous = previews.get(id);
-        if (!previous.turnsCursor) return previous;
+        if (!previous.turnsCursor) return withProcesses(previous);
         const threadId = previous.threadId || id.slice(8);
         const params = new URLSearchParams({ before: previous.turnsCursor, ...(sourceSession ? { sourceSession } : {}) });
         const page = previewSnapshot(`history:${threadId}`, await json(`/api/session-preview/${encodeURIComponent(threadId)}?${params}`), { sourceSession, title: previous.titleIsFallback ? '' : previous.title });
         const items = [...page.items, ...previous.items].filter((item, index, values) => values.findIndex(value => value.id === item.id) === index);
-        const merged = { ...normalizeSnapshot({ session: { ...previous.session, id, sessionId: threadId }, items }), ...page, sessionId: id, items,
-          messages: [...page.messages, ...previous.messages].filter((item, index, values) => values.findIndex(value => value.id === item.id) === index),
-          technicalItems: [...page.technicalItems, ...previous.technicalItems].filter((item, index, values) => values.findIndex(value => value.id === item.id) === index) };
-        previews.set(id, merged); return merged;
+        const presentation = presentationFromAgentWeb(previous.session, items, previous.pendingRequests);
+        const merged = { ...previous, ...page, session: previous.session, sessionId: id, items,
+          messages: presentation.messages, technicalItems: presentation.technicalItems,
+          technicalDetailsAvailable: presentation.technicalDetailsAvailable, turnMetadata: presentation.turnMetadata };
+        previews.set(id, merged); return withProcesses(merged);
       }
       await adapter.execute(id, "loadHistory", options);
       return adapter.readSession(id);
@@ -429,8 +434,7 @@ function presentationFromAgentWeb(session, items, pendingRequests = []) {
     const turnId = String(item?.turnId || '');
     if (turnId && !turnMetadata.has(turnId)) turnMetadata.set(turnId, { turnId, turnKey: turnId, startedAt: item.turnStartedAt || null });
     const type = String(item?.type || 'notice');
-    const phase = String(item?.phase || '');
-    if (type === 'user' || (type === 'assistant' && ['final_answer', 'async_question', 'async_message'].includes(phase))) {
+    if (isPublicMessage(item)) {
       messages.push({
         id: String(item.id || `${type}-${messages.length}`),
         role: type === 'user' ? 'user' : 'assistant',
@@ -441,7 +445,7 @@ function presentationFromAgentWeb(session, items, pendingRequests = []) {
         attachments: (item.attachments || []).map((attachment) => ({ id: attachment.path, name: attachment.originalName, path: attachment.path, mimeType: attachment.mime, size: attachment.size })),
       });
     } else {
-      technicalItems.push({ id: String(item.id || `technical-${technicalItems.length}`), title: item.label || type, type: technicalType(type), text: String(item.text || ''), detail: String(item.detail || ''), output: String(item.output || ''), status: item.status || '', turnId, turnKey: turnId,
+      technicalItems.push({ id: String(item.id || `technical-${technicalItems.length}`), title: technicalTitle(item), type: technicalType(type), text: String(item.text || ''), detail: String(item.detail || ''), output: String(item.output || ''), status: item.status || '', turnId, turnKey: turnId,
         media: item.type === 'tool' && item.label === '查看图片' ? [{ kind: 'image', src: `/api/session-image/${encodeURIComponent(session.id)}/${encodeURIComponent(item.id)}?turnId=${encodeURIComponent(turnId)}`, alt: item.text || '图片' }] : item.media || [] });
     }
   }
@@ -456,7 +460,7 @@ function presentationFromAgentWeb(session, items, pendingRequests = []) {
     activityKind: turnState.stopping ? 'stopping' : '',
     messages,
     technicalItems,
-    technicalDetailsAvailable: [...new Set(items.filter(item => item.historical && item.turnId).map(item => item.turnId))],
+    technicalDetailsAvailable: [...new Set(items.filter(item => item.historical && isNativeTurnId(item.turnId)).map(item => item.turnId))],
     turnMetadata: [...turnMetadata.values()],
     pendingRequests: (pendingRequests || []).map((request) => ({ ...request, token: request.token || request.requestId, requestId: request.requestId || request.token })),
     queuedTurns: (turnState.queuedTurns || []).map((turn) => ({ ...turn, prompt: turn.text || turn.prompt || '' })),
@@ -466,10 +470,24 @@ function presentationFromAgentWeb(session, items, pendingRequests = []) {
   };
 }
 
+function isPublicMessage(item) {
+  return item.type === 'user' || (item.type === 'assistant' && ['final_answer', 'async_question', 'async_message'].includes(item.phase));
+}
+
+function isNativeTurnId(value) {
+  return /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(String(value || ''));
+}
+
+function technicalTitle(item) {
+  if (item.type === 'assistant') return '进度说明';
+  return item.label || ({ command: '运行命令', commandExecution: '运行命令', tool: '工具调用', file: '文件变更', plan: '执行计划' }[item.type]) || '执行信息';
+}
+
 function technicalType(type) {
   if (type === 'command') return 'command';
   if (type === 'tool' || type === 'commandExecution') return 'tool';
   if (type === 'file') return 'file';
+  if (type === 'plan') return 'plan';
   return 'assistant';
 }
 
@@ -540,8 +558,8 @@ function persistEntries(key, values) {
 export function previewSnapshot(id, value, { sourceSession = '', title = '' } = {}) {
   const previewTitle = title || value.preview?.title;
   const items = value.transcript?.items || (value.conversation?.turns || []).flatMap((turn) => [
-    ...(turn.user ? [{ id: `${turn.id}-user`, type: 'user', text: turn.user, turnId: turn.id, turnStatus: 'completed', historical: true }] : []),
-    ...(turn.assistant || []).map((item, index) => ({ ...item, id: item.id || `${turn.id}-assistant-${index}`, type: 'assistant', turnId: turn.id, phase: item.phase || 'final_answer', historical: true })),
+    ...(turn.user ? [{ id: `${turn.id}-user`, type: 'user', text: turn.user, turnId: turn.turnId || turn.id, turnStatus: 'completed', historical: true }] : []),
+    ...(turn.assistant || []).map((item, index) => ({ ...item, id: item.id || `${turn.id}-assistant-${index}`, type: 'assistant', turnId: turn.turnId || turn.id, phase: item.phase || 'final_answer', historical: true })),
   ]);
   return { ...normalizeSnapshot({ session: { id, sessionId: id.slice(8), cwd: value.cwd, model: value.model, reasoningEffort: value.reasoningEffort, tokenUsage: value.tokenUsage, access: value.access || 'full', title: previewTitle || '历史对话', ready: true, turnState: { active: Boolean(value.active) } }, items }),
     titleIsFallback: !previewTitle,

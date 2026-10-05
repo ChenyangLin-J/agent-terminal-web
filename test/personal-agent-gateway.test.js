@@ -344,3 +344,83 @@ test("activity excludes model reference context and retains the user's message",
   ]);
   assert.ok(!JSON.stringify(response.body).includes("model-only referenced conversation context"));
 });
+
+class NativePersonalClient extends FakeClient {
+  constructor({ failTool = false, complete = true, delayedRespond = false } = {}) { super(); this.responses = []; this.failTool = failTool; this.complete = complete; this.delayedRespond = delayedRespond; }
+  async startTurn(_text, params) {
+    this.calls.push(['turn', params]);
+    setTimeout(() => {
+      this.emit('server-request', { id: 'other', method: 'item/tool/call', params: { threadId: 'other-thread', turnId: 'opening-turn', callId: 'other', tool: 'home_show_tibetan', arguments: {} } });
+      this.emit('server-request', { id: 'wrong-turn', method: 'item/tool/call', params: { threadId: this.threadId, turnId: 'different-turn', callId: 'wrong', tool: 'home_show_tibetan', arguments: {} } });
+      this.emit('server-request', { id: 'read', method: 'item/tool/call', params: { threadId: this.threadId, turnId: 'opening-turn', callId: 'read', tool: this.failTool ? 'arbitrary_exec' : 'home_records_search', arguments: {} } });
+      this.emit('server-request', { id: 'tibetan', method: 'item/tool/call', params: { threadId: this.threadId, turnId: 'opening-turn', callId: 'tibetan', tool: 'home_show_tibetan', arguments: {} } });
+      if (this.complete) {
+        this.emit('notification', { method: 'item/completed', params: { threadId: this.threadId, turnId: 'opening-turn', item: { type: 'agentMessage', phase: 'final_answer', text: '{"text":"A grounded personal opening","reason":"actual reads"}' } } });
+        this.emit('notification', { method: 'turn/completed', params: { threadId: this.threadId, turn: { id: 'opening-turn', status: 'completed' } } });
+      }
+    }, 5);
+    return { id: 'opening-turn' };
+  }
+  async respond(id, result) { if (this.delayedRespond) await new Promise(resolve => setTimeout(resolve, 20)); this.responses.push({ id, result }); }
+}
+const nativeInput = { requestId: 'native-id', prompt: 'Use tools to prepare the opening.', date: '2026-10-05', period: 'morning', taskId: 'morning', configRevision: 0, toolContext: { sources: [{ id: 'records:one', kind: 'feeling', title: 'Feeling', text: 'User feeling', path: 'Life/Records.md' }], coverage: [{ source: 'records', status: 'partial' }], window: { from: '2026-10-05' } } };
+
+test('native personal task persists receipts, drains responses and keeps exact thread/turn routing', async t => {
+  const f = await fixture({ createClient: () => new NativePersonalClient({ delayedRespond: true }) }); t.after(f.close);
+  assert.equal((await request(f, '/api/home/agent/openings', 'POST', nativeInput)).status, 202);
+  await eventually(async () => (await request(f, '/api/home/agent/openings/native-id')).body.status === 'completed');
+  const result = (await request(f, '/api/home/agent/openings/native-id')).body;
+  assert.equal(result.task, 'morning'); assert.equal(result.configRevision, 0); assert.deepEqual(result.sourceIds, ['records:one']);
+  assert.deepEqual(result.widgets, [{ toolId: 'home.show_tibetan', type: 'tibetan', status: 'unavailable' }]);
+  assert.deepEqual(f.clients[0].responses.map(response => response.id), ['read', 'tibetan']);
+  assert.ok(f.clients[0].responses.every(response => response.result.success && response.result.contentItems[0].type === 'inputText'));
+  assert.equal(f.clients[0].calls.find(([kind]) => kind === 'thread')[1].dynamicTools.length, 11);
+  assert.deepEqual(f.clients[0].calls.find(([kind]) => kind === 'turn')[1].outputSchema.required, ['text', 'reason']);
+  const stored = JSON.parse(await readFile(f.statePath, 'utf8')).records['native-id'];
+  assert.equal(stored.toolReceipts.length, 2); assert.equal(stored.task.instructions.length > 0, true); assert.equal(stored.toolContext.sources[0].text, 'User feeling');
+});
+
+test('unknown native tool responds negatively then fails safely and drains queued calls', async t => {
+  const f = await fixture({ createClient: () => new NativePersonalClient({ failTool: true, delayedRespond: true }) }); t.after(f.close);
+  await request(f, '/api/home/agent/openings', 'POST', nativeInput);
+  await eventually(async () => (await request(f, '/api/home/agent/openings/native-id')).body.status === 'uncertain');
+  assert.deepEqual(f.clients[0].responses.map(response => response.id), ['read', 'tibetan']);
+  assert.ok(f.clients[0].responses.every(response => response.result.success === false));
+  assert.equal((await request(f, '/api/home/agent/openings/native-id')).body.text, undefined);
+});
+
+test('config API validates CAS before fresh admission but retains prior request identity', async t => {
+  const f = await fixture({ createClient: () => new NativePersonalClient() }); t.after(f.close);
+  const config = (await request(f, '/api/home/agent/personal-config')).body;
+  await request(f, '/api/home/agent/openings', 'POST', nativeInput);
+  await eventually(async () => (await request(f, '/api/home/agent/openings/native-id')).body.status === 'completed');
+  assert.equal((await request(f, '/api/home/agent/personal-config', 'POST', config)).body.revision, 1);
+  assert.equal((await request(f, '/api/home/agent/personal-config', 'POST', config)).status, 409);
+  assert.equal((await request(f, '/api/home/agent/openings', 'POST', { ...nativeInput, requestId: 'new-id' })).status, 409);
+  assert.equal((await request(f, '/api/home/agent/openings', 'POST', nativeInput)).status, 202);
+  assert.equal(f.clients.length, 1);
+});
+
+test('native recovery uses persisted actual receipts for only the original completed turn', async t => {
+  const f = await fixture({ createClient: () => new NativePersonalClient() }); t.after(f.close);
+  await request(f, '/api/home/agent/openings', 'POST', nativeInput);
+  await eventually(async () => (await request(f, '/api/home/agent/openings/native-id')).body.status === 'completed');
+  await eventually(() => f.clients[0].closed);
+  const ledger = JSON.parse(await readFile(f.statePath, 'utf8')); ledger.records['native-id'].status = 'running'; delete ledger.records['native-id'].text;
+  await writeFile(f.statePath, JSON.stringify(ledger));
+  const app = express(); app.use(express.json()); let starts = 0;
+  registerPersonalAgentGateway(app, { statePath: f.statePath, createClient: async () => { starts++; throw new Error('No submission during recovery'); }, listSessions: async () => [], readTurnPage: async () => ({ data: [
+    { id: 'another-turn', status: 'completed', items: [{ type: 'agentMessage', text: '{"text":"Wrong turn","reason":"wrong"}' }] },
+    { id: 'opening-turn', status: 'completed', items: [{ type: 'agentMessage', phase: 'final_answer', text: '{"text":"Recovered","reason":"actual persisted reads"}' }] },
+  ] }) });
+  const server = http.createServer(app); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise(resolve => server.close(resolve)));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const result = await (await fetch(url + '/api/home/agent/openings/native-id')).json();
+  assert.equal(result.status, 'completed'); assert.equal(result.text, 'Recovered'); assert.deepEqual(result.sourceIds, ['records:one']); assert.equal(result.widgets[0].status, 'unavailable'); assert.equal(starts, 0);
+  ledger.records['native-id'].status = 'running'; ledger.records['native-id'].toolReceipts = [];
+  await writeFile(f.statePath, JSON.stringify(ledger));
+  const forgedApp = express(); forgedApp.use(express.json());
+  registerPersonalAgentGateway(forgedApp, { statePath: f.statePath, createClient: async () => { throw new Error('No submit'); }, listSessions: async () => [], readTurnPage: async () => ({ data: [{ id: 'opening-turn', status: 'completed', items: [{ type: 'agentMessage', text: '{"text":"Forged","reason":"model","widgets":[{"toolId":"home.show_tibetan","type":"tibetan","status":"available","sourceId":"fake"}]}' }] }] }) });
+  const forgedServer = http.createServer(forgedApp); await new Promise(resolve => forgedServer.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise(resolve => forgedServer.close(resolve)));
+  const forged = await (await fetch(`http://127.0.0.1:${forgedServer.address().port}/api/home/agent/openings/native-id`)).json(); assert.equal(forged.status, 'uncertain');
+});

@@ -10,7 +10,8 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const threadId = "019f9db5-cdfd-7c10-b477-4859c2330001";
 
-test("Home adapter keeps durable thread identity, exposes history, and rejects duplicate busy sends", async (t) => {
+for (const kernelMode of ["legacy", "new"]) {
+test(`Home adapter keeps durable thread identity, exposes history, and rejects duplicate busy sends (${kernelMode})`, async (t) => {
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "home-agent-adapter-"));
   const workspaceRoot = path.join(temporaryRoot, "workspace");
   const projectRoot = path.join(workspaceRoot, "saved-project");
@@ -35,6 +36,8 @@ test("Home adapter keeps durable thread identity, exposes history, and rejects d
       OBSIDIAN_VAULT_PATH: path.join(workspaceRoot, "obsidian/MainVault"),
       PRIVATE_AUTH_VERIFY_URL: "http://127.0.0.1:9/disabled-auth",
       AGENT_CODEX_STATE_ROOT: codexStateRoot,
+      AGENT_MEMORY_SYSTEM_ROOT: process.env.AGENT_MEMORY_SYSTEM_ROOT,
+      AGENT_PLATFORM_KERNEL: kernelMode,
       AGENT_INTEGRATIONS_DIR: path.join(temporaryRoot, "integrations"),
       AGENT_CUBOX_CONFIG_DIR: path.join(temporaryRoot, "cubox"),
       CODEX_APP_SERVER_COMMAND: fakeCodex,
@@ -85,11 +88,12 @@ test("Home adapter keeps durable thread identity, exposes history, and rejects d
     homeFetch(port, "/api/home/agent/turns", { method: "POST", body }),
     homeFetch(port, "/api/home/agent/turns", { method: "POST", body }),
   ]);
-  assert.equal(accepted.status, 202);
-  assert.equal(sameRequestReplay.status, 202);
+  assert.equal(accepted.status, 202, await accepted.clone().text());
+  assert.equal(sameRequestReplay.status, 202, await sameRequestReplay.clone().text());
   const acceptedPayload = await accepted.json();
   assert.deepEqual(await sameRequestReplay.json(), acceptedPayload);
   assert.equal(acceptedPayload.session.id, threadId);
+  assert.equal(acceptedPayload.session.runtimeKernel, kernelMode === "new" ? "platform" : "legacy");
   assert.ok(acceptedPayload.session.webSessionId);
   assert.equal(acceptedPayload.turn.active, true);
   assert.match(await readFile(fakeCalls, "utf8"), new RegExp(`thread/resume-cwd:${projectRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
@@ -133,6 +137,7 @@ test("Home adapter keeps durable thread identity, exposes history, and rejects d
   const finalLedger = JSON.parse(await readFile(path.join(codexStateRoot, "home-agent-turn-requests.json"), "utf8"));
   assert.equal(finalLedger["home-request-004"], undefined, "attach mismatch did not attempt submission");
 });
+}
 
 function fakeAppServer() {
   return `#!/usr/bin/env node
@@ -150,7 +155,7 @@ const history = [{ id: "019f9db5-cdfd-7c10-b477-4859c2330000", status: "complete
 input.on("line", (line) => {
   const message = JSON.parse(line);
   if (message.method === "initialize") return send({ id: message.id, result: { userAgent: "fake" } });
-  if (message.method === "thread/list") return send({ id: message.id, result: { data: [{ id: threadId, name: "Saved thread", cwd: process.cwd() + "/saved-project", updatedAt: 2, createdAt: 1, status: "idle" }] } });
+  if (message.method === "thread/list") return send({ id: message.id, result: { data: [{ id: threadId, name: "Saved thread", cwd: process.env.WORKSPACE_ROOT + "/saved-project", updatedAt: 2, createdAt: 1, status: "idle" }] } });
   if (message.method === "thread/turns/list") return send({ id: message.id, result: { data: history } });
   if (message.method === "thread/resume") { record(message.method); record("thread/resume-cwd:" + message.params.cwd); return send({ id: message.id, result: { thread: { id: threadId, turns: [] }, initialTurnsPage: { data: history } } }); }
   if (message.method === "thread/start") { record(message.method); return send({ id: message.id, result: { thread: { id: threadId, turns: [] } } }); }

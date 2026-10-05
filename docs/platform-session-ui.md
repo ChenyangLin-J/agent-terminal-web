@@ -69,6 +69,8 @@ Use the project-owned `scripts/testing/session-ui.flow.mjs` with `tools/workspac
 
 `scripts/testing/session-draft.flow.mjs` records desktop/mobile draft creation under a delayed history request, actual default/configuration selection, reload recovery, empty-draft archive and archived-history discovery. It asserts that none of these actions creates a backend Session. App Server canaries separately verify that the selected profile reaches the first Turn in both supported kernels.
 
+Finish the selected package's build and full tests before recording browser flows: `pretest` rewrites `public/generated/`, so a simultaneous candidate build or recording can observe a different bundle during the same flow.
+
 `scripts/testing/session-chrome.flow.mjs` verifies the fixed sidebar toggle, contiguous list/detail layout, and account dialog against an existing Session in the isolated real preview. It reads usage without submitting a model Turn and records both desktop and mobile results.
 
 `scripts/testing/session-tools.flow.mjs` covers the three related tabs, real relation/voice metadata, direct realtime opening, close/reopen and simulated microphone denial. It never captures physical audio or starts a model Turn; this is separate from physical voice acceptance.

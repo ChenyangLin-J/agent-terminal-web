@@ -14,14 +14,32 @@ async function fixture(options = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "personal-agent-gateway-"));
   const app = express(); app.use(express.json());
   const clients = [];
-  const createClient = options.createClient || (() => { const client = new FakeClient(); clients.push(client); return client; });
+  const released = new WeakSet();
+  const createClient = async (...args) => {
+    const client = await (options.createClient ? options.createClient(...args) : new FakeClient());
+    clients.push(client);
+    const close = client.close?.bind(client);
+    client.close = () => { close?.(); released.add(client); };
+    return client;
+  };
   const gateway = registerPersonalAgentGateway(app, {
     createClient, listSessions: options.listSessions || (async () => []), readTurnPage: options.readTurnPage || (async () => ({ data: [] })),
     statePath: path.join(root, "opening-ledger.json"), openingTimeoutMs: options.openingTimeoutMs || 200,
     backgroundThreadIds: options.backgroundThreadIds,
   });
   const server = http.createServer(app); await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return { root, clients, gateway, statePath: path.join(root, "opening-ledger.json"), url: `http://127.0.0.1:${server.address().port}`, close: async () => { await new Promise((resolve) => server.close(resolve)); await rm(root, { recursive: true, force: true }); } };
+  return { root, clients, gateway, statePath: path.join(root, "opening-ledger.json"), url: `http://127.0.0.1:${server.address().port}`, close: async () => {
+    await new Promise((resolve) => server.close(resolve));
+    // The public result can precede the last durable write and client release.
+    await eventually(async () => {
+      if (clients.some(client => !released.has(client))) return false;
+      try {
+        const ledger = JSON.parse(await readFile(path.join(root, 'opening-ledger.json'), 'utf8'));
+        return Object.values(ledger.records || {}).every(record => !['pending', 'running'].includes(record.status));
+      } catch (error) { if (error.code === 'ENOENT') return true; throw error; }
+    });
+    await rm(root, { recursive: true, force: true });
+  } };
 }
 async function request(fixture, pathname, method = "GET", body) { const response = await fetch(fixture.url + pathname, { method, headers: body ? { "content-type": "application/json" } : {}, body: body && JSON.stringify(body) }); return { status: response.status, body: await response.json() }; }
 async function eventually(fn) { for (let i = 0; i < 30; i += 1) { const value = await fn(); if (value) return value; await new Promise((resolve) => setTimeout(resolve, 10)); } throw new Error("Timed out"); }
@@ -67,10 +85,8 @@ test("openings are idempotent, durable, and pin the restricted App Server settin
 
 test('accepts a full 350-character opening without truncation', async t => {
   const text = '开'.repeat(349) + '😀';
-  let openingClient;
   const f = await fixture({ createClient: () => {
     const client = new FakeClient();
-    openingClient = client;
     client.startTurn = async (_text, params) => {
       assert.equal(params.outputSchema.properties.text.maxLength, 350);
       setTimeout(() => {
@@ -87,8 +103,6 @@ test('accepts a full 350-character opening without truncation', async t => {
     return value.body.status === 'completed' && value;
   });
   assert.equal(result.body.text, text);
-  // Completed is visible before the final ledger write and client release finish.
-  await eventually(() => openingClient.closed);
 });
 
 test("a restart keeps uncertain work fail closed", async (t) => {

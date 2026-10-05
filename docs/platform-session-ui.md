@@ -15,6 +15,7 @@ Agent Web consumes Platform's `SessionApplication`, Session Host controller, Com
 | `public/platform-agent-web-product-controller.js` | Product account/service operations |
 | `public/platform-agent-web-product-extensions.jsx`, `.css` | Memory, integrations, workspaces, updates, sharing and Session tools |
 | `lib/platform-session-routes.js` | Authenticated HTTP projection for the shared Host Kit |
+| `lib/platform-session-metadata.js` | Bounded, deduplicated model/catalog and workspace configuration reads; no native thread allocation |
 | `lib/session-references.js` | Native Session reference validation, canonical metadata and bounded public context |
 | `lib/session-operation-receipts.js` | Bounded durable operation receipts, hashes and public results |
 | `lib/memory-system-library.js` | Product memory dependency location |
@@ -23,6 +24,10 @@ Agent Web consumes Platform's `SessionApplication`, Session Host controller, Com
 Platform owns common interaction and presentation, selection protection, snapshot/event recovery, retry identity, and UI state. Agent Web owns its server/API/WS protocol, Runtime choice, authentication, native thread identity, persistence, memory, integrations, local-file access, notification service and deployment. Product endpoints and recording/account services must not be embedded in Platform components.
 
 Historical process details are read lazily through the authenticated product projection, including previews with no live Runtime. Reading a completed record never resumes a Codex thread. Editing a user message forwards its existing authorized attachments to the product's Edit/Fork validation.
+
+New Conversation opens a browser-local draft immediately, independently of the history request. Draft model, reasoning effort, permissions, Fast mode, text, favorite and archive state survive reload in the same browser. The authenticated metadata endpoint reads the actual Codex workspace defaults and selectable model catalog without allocating a native thread. First submission creates the backend Session once and applies the chosen execution profile before submitting the Turn. Empty drafts can be archived locally; both local drafts and backend Sessions disappear from Recent when archived and remain accessible through Search and History with Include Archived enabled.
+
+Context reads use token notifications or stored native usage and a reported/configured context window. Missing capacity remains unknown; an unsent draft shows Not Started. Context reads avoid the unrelated account quota/status bundle, and the shared Composer drops older popup results when the Host publishes a newer usage snapshot. Catalog/configuration reads share bounded caches and in-flight requests, including a timeout and short retry after failures.
 
 Session rows supply the same reference contract as Personal Workbench: sidebar drag and `@` search produce removable Composer chips. Agent Web reauthorizes `agent-web + native threadId` against its current account's live or stored Codex history before submission, rejects self/foreign/archived/missing targets, and includes bounded recent public context in the model input. Messages persist the public pointer and hide the input envelope; edit/queue preserve it. Opening a message reference navigates to the target. Released Sessions retain their selected UI identity in the URL so refresh recovers the same draft/reference state.
 
@@ -38,7 +43,7 @@ Existing `server.js` remains the integration point for Runtime lifecycle and pro
 
 ## Build and candidate verification
 
-Agent Web pins Platform v0.33.0, which exports `./session-host` and the shared Session application. A normal install, build and test use the published package:
+Agent Web pins Platform v0.34.0, which exports `./session-host` and the shared Session application. A normal install, build and test use the published package:
 
 ```bash
 npm ci --include=dev
@@ -61,6 +66,10 @@ Ordinary `npm run build:session-app` resolves only public package exports. The b
 For interactive verification, run the same script with `--real`, an absolute isolated `CANDIDATE_PREVIEW_ROOT`, `AGENT_MEMORY_SYSTEM_ROOT` and `AGENT_PLATFORM_CANDIDATE`. It uses the installed Codex binary and a permission-restricted copy of the current user's `auth.json` (override with `AGENT_PREVIEW_AUTH_SOURCE`). Session history, configuration, uploads and product state stay in the preview root. Its local authentication helper is only for a loopback preview, not a deployable authentication service. Use `AGENT_PREVIEW_PORT` to retain a preview port when reloading an idle owned candidate. Synthetic native IDs are unique across preview restarts so saved fixtures do not collide. Stop the owning preview process to close its child server and helper. Shared recording scripts must be available in the preview's `workspace/shared-web` for microphone input.
 
 Use the project-owned `scripts/testing/session-ui.flow.mjs` with `tools/workspace-playwright/pw record` to produce desktop/mobile videos and ordered frames. Browser regressions also cover lazy draft/restart recovery, runtime lease expiry and read-only child previews. Platform owns the shared component and input-state tests; Agent Web retains backend authorization, upload validation, thread, memory, integration and service safety tests.
+
+`scripts/testing/session-draft.flow.mjs` records desktop/mobile draft creation under a delayed history request, actual default/configuration selection, reload recovery, empty-draft archive and archived-history discovery. It asserts that none of these actions creates a backend Session. App Server canaries separately verify that the selected profile reaches the first Turn in both supported kernels.
+
+Finish the selected package's build and full tests before recording browser flows: `pretest` rewrites `public/generated/`, so a simultaneous candidate build or recording can observe a different bundle during the same flow.
 
 `scripts/testing/session-chrome.flow.mjs` verifies the fixed sidebar toggle, contiguous list/detail layout, and account dialog against an existing Session in the isolated real preview. It reads usage without submitting a model Turn and records both desktop and mobile results.
 

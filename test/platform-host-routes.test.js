@@ -61,3 +61,37 @@ test('reading historical process does not allocate a live Session and validates 
  assert.equal(counts().created,0);
  assert.equal((await request('/api/platform/threads/invalid/process/turn-a')).status,400);
 });
+
+test('locally archived live rows are hidden, including historical merges, until archive search is enabled', async t => {
+  const { request, host } = await fixture(t);
+  const live = host.create('.', { title: 'Archived still running' });
+  host.archiveIds = () => new Set([live.sessionId]);
+  host.listCodexSessions = async () => [{ id: live.sessionId, title: live.title }];
+  host.searchSessions = async () => [{ session: { id: live.sessionId, title: live.title } }];
+  assert.deepEqual((await request('/api/platform/sessions')).body.sessions, []);
+  assert.deepEqual((await request('/api/platform/sessions?q=Archived')).body.sessions, []);
+  const result = await request('/api/platform/sessions?q=Archived&archived=1');
+  assert.equal(result.body.sessions.length, 1);
+  assert.equal(result.body.sessions[0].archived, true);
+  assert.equal(result.body.sessions[0].id, live.id);
+});
+
+test('metadata does not create a Session; context uses the narrow read and failed profile setters retry', async t => {
+  const { request, host, counts } = await fixture(t);
+  host.metadata = async cwd => ({ cwd, currentModel: 'gpt-6.1-sol', currentReasoningEffort: 'xhigh' });
+  const metadata = await request('/api/platform/session-metadata?cwd=project');
+  assert.equal(metadata.body.currentReasoningEffort, 'xhigh');
+  assert.equal(counts().created, 0);
+  const live = host.create('.', { title: 'A' });
+  host.status = () => { throw new Error('expensive account bundle must not run'); };
+  host.context = async () => ({ tokenUsage: { contextUsedTokens: 1234, modelContextWindow: 200000 } });
+  assert.equal((await request(`/api/platform/sessions/${live.id}/actions/readContext`)).body.tokenUsage.contextUsedTokens, 1234);
+  let failed = true;
+  host.models = async session => { if (failed) throw new Error('temporary catalog failure'); session.appModel = 'gpt-6.1-sol'; };
+  host.access = value => value === 'full' ? 'full' : 'safe';
+  const payload = { model: 'gpt-6.1-sol', reasoningEffort: 'xhigh', accessMode: 'restricted', serviceTier: 'priority', idempotencyKey: 'profile-operation-a' };
+  assert.equal((await request(`/api/platform/sessions/${live.id}/actions/executionProfile`, payload)).status, 409);
+  failed = false;
+  const result = await request(`/api/platform/sessions/${live.id}/actions/executionProfile`, payload);
+  assert.equal(result.status, 200); assert.equal(live.access, 'safe'); assert.equal(live.appServiceTier, 'priority');
+});

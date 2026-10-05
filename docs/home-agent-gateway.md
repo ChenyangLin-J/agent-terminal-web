@@ -123,3 +123,68 @@ including input from failed turns. A reference-only message supplies no authored
 activity. Isolated Home reply and opening-to-reply integration tests cover both
 legacy and Platform runtimes; the activity regression uses the actual shared
 reference envelope contract.
+
+## Configured personal tasks and native tools
+
+New Home openings pass `taskId: "morning" | "evening"`, an expected integer
+`configRevision`, and `toolContext: {sources, coverage, window?}` alongside the
+existing request/date/period/prompt fields. Task must match period. The catalog
+is the bounded capture produced by Home; it is not a permission to read arbitrary
+paths, URLs, complete vaults or full Session archives. Home record kinds and
+`Life/Records.md`, document IDs `core`/`now`, conversation authors/timestamps,
+bookmark captures and truncation are retained. Search returns bounded excerpts
+and therefore records actual reads; read operations accept catalog IDs and
+bounded character offsets. Coverage is returned on every tool result.
+
+`GET /api/home/agent/personal-config` returns `{revision,tasks,preferences}`.
+`POST` accepts that same shape with the expected current revision; stale saves
+return 409. Only the two known task IDs and registered tools are accepted.
+Preferences use canonical presentation IDs and `required`, `preferred`, or
+`optional`. Required tools must also be allowed on both tasks. Defaults require
+Tibetan, prefer sources and leave Session actions optional. State resides in
+`${statePath}.personal-config.json`, initialized privately and atomically written
+with mode 0600. Writes and compare-and-swap are serialized in this process;
+this does not claim a multi-process writer lock. Corrupt state fails closed.
+The existing protected Home prefix must continue protecting both routes.
+
+Before submission, the gateway durably snapshots the matched configuration and
+captured sources in its existing opening ledger. Stale configuration returns 409
+without creating a thread; replay of an existing identical request still retrieves
+its original snapshot/result. No runtime, connection, queue or provider process
+is added. The existing thread-scoped client passes registered `dynamicTools` to
+`thread/start` and answers `item/tool/call` via `respond`. Shell, network search,
+MCP, Apps and plugins remain disabled. The protocol contract was verified using
+the installed Codex CLI's experimental `generate-json-schema`: function specs
+contain `type`, `name`, `description`, `inputSchema`; calls contain `threadId`,
+`turnId`, `callId`, `tool`, `arguments`; replies contain `success` and
+`contentItems: [{type:"inputText",text}]`. Wire names replace canonical dots with
+underscores. Requests and final events require the exact thread and turn.
+
+A run allows at most 24 calls, 8k argument characters per call, 16k output
+characters per call and 64k output characters total. Catalog limits are 96
+sources, 12k content characters per source, 180k serialized characters total and
+24k metadata characters. Inputs reject arbitrary path/URL arguments. Receipts
+are persisted before acknowledging successful tool calls. Received calls drain
+before final delivery or scoped-client release; unknown/denied calls receive a
+negative reply and fail safely. A timed-out submission remains uncertain and is
+not resubmitted during polling.
+
+New responses expose `task`, `configRevision`, `text`, `reason`, actual-read
+`sourceIds`, `widgets` and bounded receipt metadata alongside original IDs and
+status. Text's schema accepts only text/reason, up to 4096 Unicode characters.
+Widgets originate only from executed presentation receipts and contain no URLs
+or HTML. Session actions need an already-read conversation with a trusted
+`https://agent.chenyanglin.com/?sessionId=...` reference; when none is eligible,
+a call without a source ID reports unavailable. Supplied unknown IDs fail.
+Sources widgets require actual-read IDs; an empty list returns an unavailable module. Tibetan uses a Home-captured `tibetan`
+source's `data: {phrase,meaning,romanization?,href?}`; absent registered content
+produces an explicit unavailable widget. Home resolves all content/links from
+its captured source snapshot. Required preferences need real matching receipts;
+preferred preferences only influence the prompt. Recovery uses only the exact
+original completed turn plus persisted receipts, never model-authored widgets.
+Legacy callers without taskId retain their original 350-character schema,
+nextActions, result shape and no-tool behavior.
+
+Targeted checks: `node --test test/personal-agent-gateway.test.js test/personal-agent-tools.test.js`. Runtime fixtures prove native routing and
+receipts without starting an additional App Server. Live provider execution is
+a separate integration check against the shared App Server's installed version.

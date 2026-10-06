@@ -37,6 +37,7 @@ export default async function ({ page, context, evidence, baseUrl, profile }) {
   await page.goto(baseUrl);
   const first = await send(`前台预览验收 ${profile} ${suffix}`);
   await page.getByRole('link', { name: '查看说明', exact: true }).waitFor();
+  await page.locator('.cwu-memory-sources summary').click();
   await page.getByRole('button', { name: 'Core.md', exact: true }).waitFor();
   await page.getByRole('button', { name: 'Now.md', exact: true }).waitFor();
   assert.equal(await page.locator('.cwu-memory-sources').count(), 1);

@@ -26,8 +26,9 @@ export function createAgentWebExtensions({ product, controller, adapter }) {
 function MemorySources({ message, controller, product }) {
   const entries = memorySourceEntriesForMessage(message, controller.getSnapshot().session);
   if (!entries.length) return null;
-  return <aside className="cwu-memory-sources" aria-label="本轮读取的记忆来源">
-    <span>本轮读取</span>
+  return <details className="cwu-memory-sources">
+    <summary aria-label={`本轮读取的记忆来源，${entries.length} 个`}><span>参考记忆</span><span className="cwu-memory-source-count">· {entries.length}</span><span className="cwu-memory-source-chevron" aria-hidden="true">›</span></summary>
+    <div className="cwu-memory-source-list" aria-label="本轮读取的记忆来源">
     {entries.map((entry, index) => <button
       key={`${entry.path}:${entry.lineStart || ''}:${index}`}
       title={entry.note || entry.path}
@@ -37,7 +38,8 @@ function MemorySources({ message, controller, product }) {
         { name: entry.path.split(/[\\/]/).at(-1) },
       )}
     >{entry.path.split(/[\\/]/).at(-1)}</button>)}
-  </aside>;
+    </div>
+  </details>;
 }
 
 function ProductSettingsMenu({ product, controller, closeList }) {

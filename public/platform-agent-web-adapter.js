@@ -1,6 +1,7 @@
 import { parseSessionReferenceEnvelopes } from '@agent-workbench/platform/session-references';
 import { mergeSessionHostSnapshot } from '@agent-workbench/platform/session-host';
 import { createAgentWebConnection } from './agent-web-connection.js';
+import { platformFileResourceUrl } from './platform-agent-web-resources.js';
 const WS_OPEN = 1;
 const RETRYABLE_ACTIONS = new Set([
   "send", "append", "queue", "respond", "approve", "decline", "stop", "resume", "editFork", "fork",
@@ -561,7 +562,7 @@ function presentationFromAgentWeb(session, items, pendingRequests = []) {
     } else {
       technicalItems.push({ id: String(item.id || `technical-${technicalItems.length}`), title: technicalTitle(item), type: technicalType(type), text: String(item.text || ''), detail: String(item.detail || ''), output: String(item.output || ''), status: item.status || '', turnId, turnKey: turnId,
         disclosure: item.disclosure === 'inline' || (item.type === 'tool' && item.label === '查看图片') ? 'inline' : null,
-        media: item.type === 'tool' && item.label === '查看图片' ? [{ kind: 'image', src: `/api/session-image/${encodeURIComponent(session.id)}/${encodeURIComponent(item.id)}?turnId=${encodeURIComponent(turnId)}`, alt: item.text || '图片' }] : item.media || [] });
+        media: item.type === 'tool' && item.label === '查看图片' ? [{ id: item.id, name: String(item.text || '').split(/[\\/]/).filter(Boolean).at(-1) || '图片', kind: 'image', src: session.id && !String(session.id).startsWith('history:') ? `/api/session-image/${encodeURIComponent(session.id)}/${encodeURIComponent(item.id)}?turnId=${encodeURIComponent(turnId)}` : platformFileResourceUrl(item.text), alt: item.text || '图片' }] : item.media || [] });
     }
   }
   const turnState = session.turnState || {};

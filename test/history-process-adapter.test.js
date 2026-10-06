@@ -8,7 +8,7 @@ import { createSessionHostController } from '@agent-workbench/platform/session-h
 import { registerPlatformSessionRoutes } from '../lib/platform-session-routes.js';
 import { extractSessionConversationFromJsonl } from '../lib/session-preview.js';
 import { extractSessionProcessFromJsonl } from '../lib/session-process.js';
-import { createAgentWebSessionAdapter } from '../public/platform-agent-web-adapter.js';
+import { createAgentWebSessionAdapter, normalizeSnapshot } from '../public/platform-agent-web-adapter.js';
 import { writeHistoryProcessFixture } from '../scripts/testing/history-process-fixture.mjs';
 
 test('disk history uses native process IDs through the actual route, with refresh and pagination', async t => {
@@ -91,4 +91,18 @@ test('disk history uses native process IDs through the actual route, with refres
   const restored = await freshAdapter.readSession('web-restored');
   assert.equal(restored.technicalItems.filter(item => item.type === 'assistant' && item.turnId === fixtures[0].turnIds[0]).length, 1);
   assert.equal(restored.technicalItems.find(item => item.id === 'native-current-progress').status, 'inProgress');
+});
+
+
+test('historical viewed images use authenticated workspace resources without an attached web Session', () => {
+  const image = {id:'old-image',type:'tool',label:'查看图片',text:'/workspace/uploads/image.png',turnId:'old-turn'};
+  for (const session of [{}, {id:'history:thread'}]) {
+    const view=normalizeSnapshot({session,items:[image]});
+    const media=view.technicalItems[0].media[0];
+    assert.equal(media.name,'image.png');
+    assert.equal(media.src,'/api/platform/file-resource?href=%2Fworkspace%2Fuploads%2Fimage.png');
+    assert.doesNotMatch(media.src,/undefined|history%3A/);
+  }
+  const live=normalizeSnapshot({session:{id:'web-live'},items:[image]});
+  assert.equal(live.technicalItems[0].media[0].src,'/api/session-image/web-live/old-image?turnId=old-turn');
 });

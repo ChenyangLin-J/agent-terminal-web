@@ -44,7 +44,7 @@ if (process.argv.includes('app-server')) {
     if (message.method === 'initialize') result = { userAgent: 'fake' };
     if (message.method === 'thread/read') result = { thread: {
       id: message.params.threadId, status: { type: entry.active ? 'active' : 'idle' },
-      turns: [{ id: entry.turnId || 'turn-1', status: entry.status || 'completed' }],
+      turns: entry.turns || [{ id: entry.turnId || 'turn-1', status: entry.status || 'completed' }],
     } };
     if (message.method === 'thread/list') result = { data: [], nextCursor: null };
     if (message.method === 'thread/start') result = { thread: { id: process.env.TEST_START_THREAD, turns: [] } };
@@ -235,26 +235,48 @@ for (const runtimeKernel of ["legacy", "all"]) {
   });
 }
 
-test("a real submitted extraction survives follow-ups and archives only after the latest completion", async (t) => {
-  const h = await harness(t);
-  const client = await h.connect();
-  await h.state({ [ids[6]]: { turnId: "turn-1" } });
-  await submit(client, "https://xhslink.cn/demo");
-  await h.waitForCompletion(client, "turn-1");
-  await delay(80);
-  await h.state({ [ids[6]]: { turnId: "turn-2", completionDelay: 600 } });
-  client.ws.send(JSON.stringify({ type: "submit", data: "再检查一下第三段" }));
-  await client.next((message) => message.type === "status" &&
-    message.payload.turnState?.turnId === "turn-2" && message.payload.turnState.active);
-  await delay(idleMs + 100);
-  assert.equal((await h.archives())[ids[6]], undefined, h.output());
-  await h.waitForCompletion(client, "turn-2");
-  await delay(100);
-  assert.equal((await h.archives())[ids[6]], undefined);
-  await waitFor(async () => (await h.archives())[ids[6]]);
-  const saved = new MediaSessionAutoArchiveStore(h.storeFile).get({ hostId: "personal", sessionId: ids[6] });
-  assert.equal(saved.kind, "xiaohongshu");
-  assert.equal(saved.lastCompletedTurnId, "turn-2");
+for (const runtimeKernel of ["legacy", "all"]) {
+  test(`a submitted ${runtimeKernel} extraction with follow-ups never archives after completion`, async (t) => {
+    const h = await harness(t, async () => {}, { runtimeKernel });
+    const client = await h.connect();
+    await h.state({ [ids[6]]: { turnId: "turn-1" } });
+    await submit(client, "https://xhslink.cn/demo");
+    await h.waitForCompletion(client, "turn-1");
+    await delay(80);
+    await h.state({ [ids[6]]: { turnId: "turn-2", completionDelay: 600 } });
+    client.ws.send(JSON.stringify({ type: "submit", data: "再检查一下第三段" }));
+    await client.next((message) => message.type === "status" &&
+      message.payload.turnState?.turnId === "turn-2" && message.payload.turnState.active);
+    await delay(idleMs + 100);
+    assert.equal((await h.archives())[ids[6]], undefined, h.output());
+    await h.waitForCompletion(client, "turn-2");
+    await delay(idleMs + 100);
+    assert.equal((await h.archives())[ids[6]], undefined);
+    const saved = new MediaSessionAutoArchiveStore(h.storeFile).get({ hostId: "personal", sessionId: ids[6] });
+    assert.equal(saved.kind, "xiaohongshu");
+    assert.equal(saved.hasFollowUp, true);
+    assert.equal(saved.completedAt, null);
+  });
+}
+
+test("pre-upgrade records lose eligibility when native history has follow-up turns or inputs", async (t) => {
+  const h = await harness(t, async ({ store, nativeStateFile }) => {
+    track(store, ids[0]);
+    track(store, ids[1]);
+    await writeFile(nativeStateFile, JSON.stringify({
+      [ids[0]]: { turns: [
+        { id: "initial-turn", status: "completed" },
+        { id: "turn-1", status: "completed" },
+      ] },
+      [ids[1]]: { turns: [{ id: "turn-1", status: "completed", items: [
+        { type: "userMessage" }, { type: "userMessage" },
+      ] }] },
+    }));
+  });
+  await waitFor(() => ids.slice(0, 2).every((sessionId) =>
+    new MediaSessionAutoArchiveStore(h.storeFile).get({ hostId: "personal", sessionId }).hasFollowUp));
+  assert.deepEqual(await h.archives(), {}, h.output());
+  assert.equal((await h.calls()).some((call) => call.method === "thread/archive"), false);
 });
 
 test("a new prompt during the native archive RPC restores the thread before submitting", async (t) => {
@@ -270,7 +292,7 @@ test("a new prompt during the native archive RPC restores the thread before subm
   assert.equal(client.ws.readyState, WebSocket.OPEN);
   await h.waitForCompletion(client, "turn-2");
   await delay(idleMs + 100);
-  assert.ok((await h.archives())[ids[6]]);
+  assert.equal((await h.archives())[ids[6]], undefined);
 });
 
 test("a failed archive response still restores a thread when a follow-up arrived during the request", async (t) => {
@@ -307,7 +329,30 @@ test("existing completed extraction histories are classified from their original
   assert.equal(new MediaSessionAutoArchiveStore(h.storeFile).get({ hostId: "personal", sessionId: ids[0] }).kind, "douyin");
 });
 
-test("App Server failures remain available and a successful follow-up starts the deadline", async (t) => {
+test("historical extraction classification cannot rearm a conversation with later communication", async (t) => {
+  const h = await harness(t, async ({ codexHome, nativeStateFile }) => {
+    const completedAt = Date.now() - 5000;
+    const directory = path.join(codexHome, "sessions", "2026", "10", "04");
+    await mkdir(directory, { recursive: true });
+    await writeFile(path.join(directory, "rollout-2026-10-04T01-00-00-" + ids[0] + ".jsonl"), [
+      JSON.stringify({ type: "session_meta", payload: { id: ids[0], cwd: ".", timestamp: new Date(completedAt - 1000).toISOString() } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: "https://xhslink.cn/history" } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: "这本书有什么值得借鉴？" } }),
+    ].join("\n") + "\n");
+    await writeFile(path.join(codexHome, "agent-session-settings.json"), JSON.stringify({
+      [ids[0]]: { access: "safe", lastCompletedTurnId: "turn-2", lastCompletedAt: new Date(completedAt).toISOString() },
+    }));
+    await writeFile(nativeStateFile, JSON.stringify({ [ids[0]]: { turns: [
+      { id: "turn-1", status: "completed" }, { id: "turn-2", status: "completed" },
+    ] } }));
+  });
+  await waitFor(() => new MediaSessionAutoArchiveStore(h.storeFile)
+    .get({ hostId: "personal", sessionId: ids[0] })?.hasFollowUp);
+  assert.deepEqual(await h.archives(), {}, h.output());
+  assert.equal((await h.calls()).some((call) => call.method === "thread/archive"), false);
+});
+
+test("App Server failures and a successful follow-up remain available", async (t) => {
   const h = await harness(t);
   await h.state({ [ids[6]]: { turnId: "failed-turn", status: "failed" } });
   const client = await h.connect();
@@ -319,7 +364,9 @@ test("App Server failures remain available and a successful follow-up starts the
   assert.equal(new MediaSessionAutoArchiveStore(h.storeFile).get({ hostId: "personal", sessionId: ids[6] }).completedAt, null);
   await h.state({ [ids[6]]: { turnId: "successful-turn" } });
   await submit(client, "重试提取");
-  await waitFor(async () => (await h.archives())[ids[6]]);
+  await h.waitForCompletion(client, "successful-turn");
+  await delay(idleMs + 100);
+  assert.equal((await h.archives())[ids[6]], undefined, h.output());
 });
 
 test("App Server runtime reclamation does not discard an extraction's archive deadline", async (t) => {

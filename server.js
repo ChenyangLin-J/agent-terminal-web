@@ -3791,7 +3791,7 @@ function flushMediaSessionPrompts(session) {
 function rememberMediaSessionCompletion(session, turnId, { successful = true } = {}) {
   if (!isValidSessionId(session.sessionId) || !turnId) return;
   flushMediaSessionPrompts(session);
-  // A queued follow-up must finish before the inactivity window can begin.
+  // Follow-up conversations permanently cancel automatic archive eligibility.
   mediaSessionAutoArchive.recordCompletion({
     hostId: PERSONAL_AGENT_HOST.id,
     sessionId: session.sessionId,
@@ -3858,6 +3858,14 @@ async function autoArchiveMediaSession(record) {
   }
   await withSharedAppServer(async (client) => {
     const thread = await client.readThread({ threadId: record.sessionId, includeTurns: true });
+    // Covers pre-upgrade records and follow-ups submitted outside Agent Web.
+    const turns = thread?.turns || [];
+    const userMessageCount = turns.reduce((count, turn) => count +
+      (turn.items || []).filter((item) => item.type === "userMessage").length, 0);
+    if (turns.length > 1 || userMessageCount > 1) {
+      mediaSessionAutoArchive.recordFollowUp(record);
+      return;
+    }
     const latestTurn = thread?.turns?.at(-1);
     // Also protects against conversations submitted outside Agent Web.
     if (!thread || thread.status?.type === "active" || activeTurnFromThread(thread) ||

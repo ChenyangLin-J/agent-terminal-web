@@ -87,7 +87,7 @@ test("tracks only a qualifying first prompt and becomes due at the two-hour boun
   }]);
 });
 
-test("a follow-up clears the deadline and a later completion starts a fresh idle period", async (t) => {
+test("a follow-up permanently cancels eligibility across completion and restart", async (t) => {
   const { filePath } = await temporaryStore(t);
   const store = new MediaSessionAutoArchiveStore(filePath, { idleMs: 100 });
   track(store, { now: 1_000 });
@@ -115,7 +115,12 @@ test("a follow-up clears the deadline and a later completion starts a fresh idle
     now: 2_000,
   });
   assert.equal(store.dueRecords(2_099).length, 0);
-  assert.equal(store.dueRecords(2_100).length, 1);
+  assert.equal(store.dueRecords(2_100).length, 0);
+  const restarted = new MediaSessionAutoArchiveStore(filePath, { idleMs: 100 });
+  assert.equal(restarted.get({ hostId: "personal", sessionId: firstSessionId }).hasFollowUp, true);
+  track(restarted, { now: 3_000 });
+  restarted.recordCompletion({ hostId: "personal", sessionId: firstSessionId, turnId: "turn-3", now: 3_100 });
+  assert.equal(restarted.dueRecords(99_999).length, 0);
 });
 
 test("failed, interrupted, cancelled, and duplicate completions cannot create a new deadline", async (t) => {

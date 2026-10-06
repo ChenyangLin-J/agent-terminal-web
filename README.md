@@ -148,16 +148,18 @@ Douyin and Xiaohongshu extraction Sessions archive automatically after a complet
 turn has had no follow-up conversation for two hours. A dedicated Session is
 identified from its first prompt: a media link/share, an extraction request, or
 the `douyin-transcript` / `xiaohongshu-transcript` skill. Favorites and Sessions
-with active or interrupted work remain available. A follow-up clears the
-deadline; its successful completion starts a new two-hour window. Reading the
-result or reopening the page does not reset the window.
+with active or interrupted work remain available. Any follow-up permanently
+cancels automatic archive eligibility, including after completion or a service
+restart. Reading the result or reopening the page does not reset the window.
 
 Auto-archive timing is stored privately in
 `~/.codex/agent-session-auto-archive.json`, so it survives runtime reclamation and
 service restarts. Existing local extraction Sessions with a recorded completion
 are also eligible. Before archiving, Agent Web verifies the latest native turn
-is still that completed turn; failed archive requests are retried. The check runs
-every minute and preserves the full conversation for later restoration.
+is still that completed turn and contains no follow-up conversation, including
+older histories and messages submitted outside Agent Web; failed archive requests
+are retried. The check runs every minute and preserves the full conversation for
+later restoration.
 `AGENT_MEDIA_SESSION_AUTO_ARCHIVE_IDLE_MS` and
 `AGENT_MEDIA_SESSION_AUTO_ARCHIVE_CHECK_MS` override the two-hour window and
 one-minute check interval for isolated tests or custom deployments.

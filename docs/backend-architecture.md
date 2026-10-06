@@ -100,7 +100,7 @@ translation, thread isolation, product projections, persistence and side effects
 `agent-session-commands.test.js`, `agent-web-connection.test.js` and the service
 integration fixtures exercise those boundaries without inspecting function layout.
 
-The formal dependency is Platform v0.35.0, including the `describeRuntime()` and
+The formal dependency is Platform v0.37.0, including the `describeRuntime()` and
 release/lease contracts used by this adapter. Normal builds and tests use that
 immutable published package. For an unreleased paired build, set
 `AGENT_PLATFORM_CANDIDATE` to the Platform worktree for both the browser build and
@@ -112,3 +112,9 @@ a normal sibling checkout.
 Full test runs that launch many local fixture servers can use
 `npm test -- --test-concurrency=4` to bound process load. Finish tests/builds before
 recording a preview so generated assets are stable.
+
+### Catalogue events and local file previews
+
+`lib/platform-session-events.js` narrows status broadcasts to catalogue metadata and exposes authenticated bounded SSE replay. The browser applies these updates without subscribing to every Runtime. `public/platform-agent-web-catalog.js` owns visibility, reconnect and metadata-only reconciliation; the adapter preserves newer event rows against delayed HTTP snapshots and rejects earlier revisions or completed Turn IDs. Restart identifiers reset process-local ordering.
+
+`lib/platform-file-preview.js` resolves authenticated local files within the real workspace root and returns shared Platform preview descriptors and raw media. Symlinks outside the root are rejected. Text size is checked before reading; active HTML never becomes an unsandboxed same-origin raw document. Preview state and latest-request cancellation belong to the product controller.

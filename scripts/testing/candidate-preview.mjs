@@ -5,11 +5,23 @@ import path from 'node:path';
 import os from 'node:os';
 const root=process.env.CANDIDATE_PREVIEW_ROOT;
 const realBackend=process.argv.includes('--real');
+const experience=process.argv.includes('--experience');
 const restoreState=process.argv.includes('--restore-state');
 const recovery=process.argv.includes('--recovery')||restoreState;
 if(realBackend&&recovery) throw new Error('Recovery fixtures require the synthetic backend.');
 if(!root||!path.isAbsolute(root))throw new Error('Set an absolute isolated CANDIDATE_PREVIEW_ROOT.');
 for(const dir of ['workspace','codex','integrations']) await mkdir(path.join(root,dir),{recursive:true,mode:0o700});
+const memoryDirectory=path.join(root,'workspace','obsidian','MainVault','System','Memory');
+const previewDirectory=path.join(root,'workspace','preview-files');
+if(experience){
+ await mkdir(memoryDirectory,{recursive:true}); await mkdir(previewDirectory,{recursive:true});
+ await writeFile(path.join(memoryDirectory,'Core.md'),'# Core\n\n合成验收记忆：回复使用中文，文件在站内预览。\n');
+ await writeFile(path.join(memoryDirectory,'Now.md'),'# Now\n\n当前正在验收会话体验和后台状态同步。\n');
+ await writeFile(path.join(previewDirectory,'note.md'),'# 会话体验验收\n\n这个文件通过共享预览打开。\n\n![验收图片](pixel.png)\n');
+ await writeFile(path.join(previewDirectory,'pixel.png'),Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAoAAAAFACAIAAACjr1pdAAAGpUlEQVR42u3VQQ3AIBBFQfTUEA56wEkNYKAKqqQnPCAAAVVBCZtJRsEmf18avQEAP0tOAAACDAACDAAIMAAIMAAgwAAgwACAAAOAAAMAAgwAAgwAAgwACDAACDAAIMAAIMAAgAADgAADAAIMAAIMAAIMAAgwAAgwACDAACDAAIAAA4AAAwACDAACDAACDAAIMAAIMACwSYCPcgKsNem/vTUTlQADCDACLMCAAAuwAAswgAAjwAIMCDACLMAAAowAAwgwAizAgAALMAIMIMAIsAADAizACDCAACPAAgwIsAALsAADCDACLMCAACPAAgwgwAiw5QMCjAALMCDAAowAAwgwAizAgAALMAIMIMAIsAADAizAAizAAAKMAAswIMAIsAADCDACLMCAACPAAgwIsAAjwAACjAALMCDAAowAAwgwAizAgAALsAALMIAAI8ACDAgwAizAAAKMAAswIMAIsAADAizACDCAACPAAgwIsAAjwAACjAALMCDAAizAAgwgwAiwAAMCjAALMIAAI8ACDAgwAizAgAALMAIMIMAIsAADAizACDCAACPAAgwIsAALsAADCDACLMCAAAuVAAswgAAjwAIMCDACLMCAAAswAgwgwAiwAAMCLMAIMIAAI8ACDAiwAAuwAAMIMAIswIAAC7AACzCAACPAAgwIMAIswAACjAADCDACLMCAAAswAgwgwAiwAAMCLMACLMAAAowACzAgwAIswAIMIMAIsAADAowACzCAACPAAAKMAAswIMACjAADCDACLMCAAAuwAAswgAAjwAIMCLAAC7AAAwgwAizAgAAjwAIMIMAIMIAAI8ACDAiwACPAAAKMAAswIMACLMACDCDACLAAAwIswAIswAACjAALMCDACLAAAwgwAgwgwAiwAAMCLMAIMIAAI8ACDAiwACPAAAKMAAswIMACLMACDCDACLAAAwKMAAswgAAjwMYPCDACLMCAAAswAgwgwAiwAAMCLMAIMIAAI8ACDAiwAAuwAAMIMAIswIAAI8ACDCDACLAAAwKMAAswIMACjAADCDACLMCAAAswAgwgwAiwAAMCDAIMIMAIsAADAgwCDCDACLAAAwIMAgwIMAgwgAAjwAIMCDAIMIAAI8ACDAgwCDCAACPAAgwIMAgwgAAjwAIMCDAIMCDAIMAAAowACzAgwCDAAAKMAAswIMAgwAACjAALMCDAIMAAAowACzAgwCDAgACDAAMIMAIswIAAgwADCDACLMCAAIMAAwgwAizAgACDAAMIMAIswIAAgwADTPpv13MTlQADCDACLMCAAAuwAAswgAAjwAIMCDACLMAAAowAAwgwAizAgAALMAIMIMAIsAADAizACDCAACPAAgwIsAALsAADCDACLMCAACPAAgwgwAiw5QMCjAALMCDAAowAAwgwAizAgAALMAIMIMAIsAADAizAAizAAAKMAAswIMAIsAADCDACLMCAACPAAgwIsAAjwAACjAALMCDAAowAAwgwAizAgAALsAALMIAAI8ACDAgwAizAAAKMAAswIMAIsAADAizACDCAACPAAgwIsAAjwAACjAALMCDAAizAAgwgwAiwAAMCjAALMIAAI8ACDAgwAizAgAALMAIMIMAIsAADAizACDCAACPAAgwIsAALsAADCDACLMCAAAuVAAswgAAjwAIMCDACLMCAAAswAgwgwAiwAAMCLMAIMIAAI8ACDAiwAAuwAAMIMAIswIAAC7AACzCAACPAAgwIMAIswAACjAADCDACLMCAAAswAgwgwAiwAAMCLMACLMAAAowACzAgwAIswAIMIMAIsAADAowACzCAACPAAAKMAAswIMACjAADCDACLMCAAAuwAAswgAAjwAIMCLAAC7AAAwgwAizAgAAjwAIMIMAIMIAAI8ACDAiwACPAAAKMAAswIMACLMACDCDACLAAAwIswAIswAACjAALMCDACLAAAwgwAgwgwAiwAAMCLMAIMIAAI8ACDAiwACPAAAKMAAswIMACLMACDCDACLAAAwKMAAswgAAjwMYPCDACLMCAAAswAgwgwAiwAAMCLMAIMIAAI8ACDAiwAAuwAAMIMAIswIAAI8ACDCDACLAAAwKMAAswIMACjAADCDACLMCAAAswkQIMAAgwAAgwAAgwACDAACDAAIAAA4AAAwACDAACDAAIMAAIMAAIMAAgwAAgwACAAAOAAAMAAgwAAgwACDAACDAACDAAIMAAIMAAgAADgAADAAIMAAIMAAgwAAgwAAgwACDAABDfBx/SuGp3RNBlAAAAAElFTkSuQmCC','base64'));
+ await writeFile(path.join(previewDirectory,'archive.bin'),Buffer.from([0,1,255,128]));
+}
+const experienceAnswer=experience?'已完成会话体验验收。\n\n[查看说明]('+path.join(previewDirectory,'note.md')+') · [查看图片]('+path.join(previewDirectory,'pixel.png')+') · [查看文件]('+path.join(previewDirectory,'archive.bin')+')':null;
 const recoveryThreads = {};
 if(recovery){
  const records={};
@@ -53,14 +65,15 @@ setTimeout(()=>send({method:'thread/tokenUsage/updated',params:{threadId,turnId:
 setTimeout(()=>send({method:'item/completed',params:{threadId,turnId:id,item:{id:'user-'+id,type:'userMessage',content:p.input||[]}}}),30);
 setTimeout(()=>send({method:'item/completed',params:{threadId,turnId:id,item:{id:'comment-'+id,type:'agentMessage',phase:'commentary',text:'正在检查附件预览和输入布局。'}}}),250);
 setTimeout(()=>send({method:'item/completed',params:{threadId,turnId:id,item:{id:'cmd-'+id,type:'commandExecution',command:'node inspect.js',status:'completed',aggregatedOutput:Array.from({length:90},(_,i)=>'输出 '+(i+1)+': 合成验收数据').join('\\n')}}}),550);
-setTimeout(()=>{send({method:'item/completed',params:{threadId,turnId:id,item:{id:'final-'+id,type:'agentMessage',phase:'final_answer',text:'已检查布局。\\n\\n'+Array.from({length:25},(_,i)=>'第 '+(i+1)+' 段：这是完整展开的最终回复，用于确认正文没有内部滚动条。').join('\\n\\n')}}});send({method:'turn/completed',params:{threadId,turn:{id,status:'completed'}}});},7500);
+if(${experience})setTimeout(()=>send({method:'item/completed',params:{threadId,turnId:id,item:{id:'image-'+id,type:'imageView',path:${JSON.stringify(path.join(root,'workspace','preview-files','pixel.png'))}}}}),650);
+setTimeout(()=>{send({method:'item/completed',params:{threadId,turnId:id,item:{id:'final-'+id,type:'agentMessage',phase:'final_answer',text:${JSON.stringify(experienceAnswer)}||'已检查布局。\\n\\n'+Array.from({length:25},(_,i)=>'第 '+(i+1)+' 段：这是完整展开的最终回复，用于确认正文没有内部滚动条。').join('\\n\\n')}}});send({method:'turn/completed',params:{threadId,turn:{id,status:'completed'}}});},7500);
 }else if(m.id!==undefined)send({id:m.id,result:{}});
 });
 `);await chmod(fake,0o755);
 }
 const auth=http.createServer((_req,res)=>{res.writeHead(200,{'content-type':'application/json'});res.end('{"authenticated":true}');});
 await new Promise(resolve=>auth.listen(0,'127.0.0.1',resolve));
-const child=spawn(process.execPath,['server.js'],{cwd:path.resolve(import.meta.dirname,'../..'),env:{...process.env,HOST:'127.0.0.1',PORT:process.env.AGENT_PREVIEW_PORT||'0',WORKSPACE_ROOT:path.join(root,'workspace'),CODEX_HOME:path.join(root,'codex'),AGENT_MEMORY_SYSTEM_ROOT:process.env.AGENT_MEMORY_SYSTEM_ROOT,AGENT_INTEGRATIONS_DIR:path.join(root,'integrations'),AGENT_SESSION_FAVORITES_FILE:path.join(root,'favorites.json'),AGENT_SESSION_SHARES_FILE:path.join(root,'shares.json'),CODEX_UPDATE_NOTICES_FILE:path.join(root,'notices.json'),PRIVATE_AUTH_VERIFY_URL:'http://127.0.0.1:'+auth.address().port,CODEX_APP_SERVER_COMMAND:realBackend?(process.env.CODEX_APP_SERVER_COMMAND||'codex'):fake,AGENT_NATIVE_THREAD_CATALOG:realBackend?'1':'0',AGENT_RUNTIME_KERNEL:'legacy',NODE_ENV:'test'},stdio:['ignore','pipe','pipe']});
+const child=spawn(process.execPath,['server.js'],{cwd:path.resolve(import.meta.dirname,'../..'),env:{...process.env,HOST:'127.0.0.1',PORT:process.env.AGENT_PREVIEW_PORT||'0',WORKSPACE_ROOT:path.join(root,'workspace'),CODEX_HOME:path.join(root,'codex'),AGENT_MEMORY_SYSTEM_ROOT:process.env.AGENT_MEMORY_SYSTEM_ROOT,AGENT_INTEGRATIONS_DIR:path.join(root,'integrations'),AGENT_SESSION_FAVORITES_FILE:path.join(root,'favorites.json'),AGENT_SESSION_SHARES_FILE:path.join(root,'shares.json'),CODEX_UPDATE_NOTICES_FILE:path.join(root,'notices.json'),PRIVATE_AUTH_VERIFY_URL:'http://127.0.0.1:'+auth.address().port,CODEX_APP_SERVER_COMMAND:realBackend?(process.env.CODEX_APP_SERVER_COMMAND||'codex'):fake,AGENT_NATIVE_THREAD_CATALOG:realBackend?'1':'0',AGENT_PLATFORM_KERNEL:experience?'new':process.env.AGENT_PLATFORM_KERNEL,AGENT_RUNTIME_KERNEL:'legacy',NODE_ENV:'test'},stdio:['ignore','pipe','pipe']});
 child.stdout.pipe(process.stdout);child.stderr.pipe(process.stderr);
 child.on('exit',code=>{auth.close();process.exit(code||0);});
 for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>child.kill(signal));

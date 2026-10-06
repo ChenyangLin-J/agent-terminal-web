@@ -68,6 +68,47 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
       return { ...result, sessions: values };
     },
 
+    applyCatalogEvent(current, event) {
+      const incoming = normalizeSession(event?.summary || event?.payload || {});
+      const id = catalogIdentity(current, incoming, targets);
+      if (!id) return current;
+      const existing = current.find((item) => item.id === id);
+      if (!catalogEventIsNewer(existing, incoming, event)) return current;
+      summaries.set(id, { ...incoming, id });
+      return sortSessionSummaries(current.map((item) => item.id === id ? { ...item, ...incoming, id } : item));
+    },
+
+    async reconcileCatalog(current = [], { signal, getCurrent = () => current } = {}) {
+      const wanted = new Set(current.filter((item) => !item.isDraft).map((item) => item.threadId || item.sessionId).filter(Boolean));
+      if (!wanted.size) return current;
+      const found = new Map();
+      let cursor = null;
+      do {
+        const params = new URLSearchParams({ archived: '1' });
+        if (cursor) params.set('cursor', cursor);
+        const page = await json(`/api/platform/sessions?${params}`, { signal });
+        for (const raw of page.sessions || []) {
+          const value = normalizeSession(raw);
+          const threadId = value.threadId || value.sessionId;
+          if (wanted.has(threadId)) found.set(threadId, value);
+        }
+        cursor = page.nextCursor || null;
+      } while (cursor && found.size < wanted.size);
+      const latest = getCurrent();
+      const baseline = new Map(current.map((item) => [item.id, catalogVersion(item)]));
+      const reconciled = latest.map((item) => {
+        const incoming = found.get(item.threadId || item.sessionId);
+        if (!incoming) return item;
+        // A status event received during this read is newer than the catalogue
+        // snapshot, even when the HTTP response resolves afterwards.
+        if (baseline.has(item.id) && baseline.get(item.id) !== catalogVersion(item)) return item;
+        const next = { ...item, ...incoming, id: item.id, sessionRevision: incoming.sessionRevision };
+        summaries.set(item.id, next);
+        return next;
+      });
+      return sortSessionSummaries(reconciled);
+    },
+
     async searchSessionReferences(id, query) {
       const result = await adapter.listSessions({ query });
       const source = previews.get(id)?.threadId || summaries.get(id)?.threadId;
@@ -509,6 +550,8 @@ function presentationFromAgentWeb(session, items, pendingRequests = []) {
       messages.push({
         id: String(item.id || `${type}-${messages.length}`),
         role: type === 'user' ? 'user' : 'assistant',
+        phase: item.phase || '',
+        memoryCitation: item.memoryCitation || null,
         content: type === 'user' ? parseSessionReferenceEnvelopes(item.text).text : String(item.text || ''),
         references: item.references || (type === 'user' ? parseSessionReferenceEnvelopes(item.text).references : []), turnId, turnKey: turnId,
         turnStatus: String(item.turnStatus || ''),
@@ -517,6 +560,7 @@ function presentationFromAgentWeb(session, items, pendingRequests = []) {
       });
     } else {
       technicalItems.push({ id: String(item.id || `technical-${technicalItems.length}`), title: technicalTitle(item), type: technicalType(type), text: String(item.text || ''), detail: String(item.detail || ''), output: String(item.output || ''), status: item.status || '', turnId, turnKey: turnId,
+        disclosure: item.disclosure === 'inline' || (item.type === 'tool' && item.label === '查看图片') ? 'inline' : null,
         media: item.type === 'tool' && item.label === '查看图片' ? [{ kind: 'image', src: `/api/session-image/${encodeURIComponent(session.id)}/${encodeURIComponent(item.id)}?turnId=${encodeURIComponent(turnId)}`, alt: item.text || '图片' }] : item.media || [] });
     }
   }
@@ -598,8 +642,44 @@ function normalizeSession(session = {}) {
     title: session.title || "New Codex session",
     contextLabel: '',
     updatedAt: session.lastActivityAt || session.updatedAt || session.startedAt,
-    status: session.released ? 'released' : session.pendingServerRequestCount ? 'waiting' : session.turnState?.active ? "running" : session.turnState?.interrupted ? "interrupted" : session.resultState === 'unread' || session.hasUnreadResult ? 'unread' : "idle",
+    status: session.pendingServerRequestCount ? 'waiting' : session.turnState?.active ? "running" : session.turnState?.interrupted ? "interrupted" : session.resultState === 'unread' || session.hasUnreadResult ? 'unread' : "idle",
   };
+}
+
+function catalogIdentity(current, incoming, targets) {
+  const targetAlias = [...targets].find(([, target]) => target === incoming.id)?.[0];
+  if (targetAlias && current.some((item) => item.id === targetAlias)) return targetAlias;
+  if (current.some((item) => item.id === incoming.id)) return incoming.id;
+  const threadId = incoming.threadId || incoming.sessionId;
+  return current.find((item) => threadId && (item.threadId === threadId || item.sessionId === threadId))?.id || null;
+}
+
+function catalogEventIsNewer(current, incoming, event) {
+  if (!current) return false;
+  // sessionRevision is the ordering domain for status broadcasts. outputRevision
+  // counts terminal output bytes/events and must never be compared with it.
+  const previousRevision = Number(current.sessionRevision ?? -1);
+  const incomingRevision = Number(event?.revision ?? incoming.sessionRevision ?? -1);
+  if (previousRevision >= 0 && incomingRevision >= 0) return incomingRevision > previousRevision;
+  const previousTurnId = String(current.turnState?.turnId || '');
+  const incomingTurnId = String(incoming.turnState?.turnId || event?.turnId || '');
+  if (current.status === 'running' && incoming.status !== 'running' && previousTurnId && incomingTurnId && previousTurnId !== incomingTurnId) return false;
+  return Date.parse(incoming.updatedAt || 0) >= Date.parse(current.updatedAt || 0);
+}
+
+function sortSessionSummaries(values) {
+  return [...values].sort((left, right) => (Date.parse(right.updatedAt || 0) || 0) - (Date.parse(left.updatedAt || 0) || 0));
+}
+
+function catalogVersion(value = {}) {
+  return JSON.stringify([
+    value.sessionRevision ?? null,
+    value.status || '',
+    value.updatedAt || '',
+    value.turnState?.turnId || '',
+    Boolean(value.turnState?.active),
+    Boolean(value.hasUnreadResult),
+  ]);
 }
 
 async function json(url, options = {}) {

@@ -4,6 +4,8 @@ import { createAgentSessionCommandHandler } from './lib/agent-session-commands.j
 import { acceptTrackedTurnCompletion, completeTrackedTurn, turnRequirement, trimTrackedRequirements, restoreTurnState, interruptedTurnStateAfterProcessLoss, publicTurnState } from './lib/agent-turn-projection.js';
 import { createSessionReferenceEnvelopeInput, normalizeSessionReferences, parseSessionReferenceEnvelopes, requireReferences, resolveAgentWebReferences, sessionReferenceKey } from './lib/session-references.js';
 import { registerPlatformSessionRoutes } from './lib/platform-session-routes.js';
+import { createPlatformSessionEvents } from './lib/platform-session-events.js';
+import { registerPlatformFilePreviewRoutes } from './lib/platform-file-preview.js';
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
@@ -286,6 +288,7 @@ server.prependListener("upgrade", (req) => {
   logAgentEvent("ws-upgrade-received", req.agentWebUpgradeLogFields);
 });
 const sessions = new Map();
+const platformSessionEvents = createPlatformSessionEvents();
 const webSessionState = createSyncObjectStateStore({
   filePath: AGENT_WEB_SESSIONS_FILE,
   label: "Agent Web sessions",
@@ -648,7 +651,9 @@ app.get("/open/local", async (req, res) => {
   }
 });
 
+registerPlatformFilePreviewRoutes(app, { workspaceRoot: WORKSPACE_ROOT, isAuthenticated });
 app.use("/api", requireAuth);
+platformSessionEvents.register(app);
 
 app.put(
   "/api/local-markdown",
@@ -8374,7 +8379,10 @@ function broadcast(session, type, payload) {
     payload = { ...payload, sessionRevision: session.uiRevision };
   }
   for (const client of session.clients) send(client, type, payload);
-  if (type === "status") queueSessionControlEvent(session);
+  if (type === "status") {
+    platformSessionEvents.broadcast(payload);
+    queueSessionControlEvent(session);
+  }
 }
 
 function queueSessionControlEvent(session) {

@@ -20,7 +20,7 @@ Before every App Server turn, Agent Web injects all confirmed, non-sensitive glo
 
 Sensitive memories are injected only when the current topic is relevant. App Server uses `additionalContext`, so memory does not become visible user prompt text. Terminal sessions receive the same context once at session startup through `developer_instructions`; live per-turn routing and manual selection are available in App Server sessions.
 
-The current user message always wins over stored memory. Answers show a citation for the exact memory entries injected into that turn.
+The current user message always wins over stored memory. Final answers show “本轮读取” buttons for the exact memory entries recorded in that Turn’s `memoryCitation`, including Core, Now and any relevant topic documents. The shared in-page preview opens these files through the authenticated workspace boundary. Historical answers with no recorded citation show no inferred sources. This presentation does not change per-Turn `additionalContext` injection or the memory routing policy.
 
 ## Write policy
 

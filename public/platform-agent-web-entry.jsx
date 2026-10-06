@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import { createSessionHostController } from "@agent-workbench/platform/session-host";
 import { SessionApplication } from "@agent-workbench/platform/ui";
@@ -9,6 +9,7 @@ import { localFileUrl, normalizeUploadedAttachment, uploadAgentWebAttachments } 
 import { createAgentWebProductController } from "./platform-agent-web-product-controller.js";
 import { createAgentWebExtensions } from "./platform-agent-web-product-extensions.jsx";
 import { agentWebNotificationTarget } from './platform-agent-web-notifications.js';
+import { watchAgentWebCatalog } from './platform-agent-web-catalog.js';
 
 const mount = document.querySelector("#platform-session-application");
 
@@ -34,10 +35,12 @@ const controller = createSessionHostController({
 });
 
 const execute = (action, payload) => controller.execute(action, payload);
+const stopCatalogWatch = watchAgentWebCatalog({ controller, adapter });
 if (params.get('new') === '1' && !params.get('draftId')) void controller.execute('create', { cwd: params.get('cwd') || '.', title: params.get('title') || '新对话', access: params.get('access') === 'safe' ? 'safe' : 'full' }).catch(() => {});
 const extensions = createAgentWebExtensions({ product, controller, adapter });
-const detail = (state) => state.session ? {
+const detail = (state, documentPreview) => state.session ? {
   session: state.session,
+  documentPreview,
   compactComposer: true,
   technicalDetailsPresentation: 'progressive',
   labels: { composerPlaceholder: state.session.readOnly ? '子 Agent 预览为只读' : '输入问题……' },
@@ -68,16 +71,24 @@ const detail = (state) => state.session ? {
     onCompact: () => execute('compact'),
     onUploadAttachments: uploadAgentWebAttachments,
     onResolveMedia: ({ path, resourceId }) => localFileUrl(path || resourceId),
-    onOpenLink: (href) => window.open(href.startsWith('/') ? localFileUrl(href) : href, '_blank', 'noopener,noreferrer'),
-    onOpenAttachment: (attachment) => window.open(localFileUrl(attachment.path || attachment.id), '_blank', 'noopener,noreferrer'),
+    onOpenLink: (href, file) => openAgentWebLink(href, file, state.session.cwd),
+    onOpenAttachment: (attachment) => product.openAttachment(attachment),
+    onOpenArtifact: (artifact) => product.openArtifact(artifact),
+    onCloseDocument: product.closeDocument,
+    documentResourceUrl: product.documentResourceUrl,
     onError: (error) => console.warn('Agent Web Session action failed', error),
   },
 } : null;
 
-createRoot(mount).render(
-  <SessionApplication
+function AgentWebApplication() {
+  const documentPreview = useSyncExternalStore(
+    product.subscribeDocumentPreview,
+    product.getDocumentPreview,
+    product.getDocumentPreview,
+  );
+  return <SessionApplication
     controller={controller}
-    detail={detail}
+    detail={(state) => detail(state, documentPreview)}
     extensions={extensions}
     browser={{ showCreateTargetSelect: false, createTargets: [{ id: "session", label: "对话" }], groupMode: "time", groupOptions: [{ id: "time", label: "最近" }] }}
     actions={{
@@ -86,8 +97,20 @@ createRoot(mount).render(
       onArchive: (session, archived) => controller.execute('archive', { archived }, { sessionId: session.id }).then(() => controller.refreshSessions()),
     }}
     labels={{ productName: "Agent Web", createAriaLabel: "新建对话", countSuffix: "个对话" }}
-  />,
-);
+  />;
+}
+
+createRoot(mount).render(<AgentWebApplication />);
+
+function openAgentWebLink(href, file, sessionCwd) {
+  const value = String(href || '').trim();
+  if (!value) return;
+  if (/^(?:https?:|mailto:|tel:|codex:)/i.test(value) || value.startsWith('//')) {
+    window.open(value, '_blank', 'noopener,noreferrer');
+    return;
+  }
+  void product.openLocalDocument(value, { basePath: file?.path || sessionCwd || '' });
+}
 
 controller.subscribe(() => {
   const { selectedId, session } = controller.getSnapshot();
@@ -102,4 +125,4 @@ controller.subscribe(() => {
   history.replaceState(null, '', url);
 });
 
-window.addEventListener("pagehide", () => controller.dispose(), { once: true });
+window.addEventListener("pagehide", () => { stopCatalogWatch(); controller.dispose(); }, { once: true });

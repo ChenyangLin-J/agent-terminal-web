@@ -49,3 +49,8 @@ html,body { margin:0; height:100%; overflow:hidden; background:var(--cwu-bg); fo
 .cwu-product-notice { position:fixed;bottom:20px;left:20px;z-index:100;padding:12px;border-radius:8px;background:#fff;box-shadow:0 4px 16px #0002; }
 
 .hidden { display:none !important; }
+
+.cwu-memory-sources { display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:4px 0 14px;padding-left:48px;color:var(--cwu-muted);font-size:12px; }
+.cwu-memory-sources button { min-height:28px;padding:3px 8px;border:1px solid var(--cwu-border);border-radius:7px;background:var(--cwu-surface);color:var(--cwu-text);font:inherit;cursor:pointer; }
+.cwu-memory-sources button:hover { background:var(--cwu-soft); }
+@media(max-width:640px) { .cwu-memory-sources { padding-left:0; } }

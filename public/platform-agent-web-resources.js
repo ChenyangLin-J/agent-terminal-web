@@ -19,7 +19,20 @@ export async function uploadAgentWebAttachments(files, { signal } = {}) {
 }
 
 export function localFileUrl(path) {
-  return `/open/local?path=${encodeURIComponent(path)}`;
+  return platformFileResourceUrl(path);
+}
+
+export function platformFileDescriptorUrl(href, basePath = '') {
+  const query = new URLSearchParams({ href: String(href || '') });
+  if (basePath) query.set('base', String(basePath));
+  return `/api/platform/file-preview?${query}`;
+}
+
+export function platformFileResourceUrl(href, basePath = '', { download = false } = {}) {
+  const query = new URLSearchParams({ href: String(href || '') });
+  if (basePath) query.set('base', String(basePath));
+  if (download) query.set('download', '1');
+  return `/api/platform/file-resource?${query}`;
 }
 
 export function normalizeUploadedAttachment(value = {}) {

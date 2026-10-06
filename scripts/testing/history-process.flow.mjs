@@ -18,6 +18,7 @@ export default async function ({ page, evidence, baseUrl, profile }) {
     await page.route('**/api/**', async route => {
       const url = new URL(route.request().url());
       let body;
+      if (url.pathname === '/api/platform/session-events') { await route.fulfill({ status: 200, contentType: 'text/event-stream', body: 'event: ready\ndata: {\"type\":\"ready\",\"instanceId\":\"synthetic-history\",\"lastEventId\":0}\n\n' }); return; }
       if (url.pathname === '/api/platform/sessions') body = { sessions: fixtures.map(f => ({ id: `history:${f.threadId}`, sessionId: f.threadId, title: f.title, historical: true, updatedAt: new Date().toISOString() })) };
       else if (url.pathname.startsWith('/api/session-preview/')) {
         previewReads++;
@@ -71,7 +72,9 @@ export default async function ({ page, evidence, baseUrl, profile }) {
       assert.equal(await page.locator('.cwu-process-row').count(), 0);
       await page.getByText('3 项执行记录', { exact: true }).waitFor();
       assert.equal(await page.locator('.cwu-process-row.type-assistant').count(), 1);
-      assert.equal(await page.locator('.cwu-process-body').count(), 0);
+      assert.equal(await page.locator('.cwu-process-row.type-assistant button.cwu-process-summary').count(), 0);
+      await page.locator('.cwu-process-row.type-assistant .cwu-process-copy').getByText(`${fixture.title}：检查执行结果 1`, { exact: true }).waitFor();
+      assert.equal(await page.locator('.cwu-process-row.type-command .cwu-process-body').count(), 0);
       assert.equal(previewReads, previewBefore, 'process load does not read the whole session');
       const command = page.locator('.cwu-process-row.type-command .cwu-process-summary');
       await evidence.action('展开命令详情和输出', command, locator => locator.click());

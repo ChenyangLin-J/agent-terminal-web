@@ -50,7 +50,7 @@ Existing `server.js` remains the integration point for Runtime lifecycle and pro
 
 ## Build and candidate verification
 
-Agent Web pins Platform v0.35.0, which exports `./session-host`, the shared Session application and the authoritative Runtime description/lease contract. A normal install, build and test use the published package:
+Agent Web pins Platform v0.37.0, which exports `./session-host`, the shared Session application and the authoritative Runtime description/lease contract. A normal install, build and test use the published package:
 
 ```bash
 npm ci --include=dev
@@ -95,3 +95,15 @@ Finish the selected package's build and full tests before recording browser flow
 Removed Session assets: `public/app.js`, `styles.css`, `thinking-session.css`, `agent-upload.js`, `agent-voice-input.js`, `agent-realtime.js`, and the old Codex-update widget assets. Product memory/integration dialogs, the local Markdown reader/editor, icons and service worker remain. Private DOM/stylesheet regex tests are retired or narrowed to their surviving backend contracts; UI behavior is covered by Platform and recorded application flows.
 
 Rollback restores the last verified deployed Agent Web commit and its corresponding Platform pin, including the complete frontend and product gateways. Added receipt fields are backward-compatible metadata. Deployment must preserve unrelated local work and stored Session identities, build the generated assets, and use an external restart only when no Turn is running. The exact rollback commit, release and production readback belong in the owning Change.
+
+## Session experience
+
+Progress replies and viewed-image records show their content directly after opening the execution group. Commands and tools with parameters or output retain one disclosure; simple records do not add another click. Image records and attachments open the shared DocumentPreview.
+
+Final answers render the exact `memoryCitation.entries` recorded by the Host as “本轮读取”. Core, Now and relevant topic files open the same authenticated preview. Historical answers without recorded citations do not acquire inferred sources. Memory injection remains the per-Turn Host policy.
+
+The Host exposes `/api/platform/file-preview` descriptors and `/api/platform/file-resource` raw bytes behind authentication and a realpath workspace boundary. Markdown relative references resolve from their document directory. HTML renders only inside the shared sandbox; raw HTML is served as plain text. Unsupported formats and oversized text offer original-file download, and failed reads can retry.
+
+A metadata-only SSE stream at `/api/platform/session-events` updates displayed catalogue rows while another Session is selected. It does not attach background Runtimes or read transcripts. Replay is process-local and bounded; reconnect, focus or replay gaps reconcile displayed catalogue metadata. Revisions and current Turn IDs reject old status updates. A changed server instance resets that revision domain. Hidden pages close the stream.
+
+`candidate-preview.mjs --experience` provides isolated Core/Now, files, viewed-image records and two synthetic Turns for `session-experience.flow.mjs`. Record desktop/mobile with `pw record --timeout 120`; the flow covers in-page previews, relative image loading, failure retry, unsupported downloads, direct process content and B completing while A stays selected.

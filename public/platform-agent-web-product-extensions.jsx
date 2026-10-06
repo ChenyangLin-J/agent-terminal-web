@@ -4,7 +4,7 @@ import './platform-agent-web-product.css';
 import { SessionComposerUtilities, SessionRealtimePanel, SideChatPanel, SubagentPanel } from '@agent-workbench/platform/ui';
 import { agentWebVoiceCapture } from './platform-agent-web-voice.js';
 import { agentWebNotificationTarget, enableAgentWebNotifications } from './platform-agent-web-notifications.js';
-import { normalizeAgentWebSideChatPanel } from './platform-agent-web-product-controller.js';
+import { memorySourceEntriesForMessage, normalizeAgentWebSideChatPanel } from './platform-agent-web-product-controller.js';
 import { agentWebSessionContext } from './platform-agent-web-adapter.js';
 
 export function createAgentWebExtensions({ product, controller, adapter }) {
@@ -18,8 +18,26 @@ export function createAgentWebExtensions({ product, controller, adapter }) {
       setDraft={setDraft} variant="options" voice={agentWebVoiceCapture(session.sessionId)} />,
     renderHeaderActions: ({ session }) => session.composerDisabled ? null : <SessionMoreMenu controller={controller} session={session} />,
     renderBeforeMessages: ({ session }) => session.composerDisabled ? <p className="cwu-read-only" role="status">子 Agent · 只读 · {session.status === 'running' ? '运行中 · 自动更新' : '已完成'}</p> : null,
+    renderAfterMessage: ({ message }) => <MemorySources message={message} controller={controller} product={product} />,
     renderSessionMorePanel: ({ session, sourceSession }) => <SessionMorePanel controller={controller} adapter={adapter} session={session} sourceSession={sourceSession} />,
   };
+}
+
+function MemorySources({ message, controller, product }) {
+  const entries = memorySourceEntriesForMessage(message, controller.getSnapshot().session);
+  if (!entries.length) return null;
+  return <aside className="cwu-memory-sources" aria-label="本轮读取的记忆来源">
+    <span>本轮读取</span>
+    {entries.map((entry, index) => <button
+      key={`${entry.path}:${entry.lineStart || ''}:${index}`}
+      title={entry.note || entry.path}
+      type="button"
+      onClick={() => product.openLocalDocument(
+        `${entry.path}${entry.lineStart ? `:${entry.lineStart}` : ''}`,
+        { name: entry.path.split(/[\\/]/).at(-1) },
+      )}
+    >{entry.path.split(/[\\/]/).at(-1)}</button>)}
+  </aside>;
 }
 
 function ProductSettingsMenu({ product, controller, closeList }) {

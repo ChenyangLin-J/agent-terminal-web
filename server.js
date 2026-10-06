@@ -116,6 +116,7 @@ import { createAmapMcpProxy } from "./lib/amap-mcp-proxy.js";
 import { createPlaywrightMcpProxy } from "./lib/playwright-mcp-proxy.js";
 import { buildAppServerTurnAdditionalContext } from "./lib/app-server-turn-context.js";
 import { fileAttachmentPromptText, isAttachmentPromptText } from "./lib/attachment-prompt.js";
+import { resolveHomeTurnAttachments } from "./lib/home-turn-attachments.js";
 
 const AGENT_TIME_ZONE = "Asia/Shanghai";
 process.env.TZ = AGENT_TIME_ZONE;
@@ -1277,7 +1278,20 @@ app.post("/api/home/agent/turns", async (req, res) => {
     return;
   }
 
-  const fingerprint = JSON.stringify({ threadId, attachId, text });
+  let attachments;
+  try {
+    attachments = resolveHomeTurnAttachments(req.body?.attachments, { vaultRoot: OBSIDIAN_VAULT_ROOT });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+    return;
+  }
+
+  const fingerprint = JSON.stringify({
+    threadId,
+    attachId,
+    text,
+    ...(attachments.length ? { attachments: attachments.map((attachment) => attachment.path) } : {}),
+  });
   const existing = homeTurnRequests.get(requestId);
   if (existing) {
     if (existing.fingerprint !== fingerprint) {
@@ -1319,7 +1333,7 @@ app.post("/api/home/agent/turns", async (req, res) => {
     return;
   }
 
-  const promise = admitHomeTurn({ threadId, attachId, requestId, text, fingerprint })
+  const promise = admitHomeTurn({ threadId, attachId, requestId, text, attachments, fingerprint })
     .then((payload) => ({ status: 202, payload }))
     .catch((error) => ({
       status: Number(error.homeGatewayStatus) || 502,
@@ -1336,7 +1350,7 @@ app.post("/api/home/agent/turns", async (req, res) => {
   }
 });
 
-async function admitHomeTurn({ threadId, attachId, requestId, text, fingerprint }) {
+async function admitHomeTurn({ threadId, attachId, requestId, text, attachments = [], fingerprint }) {
   let session = resolveHomeLiveSession(threadId, attachId);
   if (attachId && !session) {
     releaseHomeTurnReservation(requestId, fingerprint);
@@ -1365,7 +1379,7 @@ async function admitHomeTurn({ threadId, attachId, requestId, text, fingerprint 
     if (!session.title) session.title = cleanTitle(text) || "New Codex session";
     const prompt = prepareSessionPrompt(session, text);
     attemptedUpstreamSubmission = true;
-    const submission = await submitAppServerPrompt(session, prompt.text, "auto", [], [], text, {
+    const submission = await submitAppServerPrompt(session, prompt.text, "auto", [], attachments, text, {
       homeAdmission: true,
       rejectIfBusy: true,
     });

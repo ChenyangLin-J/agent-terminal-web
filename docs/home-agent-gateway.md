@@ -13,7 +13,9 @@ Requests without this boundary receive `404`; an unset token produces `503` for 
 | --- | --- | --- |
 | `GET` | `/api/home/agent/sessions` | `{ sessions }` with durable Codex thread `id` and optional live `webSessionId`. |
 | `GET` | `/api/home/agent/conversation?sessionId=&attach=&cursor=` | `{ session, messages, hasEarlier, nextCursor, turn, pendingApproval, agentHref }`. `attach` is optional and must match the durable thread; use `nextCursor` to load earlier messages. Assistant messages preserve async `questions` and `completedAt`. |
-| `POST` | `/api/home/agent/turns` | Accepts `{ sessionId?, attach?, text, requestId }`; returns `202` with the durable thread and current turn. A missing historical runtime is resumed through the existing App Server path. |
+| `POST` | `/api/home/agent/turns` | Accepts `{ sessionId?, attach?, text, requestId, attachments? }`; returns `202` with the durable thread and current turn. A missing historical runtime is resumed through the existing App Server path. |
+
+`attachments` is an optional array of `{ path }` entries with vault-relative paths for images previously stored by Home capture. Every path must resolve inside `<vault>/System/Capture/Attachments/` — the vault root is `OBSIDIAN_VAULT_PATH`, defaulting to `<workspace>/obsidian/MainVault` — must still exist as a file there, and must be a `jpg`/`jpeg`/`png`/`webp`/`gif` image. Audio and other file types are rejected. Any violation returns `400` before a request reservation is created, so the same `requestId` stays retryable. Accepted attachments join the turn input as `{ type: "localImage", path: <absolute> }` items, the same construction the Agent web composer uses; a non-empty list is also part of the idempotency fingerprint, while an omitted or empty `attachments` keeps the previous request shape and fingerprint.
 
 `sessionId` is the durable Codex thread ID. `webSessionId`/`attach` identifies an ephemeral Agent Web runtime and must never be treated as the conversation identity.
 

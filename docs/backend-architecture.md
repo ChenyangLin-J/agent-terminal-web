@@ -69,7 +69,21 @@ Coordination is process-local; atomic rename does not imply cross-process lockin
 The Home-owned favorites namespace remains a shared-file boundary.
 
 Derived preview/process caches are separate from authoritative user state and can
-be regenerated. Local Markdown editing keeps its existing optimistic version
+be regenerated. JSONL conversation pages, result previews and usage reuse bounded
+in-memory derived results (32 entries, 32 MiB of serialized payload). Every hit
+checks device/inode, size, modification and change timestamps; writes or atomic
+replacement invalidate the entry. Simultaneous reads share a Promise; failed or
+concurrently changed reads are not retained. Pagination slices parsed turns and
+never mutates the rollout.
+
+Agent Web process reads reuse completed native thread/turn data before reading a
+Session, coalesce concurrent requests and cap retained results at 50 turns / 8 MiB.
+The shared progressive UI reads historical groups only on expansion, restores
+missing expanded groups after refresh, and reports counts only after a full read.
+Completed previews read on selection, focus or changed catalog metadata; active
+previews continue polling. Hidden pages stop polling and slow reads cannot overlap.
+
+Local Markdown editing keeps its existing optimistic version
 checks; it cannot guarantee arbitration with arbitrary external editors.
 
 Browser APIs retain Private Auth. Home gateway routes retain loopback plus token

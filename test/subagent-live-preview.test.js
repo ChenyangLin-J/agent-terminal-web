@@ -201,6 +201,9 @@ input.on("line", (line) => {
     `http://127.0.0.1:${agentPort}/?preview=1&cwd=.&sessionId=${childThreadId}` +
       `&sourceSession=${ready.payload.id}&title=Live%20child&access=safe`,
   );
+  await page.getByText('正在执行', { exact: true }).waitFor();
+  assert.equal(await page.locator('.cwu-technical-toggle').getAttribute('aria-expanded'), 'false');
+  await page.locator('.cwu-technical-toggle').click();
   await page.getByText("Reading live child output", { exact: true }).waitFor();
   await page.getByText("node inspect.js", { exact: true }).waitFor();
   await page.getByText('子 Agent · 只读 · 运行中 · 自动更新', { exact: true }).waitFor();

@@ -71,6 +71,10 @@ test('disk history uses native process IDs through the actual route, with refres
     assert.equal(earlier.messages.length, 4);
     assert.equal(earlier.technicalItems.filter(item => item.turnId === latest).length, 3);
     assert.equal(earlier.hasEarlierTurns, false);
+    const focused = await adapter.readSession(id);
+    assert.equal(focused.messages.length, 4, 'focus refresh retains already loaded earlier pages');
+    assert.equal(focused.hasEarlierTurns, false);
+    assert.equal(focused.turnsCursor, null);
     await adapter.execute(id, 'loadTechnicalDetails', { turnId: fixture.turnIds[0] });
     assert.equal((await adapter.loadHistory(id)).technicalItems.length, 6);
   }

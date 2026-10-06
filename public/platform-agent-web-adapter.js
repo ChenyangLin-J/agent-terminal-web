@@ -23,6 +23,11 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
   const released = new Map();
   const previews = new Map();
   const processes = new Map();
+  const processReads = new Map();
+  const threadBySession = new Map();
+  const processSizes = new Map();
+  const previewRefreshers = new Map();
+  let processBytes = 0;
   const withProcesses = (snapshot) => {
     const entries = [...processes].filter(([key]) => key.startsWith(`${snapshot.threadId}:`));
     if (!entries.length) return snapshot;
@@ -41,7 +46,7 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
     });
     const items = [...new Map([...base, ...loaded].map(item => [item.id, item])).values()];
     const presentation = presentationFromAgentWeb(snapshot.session || {}, items, snapshot.pendingRequests);
-    return { ...snapshot, items, messages: presentation.messages, technicalItems: presentation.technicalItems, technicalDetailsAvailable: presentation.technicalDetailsAvailable, turnMetadata: presentation.turnMetadata };
+    return { ...snapshot, items, messages: presentation.messages, technicalItems: presentation.technicalItems, technicalDetailsAvailable: presentation.technicalDetailsAvailable, technicalDetailsLoaded: [...loadedTurns].filter(id => id !== activeTurnId), turnMetadata: presentation.turnMetadata };
   };
 
   const emit = (event) => listeners.forEach((listener) => listener(event));
@@ -54,7 +59,11 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
       const result = await json(`/api/platform/sessions?${params}`, { signal });
       const aliases = new Map([...targets].map(([alias, target]) => [target, alias]));
       const values = (result.sessions || []).map((value) => normalizeSession({ ...value, id: aliases.get(value.id) || value.id }));
-      for (const value of values) summaries.set(value.id, value);
+      for (const value of values) {
+        const previous = summaries.get(value.id);
+        summaries.set(value.id, value);
+        if (previous && (previous.updatedAt !== value.updatedAt || previous.status !== value.status)) previewRefreshers.get(value.id)?.();
+      }
       for (const draft of drafts.values()) if (!targets.has(draft.id) && (archived || !draft.archived) && (!query || draft.title.toLowerCase().includes(query.toLowerCase()))) values.unshift(draft);
       return { ...result, sessions: values };
     },
@@ -81,8 +90,7 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
         const metadata = await readMetadata(value.cwd || '.').catch(() => null);
         const enriched = withMetadata({ ...snapshot, executionProfile: historyProfiles.get(id) || snapshot.executionProfile }, metadata);
         if (targets.has(id)) return adapter.readSession(id, { signal });
-        previews.set(id, enriched);
-        return withProcesses(enriched);
+        return rememberPreview(id, enriched);
       }
       // Once promoted, the live target owns state. Sidebar summaries may still
       // describe an older released attachment of the same native thread.
@@ -107,12 +115,12 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
         const snapshot = { ...previewSnapshot(`history:${metadata.sessionId}`, value, { title: metadata.title }), sessionId: id, threadId: metadata.sessionId, released: true, status: 'idle', session: metadata, tokenUsage: value.tokenUsage ?? metadata.tokenUsage ?? null };
         const enriched = withMetadata(snapshot, await readMetadata(metadata.cwd || value.cwd || '.').catch(() => null));
         if ((targets.get(id) || id) !== target) return adapter.readSession(id, { signal });
-        previews.set(id, enriched);
-        return withProcesses(enriched);
+        return rememberPreview(id, enriched);
       }
       const snapshot = normalizeSnapshot(result);
       const catalog = await readMetadata(result.session?.cwd || '.').catch(() => catalogs.get(result.session?.cwd || '.'));
       if ((targets.get(id) || id) !== target) return adapter.readSession(id, { signal });
+      threadBySession.set(id, snapshot.threadId);
       return withProcesses({ ...withMetadata(snapshot, catalog), sessionId: id, webSessionId: target });
     },
 
@@ -142,13 +150,27 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
 
     async execute(id, action, payload = {}, { idempotencyKey } = {}) {
       if (action === 'loadTechnicalDetails') {
-        const snapshot = await adapter.readSession(id);
-        const cached = processes.get(`${snapshot.threadId}:${payload.turnId}`);
-        if (cached) return { items: cached };
-        const result = await json(`/api/platform/threads/${encodeURIComponent(snapshot.threadId)}/process/${encodeURIComponent(payload.turnId)}`);
-        processes.set(`${snapshot.threadId}:${payload.turnId}`, result.items || []);
-        if (processes.size > 50) processes.delete(processes.keys().next().value);
-        return result;
+        const threadId = knownThread(id) || (await adapter.readSession(id)).threadId;
+        const key = `${threadId}:${payload.turnId}`;
+        if (processes.has(key)) return { items: processes.get(key) };
+        if (processReads.has(key)) return processReads.get(key);
+        const task = json(`/api/platform/threads/${encodeURIComponent(threadId)}/process/${encodeURIComponent(payload.turnId)}`).then(result => {
+          const items = result.items || [];
+          const bytes = JSON.stringify(items).length * 2;
+          // Completed turns are immutable; live progress comes from its subscription.
+          if (!items.some(item => item.status === 'inProgress') && bytes <= 8 * 1024 * 1024) {
+            processes.set(key, items); processSizes.set(key, bytes); processBytes += bytes;
+            while (processes.size > 50 || processBytes > 8 * 1024 * 1024) {
+              const oldest = processes.keys().next().value;
+              processBytes -= processSizes.get(oldest) || 0;
+              processes.delete(oldest); processSizes.delete(oldest);
+            }
+            draftSubscriptions.get(id)?.options.onEvent?.({ type: 'technical-details-loaded', sessionId: id });
+          }
+          return { ...result, technicalItems: presentationFromAgentWeb({}, items).technicalItems };
+        }).finally(() => { if (processReads.get(key) === task) processReads.delete(key); });
+        processReads.set(key, task);
+        return task;
       }
       if (released.has(id) && ['send', 'append', 'queue', 'restart'].includes(action)) {
         const metadata = released.get(id);
@@ -247,15 +269,43 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
     subscribeSession(id, { onEvent, onConnection, signal, afterRevision } = {}) {
       if (released.has(id) || ((drafts.has(id) || id.startsWith('history:')) && !targets.has(id))) {
         let active = true;
-        const poll = id.startsWith('history:') || released.has(id) ? setInterval(async () => {
-          if (!active || signal?.aborted) return;
-          try {
-            const snapshot = await adapter.readSession(id, { signal });
-            if (active && !signal?.aborted) onEvent?.({ type: 'preview-snapshot', sessionId: id, payload: snapshot });
-          } catch { /* Next interval recovers the read-only view. */ }
-        }, sourceSession ? 2000 : 5000) : null;
-        const stopPreview = () => { active = false; if (poll) clearInterval(poll); };
-        if (poll) historySubscriptions.set(id, stopPreview);
+        let timer = null, pending = null, lastFocus = 0;
+        const preview = id.startsWith('history:') || released.has(id);
+        const visible = () => globalThis.document?.visibilityState !== 'hidden';
+        const schedule = () => {
+          clearTimeout(timer); timer = null;
+          if (preview && active && !signal?.aborted && visible() && previews.get(id)?.session?.turnState?.active) timer = setTimeout(refresh, sourceSession ? 2000 : 5000);
+        };
+        const refresh = () => {
+          if (!active || signal?.aborted || !visible()) return;
+          if (pending) return pending;
+          clearTimeout(timer); timer = null;
+          pending = (async () => {
+            try {
+              const snapshot = await adapter.readSession(id, { signal });
+              if (active && !signal?.aborted) onEvent?.({ type: 'preview-snapshot', sessionId: id, payload: snapshot });
+            } catch { /* Focus/source updates and active polling can retry the read. */ }
+            finally { pending = null; schedule(); }
+          })();
+          return pending;
+        };
+        const focus = () => {
+          if (!visible() || Date.now() - lastFocus < 250) return;
+          lastFocus = Date.now(); void refresh();
+        };
+        const visibility = () => { if (visible()) focus(); else { clearTimeout(timer); timer = null; } };
+        const stopPreview = () => {
+          active = false; clearTimeout(timer);
+          globalThis.removeEventListener?.('focus', focus);
+          globalThis.document?.removeEventListener('visibilitychange', visibility);
+          if (previewRefreshers.get(id) === refresh) previewRefreshers.delete(id);
+        };
+        if (preview) {
+          historySubscriptions.set(id, stopPreview); previewRefreshers.set(id, refresh);
+          globalThis.addEventListener?.('focus', focus);
+          globalThis.document?.addEventListener('visibilitychange', visibility);
+          schedule();
+        }
         const waiting = { options: { onEvent, onConnection, signal, afterRevision }, cleanup: null };
         draftSubscriptions.set(id, waiting);
         if (drafts.has(id)) queueMicrotask(() => {
@@ -300,10 +350,11 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
     },
 
     applyEvent(snapshot, event) {
+      if (event.type === 'technical-details-loaded') return withProcesses(snapshot);
       if (event.type === 'status' && event.payload?.released) released.set(snapshot.sessionId, event.payload);
       const next = applyAgentWebEvent(snapshot, event);
       const catalog = catalogs.get(next.session?.cwd || next.cwd || '.');
-      return withMetadata(next, catalog);
+      return withMetadata(withProcesses(next), catalog);
     },
 
     async loadHistory(id, options = {}) {
@@ -325,9 +376,9 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
     },
 
     async markResultRead(id, turnId) {
-      const snapshot = await adapter.readSession(id);
-      if (!snapshot.threadId || !turnId) return;
-      await json(`/api/codex-sessions/${encodeURIComponent(snapshot.threadId)}/viewed`, {
+      const threadId = knownThread(id) || (await adapter.readSession(id)).threadId;
+      if (!threadId || !turnId) return;
+      await json(`/api/codex-sessions/${encodeURIComponent(threadId)}/viewed`, {
         method: "POST",
         body: JSON.stringify({ turnId }),
       });
@@ -343,10 +394,21 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
       connections.clear();
       for (const stop of historySubscriptions.values()) stop();
       historySubscriptions.clear();
+      previewRefreshers.clear(); processReads.clear(); processes.clear(); processSizes.clear(); threadBySession.clear(); processBytes = 0;
       listeners.clear();
     },
   };
   return adapter;
+
+  function knownThread(id) { return previews.get(id)?.threadId || threadBySession.get(id) || released.get(id)?.sessionId || (id.startsWith('history:') && !targets.has(id) ? id.slice(8) : null); }
+
+  function rememberPreview(id, snapshot) {
+    const previous = previews.get(id);
+    const paged = previous?.threadId === snapshot.threadId && previous.messages.length > snapshot.messages.length;
+    const next = paged ? { ...mergeSessionHostSnapshot(previous, snapshot), turnsCursor: previous.turnsCursor, hasEarlierTurns: previous.hasEarlierTurns } : snapshot;
+    previews.set(id, next);
+    return withProcesses(next);
+  }
 
   function rememberPendingProfile(id, profile) { pendingProfiles.set(id, profile); persistEntries('agent-web.pending-profiles', pendingProfiles); }
   function forgetPendingProfile(id) { pendingProfiles.delete(id); persistEntries('agent-web.pending-profiles', pendingProfiles); }

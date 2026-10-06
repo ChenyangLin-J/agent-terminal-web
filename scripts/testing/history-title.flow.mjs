@@ -39,10 +39,10 @@ export default async function ({ page, evidence, baseUrl }) {
   await evidence.checkpoint('打开后：侧栏与详情标题一致');
   const beforeRefresh = previewReads;
   await page.waitForTimeout(5500);
-  assert.ok(previewReads > beforeRefresh, 'The historical preview subscription refreshed');
+  assert.equal(previewReads, beforeRefresh, 'Completed historical preview does not poll');
   assert.equal(await row.count(), 1);
   assert.equal(await heading.count(), 1);
-  await evidence.checkpoint('自动刷新后：原标题保持不变');
+  await evidence.checkpoint('空闲等待后：原标题保持不变');
   await evidence.action('加载更早消息', page.getByRole('button', { name: '查看更早消息', exact: true }), locator => locator.click());
   await page.getByText('更早的回复', { exact: true }).waitFor();
   assert.equal(await row.count(), 1);

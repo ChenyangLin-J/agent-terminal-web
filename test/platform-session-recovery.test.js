@@ -5,7 +5,7 @@ import { createAgentWebSessionAdapter } from '../public/platform-agent-web-adapt
 
 for (const kind of ['released', 'historical']) {
   test(`${kind} preview promotes once to a live subscription and rejects a late preview read`, async t => {
-    const originals = Object.fromEntries(['fetch', 'sessionStorage', 'location', 'WebSocket', 'setInterval', 'clearInterval'].map(key => [key, globalThis[key]]));
+    const originals = Object.fromEntries(['fetch', 'sessionStorage', 'location', 'WebSocket', 'addEventListener', 'removeEventListener'].map(key => [key, globalThis[key]]));
     const stored = new Map(), calls = [], polls = new Map(), sockets = [];
     const id = kind === 'released' ? 'old-web' : 'history:thread-a';
     const old = { id: 'old-web', sessionId: 'thread-a', released: true, cwd: '/project', title: 'Existing' };
@@ -14,8 +14,8 @@ for (const kind of ['released', 'historical']) {
     const preview = { cwd: '/project', conversation: { turns: [{ id: 'turn-old', user: 'old message', assistant: [{ text: 'old answer' }] }] } };
     globalThis.sessionStorage = { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value) };
     globalThis.location = { protocol: 'http:', host: 'localhost' };
-    globalThis.setInterval = callback => { const token = Symbol(); polls.set(token, callback); return token; };
-    globalThis.clearInterval = token => polls.delete(token);
+    globalThis.addEventListener = (type, callback) => { if (type === 'focus') polls.set(callback, callback); };
+    globalThis.removeEventListener = (_type, callback) => polls.delete(callback);
     const response = value => ({ ok: true, json: async () => value });
     globalThis.fetch = async (url, options = {}) => {
       calls.push({ url, method: options.method || 'GET', payload: options.body && JSON.parse(options.body) });

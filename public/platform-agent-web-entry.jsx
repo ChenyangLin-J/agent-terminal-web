@@ -39,6 +39,7 @@ const extensions = createAgentWebExtensions({ product, controller, adapter });
 const detail = (state) => state.session ? {
   session: state.session,
   compactComposer: true,
+  technicalDetailsPresentation: 'progressive',
   labels: { composerPlaceholder: state.session.readOnly ? '子 Agent 预览为只读' : '输入问题……' },
   extensions,
   features: {
@@ -53,7 +54,7 @@ const detail = (state) => state.session ? {
     onInterrupt: ({ turnId } = {}) => execute('stop', { expectedTurnId: turnId || state.session.activeTurnId }),
     onResume: ({ turnId } = {}) => execute('resume', { expectedTurnId: turnId || state.session.activeTurnId }),
     onLoadEarlier: () => controller.loadHistory(),
-    onLoadTechnicalDetails: (turnId) => execute('loadTechnicalDetails', { turnId }),
+    onLoadTechnicalDetails: (turnId) => adapter.execute(state.selectedId, 'loadTechnicalDetails', { turnId }),
     onRespondToRequest: ({ token, decision, answers }) => execute(decision === 'decline' ? 'decline' : 'respond', { requestId: token, expectedTurnId: state.session.activeTurnId, decision, answers }),
     onEditMessage: ({ prompt, turnId, messageId, attachments, references }) => execute('editFork', { text: prompt, references, turnId, itemId: messageId, attachments: (attachments || []).map(normalizeUploadedAttachment) }),
     onForkMessage: async ({ turnId, messageId }) => {

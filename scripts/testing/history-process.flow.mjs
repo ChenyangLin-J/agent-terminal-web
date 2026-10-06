@@ -57,8 +57,13 @@ export default async function ({ page, evidence, baseUrl, profile }) {
       await row.waitFor();
       await evidence.action('打开历史会话', row, locator => locator.click());
       await page.getByText(`${fixture.title}：最新的回复`, { exact: true }).waitFor();
-      const toggle = page.locator('.cwu-technical-toggle').last();
-      assert.match((await toggle.innerText()).trim(), /^›\s*执行记录$/);
+      const card = page.locator('.cwu-technical.is-tabbed').last();
+      const toggle = card.getByRole('tab', { name: /^执行记录/ });
+      assert.equal(await card.getAttribute('data-open'), 'false');
+      const readsBeforeMemory = processReads.length;
+      await card.getByRole('tab', { name: /^参考记忆/ }).click();
+      await card.getByText('本轮没有可确认的记忆来源。', { exact: true }).waitFor();
+      assert.equal(processReads.length, readsBeforeMemory, 'memory tab does not load historical process');
       assert.equal(await page.locator('.cwu-process-row').count(), 0);
       const previewBefore = previewReads;
       await evidence.action('展开执行记录', toggle, locator => locator.click());
@@ -70,7 +75,7 @@ export default async function ({ page, evidence, baseUrl, profile }) {
       await page.getByRole('status').getByText('正在读取执行记录…', { exact: true }).waitFor();
       assert.equal(await page.locator('.cwu-process-count').count(), 0);
       assert.equal(await page.locator('.cwu-process-row').count(), 0);
-      await page.getByText('3 项执行记录', { exact: true }).waitFor();
+      await toggle.filter({ hasText: /执行记录\s*3/ }).waitFor();
       assert.equal(await page.locator('.cwu-process-row.type-assistant').count(), 1);
       assert.equal(await page.locator('.cwu-process-row.type-assistant button.cwu-process-summary').count(), 0);
       await page.locator('.cwu-process-row.type-assistant .cwu-process-copy').getByText(`${fixture.title}：检查执行结果 1`, { exact: true }).waitFor();
@@ -87,7 +92,7 @@ export default async function ({ page, evidence, baseUrl, profile }) {
       assert.equal(await page.getByRole('button', { name: /查看详情|查看输出/ }).count(), 0);
       await evidence.checkpoint('两层展开：参数和输出在同一区域');
       const processBefore = processReads.length;
-      await evidence.action('收起执行记录', toggle, locator => locator.click());
+      await evidence.action('收起本轮详情', card.locator('.cwu-turn-detail-toggle'), locator => locator.click());
       await evidence.action('重新展开缓存记录', toggle, locator => locator.click());
       await page.getByText(`synthetic-tool-output-${index + 1}-1`, { exact: true }).waitFor();
       assert.equal(processReads.length, processBefore);
@@ -99,11 +104,11 @@ export default async function ({ page, evidence, baseUrl, profile }) {
       }
       await evidence.action('加载更早消息', page.getByRole('button', { name: '查看更早消息', exact: true }), locator => locator.click());
       await page.getByText(`${fixture.title}：更早的回复`, { exact: true }).waitFor();
-      const earlierRecord = page.locator('.cwu-message').filter({ hasText: `${fixture.title}：更早的回复` }).locator('xpath=following-sibling::section[1]').locator('.cwu-technical-toggle');
+      const earlierRecord = page.locator('.cwu-message').filter({ hasText: `${fixture.title}：更早的回复` }).locator('xpath=following-sibling::section[1]').getByRole('tab', { name: /^执行记录/ });
       await evidence.action('展开更早的执行记录', earlierRecord, locator => locator.click());
       if (index === 2) {
         await page.getByText('没有可展示的执行记录。', { exact: true }).waitFor();
-        assert.equal(await page.locator('.cwu-process-count').count(), 1);
+        assert.equal(await page.getByRole('tab', { name: /^执行记录\s*3$/ }).count(), 1);
       } else {
         await page.locator('.cwu-process-row.type-command').nth(1).waitFor();
         assert.equal(await page.locator('.cwu-process-row.type-assistant').count(), 2);
@@ -122,7 +127,7 @@ export default async function ({ page, evidence, baseUrl, profile }) {
     await page.reload();
     await page.getByText('研究记录：最新的回复', { exact: true }).waitFor();
     await page.locator('.cwu-process-row.type-command').waitFor();
-    assert.equal(await page.locator('.cwu-technical-toggle').last().getAttribute('aria-expanded'), 'true');
+    assert.equal(await page.locator('.cwu-technical.is-tabbed').last().getAttribute('data-open'), 'true');
     await evidence.checkpoint('刷新恢复展开，缺失数据自动读取');
     const command = page.locator('.cwu-process-row.type-command .cwu-process-summary');
     await command.focus(); await page.keyboard.press('Enter');

@@ -18,17 +18,18 @@ export function createAgentWebExtensions({ product, controller, adapter }) {
       setDraft={setDraft} variant="options" voice={agentWebVoiceCapture(session.sessionId)} />,
     renderHeaderActions: ({ session }) => session.composerDisabled ? null : <SessionMoreMenu controller={controller} session={session} />,
     renderBeforeMessages: ({ session }) => session.composerDisabled ? <p className="cwu-read-only" role="status">子 Agent · 只读 · {session.status === 'running' ? '运行中 · 自动更新' : '已完成'}</p> : null,
-    renderAfterMessage: ({ message }) => <MemorySources message={message} controller={controller} product={product} />,
+    getTurnDetailTabs: ({ message }) => {
+      const entries = memorySourceEntriesForMessage(message, controller.getSnapshot().session);
+      return [{ id: 'memory', label: '参考记忆', count: entries.length,
+        renderContent: () => <MemorySources entries={entries} product={product} /> }];
+    },
     renderSessionMorePanel: ({ session, sourceSession }) => <SessionMorePanel controller={controller} adapter={adapter} session={session} sourceSession={sourceSession} />,
   };
 }
 
-function MemorySources({ message, controller, product }) {
-  const entries = memorySourceEntriesForMessage(message, controller.getSnapshot().session);
-  if (!entries.length) return null;
-  return <details className="cwu-memory-sources">
-    <summary aria-label={`本轮读取的记忆来源，${entries.length} 个`}><span>参考记忆</span><span className="cwu-memory-source-count">· {entries.length}</span><span className="cwu-memory-source-chevron" aria-hidden="true">›</span></summary>
-    <div className="cwu-memory-source-list" aria-label="本轮读取的记忆来源">
+function MemorySources({ entries, product }) {
+  if (!entries.length) return <p className="cwu-memory-empty">本轮没有可确认的记忆来源。</p>;
+  return <div className="cwu-memory-source-list" aria-label="本轮读取的记忆来源">
     {entries.map((entry, index) => <button
       key={`${entry.path}:${entry.lineStart || ''}:${index}`}
       title={entry.note || entry.path}
@@ -37,9 +38,8 @@ function MemorySources({ message, controller, product }) {
         `${entry.path}${entry.lineStart ? `:${entry.lineStart}` : ''}`,
         { name: entry.path.split(/[\\/]/).at(-1) },
       )}
-    >{entry.path.split(/[\\/]/).at(-1)}</button>)}
-    </div>
-  </details>;
+    ><svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.3"><path d="M5 2.5h6l4 4v11H5zM11 2.5v4h4M7.5 10h5M7.5 13h5"/></svg><span>{entry.path.split(/[\\/]/).at(-1)}</span><span aria-hidden="true">›</span></button>)}
+  </div>;
 }
 
 function ProductSettingsMenu({ product, controller, closeList }) {

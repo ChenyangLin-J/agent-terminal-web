@@ -78,8 +78,13 @@ never mutates the rollout.
 
 Agent Web process reads reuse completed native thread/turn data before reading a
 Session, coalesce concurrent requests and cap retained results at 50 turns / 8 MiB.
-The shared progressive UI reads historical groups only on expansion, restores
-missing expanded groups after refresh, and reports counts only after a full read.
+The shared tabbed detail card starts collapsed for active and completed Turns.
+It reads historical execution items only when the execution tab opens, restores
+missing expanded items after refresh, and reports execution counts only after a
+full read. The product-owned memory tab supplies exact citations and the existing
+in-site preview; selecting it never initiates a process read. One card shares the
+collapse control and content area, with bounded completed output and naturally
+wrapping one-row file entries.
 Completed previews read on selection, focus or changed catalog metadata; active
 previews continue polling. Hidden pages stop polling and slow reads cannot overlap.
 

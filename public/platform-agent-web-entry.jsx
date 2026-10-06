@@ -42,7 +42,7 @@ const detail = (state, documentPreview) => state.session ? {
   session: state.session,
   documentPreview,
   compactComposer: true,
-  technicalDetailsPresentation: 'progressive',
+  technicalDetailsPresentation: 'tabbed',
   labels: { composerPlaceholder: state.session.readOnly ? '子 Agent 预览为只读' : '输入问题……' },
   extensions,
   features: {

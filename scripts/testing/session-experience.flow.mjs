@@ -37,10 +37,10 @@ export default async function ({ page, context, evidence, baseUrl, profile }) {
   await page.goto(baseUrl);
   const first = await send(`前台预览验收 ${profile} ${suffix}`);
   await page.getByRole('link', { name: '查看说明', exact: true }).waitFor();
-  await page.locator('.cwu-memory-sources summary').click();
+  await page.getByRole('tab', { name: /^参考记忆/ }).click();
   await page.getByRole('button', { name: 'Core.md', exact: true }).waitFor();
   await page.getByRole('button', { name: 'Now.md', exact: true }).waitFor();
-  assert.equal(await page.locator('.cwu-memory-sources').count(), 1);
+  assert.equal(await page.locator('.cwu-technical.is-tabbed').count(), 1);
   await evidence.checkpoint('完成回复展示本轮实际读取的 Core 和 Now 来源');
   await evidence.action('打开 Core 记忆来源', page.getByRole('button', { name: 'Core.md', exact: true }), x => x.click());
   await page.locator('.cwu-document-content').getByText('合成验收记忆：回复使用中文，文件在站内预览。', { exact: true }).waitFor();
@@ -76,7 +76,7 @@ export default async function ({ page, context, evidence, baseUrl, profile }) {
   assert.equal(await page.locator('.cwu-document-preview').getByRole('link', { name: '下载', exact: true }).count(), 1);
   await evidence.checkpoint('未支持的格式提供原文件下载');
   await closePreview();
-  await page.locator('.cwu-technical-toggle').click();
+  await page.getByRole('tab', { name: /^执行记录/ }).click();
   await page.locator('.cwu-process-row.type-assistant .cwu-process-copy').waitFor();
   assert.equal(await page.locator('.cwu-process-row.type-assistant button.cwu-process-summary').count(), 0);
   const viewed = page.locator('.cwu-process-row.type-tool').filter({ hasText: '查看图片' });

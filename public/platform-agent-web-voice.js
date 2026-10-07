@@ -1,7 +1,7 @@
 /** Agent Web owns its transcription endpoint and durable recording recovery. */
 export function agentWebVoiceCapture(sessionId, factory = globalThis.VoiceCapture) {
   return {
-    async start() {
+    async start(hooks = {}) {
       if (!factory?.create) throw new Error('语音输入暂时不可用。');
       let transcript = '';
       let complete, fail;
@@ -11,6 +11,7 @@ export function agentWebVoiceCapture(sessionId, factory = globalThis.VoiceCaptur
         streamEndpoint: 'https://home.chenyanglin.com/api/transcribe/stream',
         recoveryContext: () => sessionId || '',
         onChunk: ({ text }) => { if (text) transcript = factory.appendTranscript(transcript, text); },
+        onPartial: (event) => hooks.onPartial?.(event?.text || ''),
         onComplete: (summary) => summary?.failed ? fail(new Error('转写未完成，录音已保留，可恢复后重试。')) : complete(transcript),
         onCancel: () => complete(''),
       });

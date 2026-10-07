@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 export const metadata = { name: 'voice-live-transcript', profiles: ['desktop', 'mobile'] };
 // Run against candidate-preview.mjs --experience; the microphone is replaced by a
 // fake VoiceCapture that emits synthetic partials, so no physical audio is captured.
+// The fake must be installed via addInitScript: the adapter reads globalThis.VoiceCapture
+// at render time, so a post-load page.evaluate injection would be too late.
 export default async function ({ page, evidence, baseUrl, profile }) {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -24,18 +26,22 @@ export default async function ({ page, evidence, baseUrl, profile }) {
   });
   await page.goto(baseUrl);
   await page.getByRole('button', { name: '新建对话', exact: true }).click();
-  await page.locator('.cwu-composer textarea').waitFor();
+  const textarea = page.locator('.cwu-composer textarea');
+  await textarea.waitFor();
   const mic = page.getByRole('button', { name: '语音输入', exact: true });
   await mic.click();
-  const live = page.locator('.cwu-voice-live');
-  await live.waitFor();
-  assert.equal(await live.innerText(), '正在识别第一句');
-  await evidence.checkpoint('录音开始即显示实时转写');
-  await page.getByText('正在识别第一句，第二句也来了', { exact: true }).waitFor();
-  await evidence.checkpoint('流式 partial 持续更新');
+  // 录音中：按钮标红、输入框锁定、partial 直接预填进输入框
+  await page.getByRole('button', { name: '结束录音并转写', exact: true }).waitFor();
+  assert.equal(await textarea.inputValue(), '正在识别第一句');
+  assert.equal(await textarea.getAttribute('readonly'), '');
+  await evidence.checkpoint('录音开始：麦克风标红、partial 预填、输入框锁定');
+  await page.waitForFunction(() => document.querySelector('.cwu-composer textarea').value === '正在识别第一句，第二句也来了');
+  await evidence.checkpoint('流式 partial 持续替换预填内容');
+  // 结束：最终转写留在输入框、恢复可编辑
   await page.getByRole('button', { name: '结束录音并转写', exact: true }).click();
-  await live.waitFor({ state: 'detached' });
-  assert.equal(await page.locator('.cwu-composer textarea').inputValue(), '第一句。第二句。');
+  await page.getByRole('button', { name: '语音输入', exact: true }).waitFor();
+  assert.equal(await textarea.inputValue(), '第一句。第二句。');
+  assert.equal(await textarea.getAttribute('readonly'), null);
   assert.deepEqual(errors, []);
-  await evidence.checkpoint('停止后转写进入输入框，实时行消失');
+  await evidence.checkpoint('停止后最终转写留在输入框，恢复可编辑');
 }

@@ -10,11 +10,11 @@ import { agentWebSessionContext } from './platform-agent-web-adapter.js';
 export function createAgentWebExtensions({ product, controller, adapter }) {
   return {
     renderListHeaderActions: ({ closeList }) => <ProductSettingsMenu product={product} controller={controller} closeList={closeList} />,
-    renderComposerActions: ({ draft, setDraft, disabled, session }) => <SessionComposerUtilities
-      context={agentWebSessionContext(controller, session)} disabled={disabled} sessionId={session.sessionId}
+    renderComposerActions: ({ draft, setDraft, disabled, session, onRecordingChange }) => <SessionComposerUtilities
+      context={agentWebSessionContext(controller, session)} disabled={disabled} draft={draft} onRecordingChange={onRecordingChange} sessionId={session.sessionId}
       setDraft={setDraft} variant="actions" voice={agentWebVoiceCapture(session.sessionId)} />,
-    renderComposerOptions: ({ draft, setDraft, disabled, session }) => <SessionComposerUtilities
-      context={agentWebSessionContext(controller, session)} disabled={disabled} sessionId={session.sessionId}
+    renderComposerOptions: ({ draft, setDraft, disabled, session, onRecordingChange }) => <SessionComposerUtilities
+      context={agentWebSessionContext(controller, session)} disabled={disabled} draft={draft} onRecordingChange={onRecordingChange} sessionId={session.sessionId}
       setDraft={setDraft} variant="options" voice={agentWebVoiceCapture(session.sessionId)} />,
     renderHeaderActions: ({ session }) => session.composerDisabled ? null : <SessionMoreMenu controller={controller} session={session} />,
     renderBeforeMessages: ({ session }) => session.composerDisabled ? <p className="cwu-read-only" role="status">子 Agent · 只读 · {session.status === 'running' ? '运行中 · 自动更新' : '已完成'}</p> : null,

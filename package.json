@@ -12,7 +12,7 @@
     "update:playwright-tools": "node scripts/update-playwright-mcp-tools.mjs"
   },
   "dependencies": {
-    "@agent-workbench/platform": "https://github.com/ChenyangLin-J/agent-workbench-platform/archive/refs/tags/v0.40.0.tar.gz",
+    "@agent-workbench/platform": "https://github.com/ChenyangLin-J/agent-workbench-platform/archive/refs/tags/v0.41.1.tar.gz",
     "@amap/amap-maps-mcp-server": "0.0.8",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@playwright/mcp": "0.0.78",

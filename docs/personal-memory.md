@@ -10,6 +10,7 @@ The personal memory system is the primary, editable memory source for Agent Web.
 - `~/.codex/personal-memories/store.json`: current confirmed and pending memory.
 - `~/.codex/personal-memories/history.jsonl`: append-only create, update, approval, retirement, and deletion audit events.
 - `~/.codex/personal-memories/worker-state.json`: per-thread watermarks, retry state, daily usage, alerts, and latest run status.
+- `~/.codex/memory-system/session-extractions.jsonl`: private, append-only Session extraction diagnostics, including runs that emitted no candidates.
 - `~/.codex/agent-session-settings.json`: per-Codex-thread access and semantic memory-project routing state.
 
 These files are private user data and are intentionally not committed to the repository.
@@ -28,11 +29,20 @@ After an Agent Web Turn completes, the server schedules a memory check after a o
 
 The UI distinguishes checks from model extraction runs. A check may scan every eligible thread but process zero when all watermarks are current, the newest Turn is incomplete, or a completed Turn is still inside the one-minute settling buffer; the daily token figure is cumulative across earlier extraction runs.
 
+Every Session extraction returns a structured review, including when all candidate arrays are empty. Meaningful skipped facts include an exact user quote and a reason: already covered, covered by a pending proposal, transient, unsupported, or not personal context. A zero-candidate review must classify at least one fresh user message; a generic rationale with no source evidence is not sufficient. Coverage claims must reference an existing confirmed memory or pending change. The worker validates those references and both skipped-fact and proposal quotes against user messages before applying candidates or advancing the watermark. The review is the model's explanation of its selection, not proof of its internal reasoning.
+
+Diagnostics record the input watermark range, message counts, prompt hash and length, model review, emitted candidate counts, and application results such as duplicates or tombstones. They do not copy the whole prompt or transcript. Each thread's runtime state also keeps the latest extraction summary. Missing or invalid reviews fail the extraction and retain the earlier watermark for retry.
+
+Personal proposals must use global scope, reference a confirmed target for updates or retirements, and reference a matching pending personal change for merges. Invalid or unprocessed personal candidates fail the run instead of being silently filtered before the watermark advances. Exact duplicates and tombstoned entries remain valid terminal outcomes.
+
+After the model returns, the worker rereads confirmed memory and pending proposals and compares their fingerprint with the prompt's snapshot. Changes trigger a retry with fresh context. Updates and retirements also compare their expected target under the store's write lock to protect concurrent user edits and deletions from an old extraction. This is an optimistic check rather than a transaction across Markdown, the ledger, and runtime state; direct Obsidian filesystem edits do not acquire that lock.
+
 The worker reads the Session's persisted semantic project set. Manual selections are authoritative; automatic selections are a strong hint that the fresh user transcript must still support. Separate durable facts may be written to separate projects when a Session uses multiple projects.
 
 - Explicit, high-confidence, non-sensitive, non-conflicting personal-memory additions and updates are applied automatically and remain visible in the audit feed with revert support.
 - Sensitive, uncertain, conflicting, or weakly inferred personal memories remain pending. Retirement proposals also remain pending because they remove established context.
 - Direct Obsidian edits and changes explicitly requested by the user are user actions rather than automatic extraction; they may be applied immediately and remain audited.
+- A concrete ongoing reading or practice activity may enter `Now.md` when the user describes progress and plans to continue, even if this is its first Session. Preserve its subject and actual progress; a broad existing goal such as improving communication does not cover a specific book or exercise. A one-off lookup, assistant recommendation, or isolated completion does not establish ongoing focus. A request to save a practice record for tomorrow can establish continuation without becoming a permanent communication preference.
 - Pending update and retirement proposals leave the confirmed original untouched until approved.
 - Project-rule and Skill candidates always remain pending.
 - Deleted or retired content is tombstoned to prevent immediate recreation.

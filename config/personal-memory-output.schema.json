@@ -3,6 +3,29 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "assessment": { "type": "string", "enum": ["actionable", "no_candidates"] },
+        "rationale": { "type": "string" },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "reason": { "type": "string", "enum": ["already_covered", "pending_covered", "transient", "unsupported", "not_personal"] },
+              "evidenceQuote": { "type": "string" },
+              "matchedId": { "type": "string" },
+              "rationale": { "type": "string" }
+            },
+            "required": ["reason", "evidenceQuote", "matchedId", "rationale"]
+          }
+        }
+      },
+      "required": ["assessment", "rationale", "skipped"]
+    },
     "proposals": {
       "type": "array",
       "items": {
@@ -12,7 +35,7 @@
           "action": { "type": "string", "enum": ["create", "update", "retire"] },
           "mergePendingId": { "type": "string" },
           "targetId": { "type": "string" },
-          "scope": { "type": "string", "enum": ["global", "project"] },
+          "scope": { "type": "string", "enum": ["global"] },
           "project": { "type": "string" },
           "aliases": { "type": "array", "items": { "type": "string" } },
           "category": { "type": "string" },
@@ -85,5 +108,5 @@
       }
     }
   },
-  "required": ["proposals", "projectRules", "skills"]
+  "required": ["review", "proposals", "projectRules", "skills"]
 }

@@ -23,6 +23,7 @@ export default async function ({ page, evidence, baseUrl, profile }) {
   await page.locator('.cwu-composer button[type=submit]').click();
   await page.getByText('正在检查附件预览和输入布局。', { exact: true }).waitFor();
   await page.locator('.cwu-technical.is-running').waitFor();
+  assert.equal(await page.locator('.cwu-technical.is-running').getAttribute('data-open'), 'true', 'running turn detail card defaults to open');
   const liveUrl = page.url();
   assert.doesNotMatch(liveUrl, /preview=1/);
   assert.equal(await page.getByText(`旧会话问题 ${profile}`, { exact: true }).count(), 1);
@@ -34,6 +35,7 @@ export default async function ({ page, evidence, baseUrl, profile }) {
   assert.equal(page.url(), liveUrl);
   await evidence.checkpoint('经过旧轮询周期仍稳定显示实时过程');
   await page.locator('.cwu-technical.is-running').waitFor({ state: 'detached' });
+  assert.equal(await page.locator('.cwu-technical.is-tabbed').last().getAttribute('data-open'), 'false', 'completed turn detail card defaults to closed');
   await composer.fill(`续发第二条 ${profile}`);
   await page.locator('.cwu-composer button[type=submit]').click();
   await page.getByText(`续发第二条 ${profile}`, { exact: true }).waitFor();
@@ -45,11 +47,13 @@ export default async function ({ page, evidence, baseUrl, profile }) {
   await page.reload();
   await page.getByText(`续发第二条 ${profile}`, { exact: true }).waitFor();
   await page.locator('.cwu-technical.is-running').waitFor();
+  assert.equal(await page.locator('.cwu-technical.is-running').getAttribute('data-open'), 'true', 'running turn detail card reopens by default after reload');
   assert.equal(await page.getByText(`旧会话问题 ${profile}`, { exact: true }).count(), 1);
   assert.equal(creates.length, 1); assert.equal(profiles.length, 1);
   assert.equal(page.url(), liveUrl);
   await evidence.checkpoint('执行中刷新仍打开当前会话并保留消息顺序');
   await page.locator('.cwu-technical.is-running').waitFor({ state: 'detached' });
+  assert.equal(await page.locator('.cwu-technical.is-tabbed').last().getAttribute('data-open'), 'false', 'finished turn detail card collapses by default');
   assert.deepEqual(errors, []);
   assert.deepEqual(await page.evaluate(() => window.recoveryAlerts), []);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);

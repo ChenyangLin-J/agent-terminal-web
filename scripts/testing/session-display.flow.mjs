@@ -14,14 +14,13 @@ export default async function ({ page, evidence, baseUrl, profile }) {
   if (profile === 'mobile' && await closeList.isVisible()) await closeList.click();
   const card = page.locator('.cwu-technical.is-tabbed');
   await card.waitFor();
-  assert.equal(await card.getAttribute('data-open'), 'false');
-  assert.equal(await card.locator('[role=tabpanel]').count(), 0);
+  assert.equal(await card.getAttribute('data-open'), 'true', 'running turn detail card defaults to open');
   assert.equal(await page.locator('.cwu-technical-toggle, .cwu-memory-sources').count(), 0);
-  const header = await card.locator('.cwu-turn-detail-header').evaluate(el => ({ height: el.clientHeight, children: [...el.children].map(x => x.getBoundingClientRect().top) }));
-  assert.ok(header.height <= 50, 'collapsed header stays one row');
-  assert.ok(Math.abs(header.children[0] - header.children[1]) < 12);
-  await evidence.checkpoint('运行中也默认收起，双Tab和统一开关保持一行');
+  await evidence.checkpoint('运行中默认展开，无双开关和旧记忆入口');
   await card.getByRole('tab', { name: /^执行记录/ }).click();
+  assert.equal(await card.getAttribute('data-open'), 'false', 'clicking the selected tab collapses the card');
+  await card.locator('.cwu-turn-detail-header').click({ position: { x: 2, y: 24 } });
+  assert.equal(await card.getAttribute('data-open'), 'true', 'clicking the card header outside buttons reopens');
   await card.locator('.cwu-process-copy').getByText('进度 45：正在核对完成后的记录高度和记忆来源。', { exact: false }).waitFor();
   const running = await card.evaluate(el => {
     const list = el.querySelector('.cwu-progressive-list');
@@ -68,6 +67,9 @@ export default async function ({ page, evidence, baseUrl, profile }) {
   await page.reload();
   await card.waitFor();
   assert.equal(await card.getAttribute('data-open'), 'false', 'refresh does not force a closed card open');
+  const header = await card.locator('.cwu-turn-detail-header').evaluate(el => ({ height: el.clientHeight, children: [...el.children].map(x => x.getBoundingClientRect().top) }));
+  assert.ok(header.height <= 50, 'collapsed header stays one row');
+  assert.ok(Math.abs(header.children[0] - header.children[1]) < 12);
   const before = processReads.length;
   await card.getByRole('tab', { name: /^参考记忆/ }).click();
   await card.getByRole('button', { name: 'Core.md', exact: true }).waitFor();

@@ -14,8 +14,11 @@
   drop-ins are versioned in `~/workspace/server-config/systemd/user/`; install
   them with `./scripts/validate.sh` and `./scripts/install-user-units.sh`
   (which already reloads systemd). Do not edit `~/.config/systemd/user` alone.
-- Update code with `git pull --ff-only` and `npm ci`. Restart with
-  `systemctl --user restart agent-terminal-web.service` from a terminal
+- Update code with `git pull --ff-only` and `npm ci`. Rebuild the served
+  bundle with `npm run build:session-app` whenever `src/`,
+  `public/platform-agent-web-*`, or the Platform dependency version changed —
+  `public/generated/` is not tracked and `npm ci` does not rebuild it. Restart
+  with `systemctl --user restart agent-terminal-web.service` from a terminal
   outside Agent Web, and only when no Turn is running.
 
 ## Platform kernel switch

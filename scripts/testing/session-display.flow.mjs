@@ -18,6 +18,9 @@ export default async function ({ page, evidence, baseUrl, profile }) {
   assert.equal(await page.locator('.cwu-technical-toggle, .cwu-memory-sources').count(), 0);
   await evidence.checkpoint('运行中默认展开，无双开关和旧记忆入口');
   await card.getByRole('tab', { name: /^执行记录/ }).click();
+  assert.equal(await card.getAttribute('data-open'), 'false', 'clicking the selected tab collapses the card');
+  await card.locator('.cwu-turn-detail-header').click({ position: { x: 2, y: 24 } });
+  assert.equal(await card.getAttribute('data-open'), 'true', 'clicking the card header outside buttons reopens');
   await card.locator('.cwu-process-copy').getByText('进度 45：正在核对完成后的记录高度和记忆来源。', { exact: false }).waitFor();
   const running = await card.evaluate(el => {
     const list = el.querySelector('.cwu-progressive-list');

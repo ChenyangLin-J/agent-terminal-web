@@ -45,16 +45,15 @@ import {
   verifiedHomeCaptureProposal,
   writeHomeCaptureMemoryState,
 } from "../lib/home-capture-memory.js";
-import { recordProjectAndSkillProposals } from "../../memory-system/lib/legacy-adapter.js";
-import { readAllMemoryFiles } from "../../memory-system/lib/markdown-memory.js";
-import {
-  knowledgeChange,
-  mergePendingKnowledgeChange,
-  readKnowledgeChanges,
-  recordKnowledgeChange,
-} from "../../memory-system/lib/change-ledger.js";
-import { syncPendingPersonalStore } from "../../memory-system/lib/pending-personal-store.js";
-import { memorySystemPaths } from "../../memory-system/lib/paths.js";
+import { loadMemorySystemLibrary } from "../lib/memory-system-library.js";
+const [legacyAdapter, markdownMemory, changeLedger, pendingStore, memoryPaths] = await Promise.all(
+  ['legacy-adapter.js', 'markdown-memory.js', 'change-ledger.js', 'pending-personal-store.js', 'paths.js'].map(loadMemorySystemLibrary),
+);
+const { recordProjectAndSkillProposals } = legacyAdapter;
+const { readAllMemoryFiles } = markdownMemory;
+const { knowledgeChange, mergePendingKnowledgeChange, readKnowledgeChanges, recordKnowledgeChange } = changeLedger;
+const { syncPendingPersonalStore } = pendingStore;
+const { memorySystemPaths } = memoryPaths;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");

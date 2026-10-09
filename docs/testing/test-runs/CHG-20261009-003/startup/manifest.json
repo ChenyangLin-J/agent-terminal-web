@@ -1,0 +1,178 @@
+{
+  "schemaVersion": 1,
+  "tool": "workspace-playwright",
+  "name": "lazy-startup-and-split-send",
+  "command": "record",
+  "status": "passed",
+  "startedAt": "2026-10-09T06:56:59.846Z",
+  "finishedAt": "2026-10-09T06:57:07.344Z",
+  "durationMs": 7498,
+  "flow": "/Users/mac/Documents/worktrees/CHG-20261009-003/agent-terminal-web/scripts/testing/session-lazy-loading.flow.mjs",
+  "baseUrl": "http://127.0.0.1:4318/",
+  "traceMode": "failure",
+  "profiles": [
+    {
+      "name": "desktop",
+      "status": "passed",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "steps": [
+        {
+          "number": 1,
+          "type": "checkpoint",
+          "title": "空白新草稿不加载正文解析、数学公式或功能管理",
+          "screenshot": "screenshots/01-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 2,
+          "type": "checkpoint",
+          "title": "历史列表延迟时，当前会话和输入仍可用",
+          "screenshot": "screenshots/02-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 3,
+          "type": "checkpoint",
+          "title": "新建和附件加号均不刷新页面、不读取模型",
+          "screenshot": "screenshots/03-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 4,
+          "type": "checkpoint",
+          "title": "运行中发送方式贴近发送按钮，向上展开",
+          "screenshot": "screenshots/04-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 5,
+          "type": "checkpoint",
+          "title": "回车遵循下一轮选择，进入待执行队列",
+          "screenshot": "screenshots/05-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        }
+      ],
+      "videos": [
+        {
+          "segment": 1,
+          "file": "video-01.webm",
+          "bytes": 168794,
+          "finalUrl": "http://127.0.0.1:4318/"
+        },
+        {
+          "segment": 2,
+          "file": "video-02.webm",
+          "bytes": 71039,
+          "finalUrl": "http://127.0.0.1:4318/"
+        }
+      ],
+      "trace": null,
+      "pages": [
+        {
+          "number": 1,
+          "finalUrl": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 2,
+          "finalUrl": "http://127.0.0.1:4318/"
+        }
+      ],
+      "error": null
+    },
+    {
+      "name": "mobile",
+      "status": "passed",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "steps": [
+        {
+          "number": 1,
+          "type": "checkpoint",
+          "title": "空白新草稿不加载正文解析、数学公式或功能管理",
+          "screenshot": "screenshots/01-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 2,
+          "type": "checkpoint",
+          "title": "历史列表延迟时，当前会话和输入仍可用",
+          "screenshot": "screenshots/02-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 3,
+          "type": "checkpoint",
+          "title": "新建和附件加号均不刷新页面、不读取模型",
+          "screenshot": "screenshots/03-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 4,
+          "type": "checkpoint",
+          "title": "运行中发送方式贴近发送按钮，向上展开",
+          "screenshot": "screenshots/04-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 5,
+          "type": "checkpoint",
+          "title": "320px 实际运行布局",
+          "screenshot": "screenshots/05-320px.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 6,
+          "type": "checkpoint",
+          "title": "390px 实际运行布局",
+          "screenshot": "screenshots/06-390px.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 7,
+          "type": "checkpoint",
+          "title": "768px 实际运行布局",
+          "screenshot": "screenshots/07-768px.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 8,
+          "type": "checkpoint",
+          "title": "回车遵循下一轮选择，进入待执行队列",
+          "screenshot": "screenshots/08-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        }
+      ],
+      "videos": [
+        {
+          "segment": 1,
+          "file": "video-01.webm",
+          "bytes": 183493,
+          "finalUrl": "http://127.0.0.1:4318/"
+        },
+        {
+          "segment": 2,
+          "file": "video-02.webm",
+          "bytes": 34489,
+          "finalUrl": "http://127.0.0.1:4318/"
+        }
+      ],
+      "trace": null,
+      "pages": [
+        {
+          "number": 1,
+          "finalUrl": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 2,
+          "finalUrl": "http://127.0.0.1:4318/"
+        }
+      ],
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "tool": "workspace-playwright",
+  "name": "feature-entry-lazy-load-and-retry",
+  "command": "record",
+  "status": "passed",
+  "startedAt": "2026-10-09T07:02:48.582Z",
+  "finishedAt": "2026-10-09T07:02:51.270Z",
+  "durationMs": 2688,
+  "flow": "/Users/mac/Documents/worktrees/CHG-20261009-003/agent-terminal-web/scripts/testing/session-lazy-features.flow.mjs",
+  "baseUrl": "http://127.0.0.1:4318/",
+  "traceMode": "failure",
+  "profiles": [
+    {
+      "name": "desktop",
+      "status": "passed",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "steps": [
+        {
+          "number": 1,
+          "type": "checkpoint",
+          "title": "desktop 功能资源失败不影响草稿输入",
+          "screenshot": "screenshots/01-desktop.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 2,
+          "type": "checkpoint",
+          "title": "再次进入集成设置可重试，首次打开才读取数据",
+          "screenshot": "screenshots/02-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 3,
+          "type": "checkpoint",
+          "title": "记忆管理按需打开，执行时的记忆来源保持独立",
+          "screenshot": "screenshots/03-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        }
+      ],
+      "videos": [
+        {
+          "segment": 1,
+          "file": "video.webm",
+          "bytes": 185975,
+          "finalUrl": "http://127.0.0.1:4318/"
+        }
+      ],
+      "trace": null,
+      "pages": [
+        {
+          "number": 1,
+          "finalUrl": "http://127.0.0.1:4318/"
+        }
+      ],
+      "error": null
+    },
+    {
+      "name": "mobile",
+      "status": "passed",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "steps": [
+        {
+          "number": 1,
+          "type": "checkpoint",
+          "title": "mobile 功能资源失败不影响草稿输入",
+          "screenshot": "screenshots/01-mobile.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 2,
+          "type": "checkpoint",
+          "title": "再次进入集成设置可重试，首次打开才读取数据",
+          "screenshot": "screenshots/02-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 3,
+          "type": "checkpoint",
+          "title": "记忆管理按需打开，执行时的记忆来源保持独立",
+          "screenshot": "screenshots/03-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        }
+      ],
+      "videos": [
+        {
+          "segment": 1,
+          "file": "video.webm",
+          "bytes": 114194,
+          "finalUrl": "http://127.0.0.1:4318/"
+        }
+      ],
+      "trace": null,
+      "pages": [
+        {
+          "number": 1,
+          "finalUrl": "http://127.0.0.1:4318/"
+        }
+      ],
+      "error": null
+    }
+  ]
+}

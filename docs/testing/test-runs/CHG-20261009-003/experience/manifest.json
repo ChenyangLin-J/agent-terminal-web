@@ -1,0 +1,277 @@
+{
+  "schemaVersion": 1,
+  "tool": "workspace-playwright",
+  "name": "session-memory-preview-background-status",
+  "command": "record",
+  "status": "passed",
+  "startedAt": "2026-10-09T06:57:55.369Z",
+  "finishedAt": "2026-10-09T06:58:47.489Z",
+  "durationMs": 52120,
+  "flow": "/Users/mac/Documents/worktrees/CHG-20261009-003/agent-terminal-web/scripts/testing/session-experience.flow.mjs",
+  "baseUrl": "http://127.0.0.1:4318/",
+  "traceMode": "failure",
+  "profiles": [
+    {
+      "name": "desktop",
+      "status": "passed",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "steps": [
+        {
+          "number": 1,
+          "type": "checkpoint",
+          "title": "隔离会话已创建，等待执行",
+          "screenshot": "screenshots/01-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 2,
+          "type": "checkpoint",
+          "title": "完成回复展示本轮实际读取的 Core 和 Now 来源",
+          "screenshot": "screenshots/02-core-now.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 3,
+          "type": "action",
+          "title": "打开 Core 记忆来源",
+          "screenshot": "screenshots/03-core.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 4,
+          "type": "checkpoint",
+          "title": "记忆通过共享文件预览打开",
+          "screenshot": "screenshots/04-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 5,
+          "type": "action",
+          "title": "回复中的文件在站内打开",
+          "screenshot": "screenshots/05-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 6,
+          "type": "checkpoint",
+          "title": "Markdown 和相对图片引用使用同一个预览组件",
+          "screenshot": "screenshots/06-markdown.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 7,
+          "type": "action",
+          "title": "打开图片",
+          "screenshot": "screenshots/07-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 8,
+          "type": "checkpoint",
+          "title": "图片预览保持在当前页面",
+          "screenshot": "screenshots/08-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 9,
+          "type": "action",
+          "title": "预览失败后重试",
+          "screenshot": "screenshots/09-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 10,
+          "type": "checkpoint",
+          "title": "未支持的格式提供原文件下载",
+          "screenshot": "screenshots/10-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 11,
+          "type": "checkpoint",
+          "title": "过程回复和查看图片直接展示，命令保留展开",
+          "screenshot": "screenshots/11-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 12,
+          "type": "action",
+          "title": "查看记录中的图片",
+          "screenshot": "screenshots/12-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 13,
+          "type": "checkpoint",
+          "title": "隔离会话已创建，等待执行",
+          "screenshot": "screenshots/13-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 14,
+          "type": "action",
+          "title": "执行中切回前台会话",
+          "screenshot": "screenshots/14-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 15,
+          "type": "checkpoint",
+          "title": "停留在 A 会话时，后台 B 自动变为新结果，无须点进去",
+          "screenshot": "screenshots/15-a-b.png",
+          "url": "http://127.0.0.1:4318/"
+        }
+      ],
+      "videos": [
+        {
+          "segment": 1,
+          "file": "video.webm",
+          "bytes": 1723962,
+          "finalUrl": "http://127.0.0.1:4318/"
+        }
+      ],
+      "trace": null,
+      "pages": [
+        {
+          "number": 1,
+          "finalUrl": "http://127.0.0.1:4318/"
+        }
+      ],
+      "error": null
+    },
+    {
+      "name": "mobile",
+      "status": "passed",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "steps": [
+        {
+          "number": 1,
+          "type": "checkpoint",
+          "title": "隔离会话已创建，等待执行",
+          "screenshot": "screenshots/01-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 2,
+          "type": "checkpoint",
+          "title": "完成回复展示本轮实际读取的 Core 和 Now 来源",
+          "screenshot": "screenshots/02-core-now.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 3,
+          "type": "action",
+          "title": "打开 Core 记忆来源",
+          "screenshot": "screenshots/03-core.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 4,
+          "type": "checkpoint",
+          "title": "记忆通过共享文件预览打开",
+          "screenshot": "screenshots/04-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 5,
+          "type": "action",
+          "title": "回复中的文件在站内打开",
+          "screenshot": "screenshots/05-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 6,
+          "type": "checkpoint",
+          "title": "Markdown 和相对图片引用使用同一个预览组件",
+          "screenshot": "screenshots/06-markdown.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 7,
+          "type": "action",
+          "title": "打开图片",
+          "screenshot": "screenshots/07-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 8,
+          "type": "checkpoint",
+          "title": "图片预览保持在当前页面",
+          "screenshot": "screenshots/08-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 9,
+          "type": "action",
+          "title": "预览失败后重试",
+          "screenshot": "screenshots/09-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 10,
+          "type": "checkpoint",
+          "title": "未支持的格式提供原文件下载",
+          "screenshot": "screenshots/10-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 11,
+          "type": "checkpoint",
+          "title": "过程回复和查看图片直接展示，命令保留展开",
+          "screenshot": "screenshots/11-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 12,
+          "type": "action",
+          "title": "查看记录中的图片",
+          "screenshot": "screenshots/12-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 13,
+          "type": "checkpoint",
+          "title": "隔离会话已创建，等待执行",
+          "screenshot": "screenshots/13-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 14,
+          "type": "action",
+          "title": "执行中切回前台会话",
+          "screenshot": "screenshots/14-checkpoint.png",
+          "url": "http://127.0.0.1:4318/"
+        },
+        {
+          "number": 15,
+          "type": "checkpoint",
+          "title": "停留在 A 会话时，后台 B 自动变为新结果，无须点进去",
+          "screenshot": "screenshots/15-a-b.png",
+          "url": "http://127.0.0.1:4318/"
+        }
+      ],
+      "videos": [
+        {
+          "segment": 1,
+          "file": "video.webm",
+          "bytes": 827109,
+          "finalUrl": "http://127.0.0.1:4318/"
+        }
+      ],
+      "trace": null,
+      "pages": [
+        {
+          "number": 1,
+          "finalUrl": "http://127.0.0.1:4318/"
+        }
+      ],
+      "error": null
+    }
+  ]
+}

@@ -37,6 +37,24 @@ const controller = createSessionHostController({
 });
 
 const execute = (action, payload) => controller.execute(action, payload);
+let selectionMeasurement = null;
+const selectMeasuredSession = (session) => {
+  selectionMeasurement = { id: String(session.id || session.sessionId), started: performance.now(), framePending: false };
+  return controller.select(selectionMeasurement.id);
+};
+controller.subscribe(() => {
+  const measurement = selectionMeasurement;
+  const state = controller.getSnapshot();
+  if (!measurement || measurement.framePending || state.selectedId !== measurement.id || !state.session
+    || (!state.session.messages?.length && state.session.status === 'connecting')) return;
+  measurement.framePending = true;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (selectionMeasurement !== measurement || controller.getSnapshot().selectedId !== measurement.id) return;
+    console.info('AgentWebTiming', JSON.stringify({ phase: 'selection-visible',
+      totalMs: Math.round(performance.now() - measurement.started), messages: state.session.messages?.length || 0 }));
+    selectionMeasurement = null;
+  }));
+});
 const stopCatalogWatch = watchAgentWebCatalog({ controller, adapter });
 if (params.get('new') === '1' && !params.get('draftId')) void controller.execute('create', { cwd: params.get('cwd') || '.', title: params.get('title') || '新对话', access: params.get('access') === 'safe' ? 'safe' : 'full' }).catch(() => {});
 const extensions = createAgentWebExtensions({ product, controller, adapter });
@@ -109,6 +127,7 @@ function AgentWebApplication() {
     extensions={extensions}
     browser={(state) => ({ showCreateTargetSelect: false, createTargets: [{ id: "session", label: "对话" }], groupMode: "time", groupOptions: [{ id: "time", label: "最近" }], loading: Boolean(state.listLoading), loadingMore: Boolean(state.listLoadingMore), hasMore: Boolean(state.nextCursor), paginationMode: 'incremental' })}
     actions={{
+      onSelect: selectMeasuredSession,
       onCreate: () => controller.execute('create', { cwd: localStorage.getItem('agent-web.default-cwd') || '.', title: '新对话' }),
       onFavorite: (session, favorited) => controller.execute('favorite', { favorited }, { sessionId: session.id }).then(() => controller.refreshSessions()),
       onArchive: (session, archived) => controller.execute('archive', { archived }, { sessionId: session.id }).then(() => controller.refreshSessions()),

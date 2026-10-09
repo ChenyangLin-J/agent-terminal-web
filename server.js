@@ -1482,6 +1482,7 @@ registerPlatformSessionRoutes(app, {
   listCodexSessions, searchSessions: searchCodexSessions, favoriteIds: (snapshot) => snapshot?.favorites || favoriteSessionIdsForHost(),
   status: appServerStatus, models: appServerModels, metadata: appServerSessionMetadata,
   context: appServerContext, prepareSnapshot: appServerContext,
+  logSnapshot: fields => logAgentEvent('session-snapshot', fields),
   archiveIds: (snapshot) => new Set(Object.keys(snapshot?.archive || readSessionArchiveSync())),
   resolveReferences: resolveSessionReferences,
   validThread: isValidSessionId, validTurn: isCodexTurnId, readProcess: loadHistoricalSessionProcess,

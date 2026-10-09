@@ -745,8 +745,16 @@ function catalogVersion(value = {}) {
 }
 
 async function json(url, options = {}) {
+  const started = performance.now();
   const response = await fetch(url, { headers: { "Content-Type": "application/json" }, ...options });
+  const headersAt = performance.now();
   const body = await response.json().catch(() => ({}));
+  if (/^\/api\/(platform\/sessions\/[^/?]+|session-preview\/[^/?]+)(?:\?|$)/.test(url)) {
+    console.info('AgentWebTiming', JSON.stringify({ phase: 'snapshot-read',
+      headersMs: Math.round(headersAt - started), bodyMs: Math.round(performance.now() - headersAt),
+      totalMs: Math.round(performance.now() - started), bytes: Number(response.headers?.get('content-length') || 0),
+      serverTiming: response.headers?.get('server-timing') || '' }));
+  }
   if (!response.ok) throw Object.assign(new Error(body.error?.message || body.error || `Request failed (${response.status}).`), { knownResult: response.status >= 400 && response.status < 500 });
   return body;
 }

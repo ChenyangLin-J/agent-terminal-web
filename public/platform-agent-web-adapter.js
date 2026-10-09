@@ -774,10 +774,23 @@ async function json(url, options = {}) {
       headersMs: Math.round(headersAt - started), bodyMs: Math.round(performance.now() - headersAt),
       totalMs: Math.round(performance.now() - started), bytes: Number(response.headers?.get('x-agent-snapshot-bytes') || response.headers?.get('content-length') || 0),
       encodedBytes: Number(response.headers?.get('x-agent-snapshot-encoded-bytes') || response.headers?.get('content-length') || 0),
-      serverTiming: response.headers?.get('server-timing') || '' }));
+      serverTiming: response.headers?.get('server-timing') || '', transport: snapshotTransportTiming(response.url) }));
   }
   if (!response.ok) throw Object.assign(new Error(body.error?.message || body.error || `Request failed (${response.status}).`), { knownResult: response.status >= 400 && response.status < 500 });
   return body;
+}
+
+function snapshotTransportTiming(url) {
+  try {
+    const entry = url && performance.getEntriesByName?.(url, 'resource').at(-1);
+    if (!entry || !entry.requestStart || !entry.responseStart) return null;
+    return { protocol: entry.nextHopProtocol || '',
+      beforeRequestMs: Math.round(entry.requestStart - entry.fetchStart),
+      dnsMs: Math.round(entry.domainLookupEnd - entry.domainLookupStart),
+      connectMs: Math.round(entry.connectEnd - entry.connectStart),
+      requestToHeadersMs: Math.round(entry.responseStart - entry.requestStart),
+      downloadMs: Math.round(entry.responseEnd - entry.responseStart) };
+  } catch { return null; }
 }
 
 function browserClientId() {

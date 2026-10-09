@@ -19,5 +19,5 @@ test("file attachments reach the model as a tagged text item with absolute paths
 test("the App Server prompt adds the file text and transcripts hide it", async () => {
   const serverSource = await readFile(new URL("../server.js", import.meta.url), "utf8");
   assert.match(serverSource, /const fileText = fileAttachmentPromptText\(/);
-  assert.match(serverSource, /if \(!isAttachmentPromptText\(entry\.text\)\) text\.push\(entry\.text\)/);
+  assert.match(serverSource, /if \(!isAttachmentPromptText\(entry\.text\)\) text\.push\(presentAppServerUserText\(entry\.text\)\)/);
 });

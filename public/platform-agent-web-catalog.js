@@ -54,6 +54,7 @@ export function watchAgentWebCatalog({
     // sessionRevision belongs to one server process. Clear the old ordering
     // domain immediately so a new instance's first status event can apply.
     controller.updateSessions((sessions) => sessions.map((session) => ({ ...session, sessionRevision: undefined })));
+    void controller.reconcileSelectedSession?.({ refresh: true, resetRevision: true });
     const previous = reconcileTask;
     reconcileAbort?.abort();
     if (previous) void previous.finally(() => { if (!disposed && visible()) void reconcile(); });
@@ -79,7 +80,7 @@ export function watchAgentWebCatalog({
     source?.close?.();
     source = null;
   };
-  const focus = () => { if (visible()) { start(); void reconcile(); } };
+  const focus = () => { if (visible()) { start(); void reconcile(); void controller.reconcileSelectedSession?.({ refresh: true }); } };
   const visibility = () => { if (visible()) focus(); else stop(); };
   windowObject.addEventListener?.('focus', focus);
   documentObject?.addEventListener?.('visibilitychange', visibility);

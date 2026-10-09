@@ -63,3 +63,11 @@ test('duplicate pending IDs and synchronous send failures do not orphan operatio
  socket.send=Loopback.prototype.send;assert.equal((await connection.send({type:'submit'},{idempotencyKey:'retry'})).accepted,true);
  connection.dispose();
 });
+
+test('a socket that never opens has a bounded handshake and cannot send after cancellation',async()=>{
+ class Silent extends EventTarget {readyState=0;send(){throw new Error('unexpected write');}close(){this.readyState=3;this.dispatchEvent(new Event('close'));}}
+ const timers=[];const connection=createAgentWebConnection('silent',{WebSocketClass:Silent,origin:{protocol:'http:',host:'test.invalid'},schedule:fn=>{timers.push(fn);return fn;},cancel:()=>{}});
+ const waiting=assert.rejects(connection.ready,/超时/);timers[0]();await waiting;connection.dispose();
+ const live=createAgentWebConnection('cancelled',{WebSocketClass:Loopback,origin:{protocol:'http:',host:'test.invalid'}});await live.ready;
+ const abort=new AbortController();abort.abort();await assert.rejects(live.send({type:'submit'},{signal:abort.signal}),{name:'AbortError'});live.dispose();
+});

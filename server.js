@@ -2,6 +2,7 @@ import { createSessionMetadataReader } from './lib/platform-session-metadata.js'
 import { AgentRuntimeReleaseCoordinator } from './lib/agent-runtime-release.js';
 import { createAgentSessionCommandHandler } from './lib/agent-session-commands.js';
 import { acceptTrackedTurnCompletion, completeTrackedTurn, turnRequirement, trimTrackedRequirements, restoreTurnState, interruptedTurnStateAfterProcessLoss, publicTurnState } from './lib/agent-turn-projection.js';
+import { presentAppServerUserText } from './lib/app-server-user-message.js';
 import { createSessionReferenceEnvelopeInput, normalizeSessionReferences, parseSessionReferenceEnvelopes, requireReferences, resolveAgentWebReferences, sessionReferenceKey } from './lib/session-references.js';
 import { registerPlatformSessionRoutes } from './lib/platform-session-routes.js';
 import { createPlatformSessionEvents } from './lib/platform-session-events.js';
@@ -1258,7 +1259,7 @@ app.get("/api/home/agent/conversation", async (req, res) => {
       messages: conversation.messages,
       hasEarlier: conversation.hasEarlier,
       nextCursor: conversation.nextCursor,
-      turn: live ? publicTurnState(live.turnState) : homeIdleTurnState(conversation.turn),
+      turn: live ? publicSessionTurnState(live) : homeIdleTurnState(conversation.turn),
       pendingApproval: live ? homePendingApproval(live) : null,
       agentHref: homeAgentHref(threadId, live),
     });
@@ -1378,7 +1379,7 @@ async function admitHomeTurn({ threadId, attachId, requestId, text, attachments 
     if (threadId && session.sessionId !== threadId) {
       throw homeGatewayError(409, "The resumed Session is bound to another conversation.");
     }
-    if (session.turnState?.active || session.appServer?.activeTurnId) {
+    if (sessionHasActiveTurn(session)) {
       throw homeGatewayError(409, "This Agent Session is busy. Wait for its current turn before sending another message.");
     }
     session.homeTurnSubmissionAdmission = true;
@@ -1397,7 +1398,7 @@ async function admitHomeTurn({ threadId, attachId, requestId, text, attachments 
       accepted: true,
       requestId,
       session: publicHomeSession({ id: session.sessionId, title: session.title, project: session.project }, session),
-      turn: publicTurnState(session.turnState),
+      turn: publicSessionTurnState(session),
       deliveryMode: submission.deliveryMode,
     };
     if (!rememberHomeTurnRequest(requestId, fingerprint, 202, payload)) {
@@ -1711,7 +1712,7 @@ app.post("/api/sessions/:id/fork", async (req, res) => {
     res.status(400).json({ error: "分支位置无效。" });
     return;
   }
-  if (session.turnState.active || session.appServer.activeTurnId) {
+  if (sessionHasActiveTurn(session)) {
     res.status(409).json({ error: "当前任务仍在处理中，完成后才能从这里分支。" });
     return;
   }
@@ -3011,7 +3012,7 @@ function homeTurnRequestResponse(entry) {
   return {
     ...payload,
     session: publicHomeSession({ id: threadId, title: payload.session?.title, project: payload.session?.project }, live),
-    turn: publicTurnState(live.turnState),
+    turn: publicSessionTurnState(live),
   };
 }
 
@@ -3284,7 +3285,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
         }
       }
 
-      if (message.expectedTurnId && ['interrupt-turn', 'agent-response', 'resume-interrupted'].includes(message.type) && message.expectedTurnId !== session.turnState.turnId) {
+      if (message.expectedTurnId && ['interrupt-turn', 'agent-response', 'resume-interrupted'].includes(message.type) && message.expectedTurnId !== runtimeActiveTurnId(session)) {
         reply('error', { message: 'The requested Turn is no longer current.' }); return;
       }
       if (message.type === "client-ping") {
@@ -3348,7 +3349,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
               kind: "submit",
               receivedAt: Date.now(),
               deliveryMode: "startup-queue",
-              turnState: publicTurnState(session.turnState),
+              turnState: publicSessionTurnState(session),
             });
             return;
           }
@@ -3357,7 +3358,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
             reply("error", { message: "Session 已归档，请恢复后重试。", preservePrompt: true });
             return;
           }
-          void submitAppServerPrompt(session, prompt.text, message.deliveryMode, skillNames, attachments, requirementText, { references })
+          void submitAppServerPrompt(session, prompt.text, message.deliveryMode, skillNames, attachments, requirementText, { references, operationKey })
             .then((submission) => {
               if (prompt.activatesThink) {
                 session.thinkSkillActivated = true;
@@ -3371,7 +3372,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
                 receivedAt: Date.now(),
                 deliveryMode: submission.deliveryMode,
                 skills: submission.skills,
-                turnState: publicTurnState(session.turnState),
+                turnState: publicSessionTurnState(session),
               });
             })
             .catch((error) => {
@@ -3390,7 +3391,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
       }
 
       if (message.type === "edit-and-fork") {
-        if (session.turnState.active || session.appServer.activeTurnId) {
+        if (sessionHasActiveTurn(session)) {
           reply("error", { message: "当前任务仍在处理，完成后才能编辑历史消息并分支。", preservePrompt: true });
           return;
         }
@@ -3434,7 +3435,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
               kind: "edit-and-fork",
               receivedAt: Date.now(),
               ...result,
-              turnState: publicTurnState(session.turnState),
+              turnState: publicSessionTurnState(session),
             });
           })
           .catch((error) => {
@@ -3544,7 +3545,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
           reply("error", { message: "The interrupted turn is already being continued." });
           return;
         }
-        if (!session.turnState.interrupted || session.turnState.active) {
+        if (!session.turnState.interrupted || sessionHasActiveTurn(session)) {
           reply("error", { message: "This session no longer has an interrupted turn to continue." });
           return;
         }
@@ -3560,7 +3561,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
               kind: "resume-interrupted",
               receivedAt: Date.now(),
               deliveryMode: submission.deliveryMode,
-              turnState: publicTurnState(session.turnState),
+              turnState: publicSessionTurnState(session),
             });
           })
           .catch((error) => {
@@ -3577,8 +3578,8 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
           reply("control-ack", { kind: "interrupt-turn", receivedAt: Date.now() });
           return;
         }
-        const turnId = session.appServer.activeTurnId || session.turnState.turnId;
-        if (!session.turnState.active || !turnId) {
+        const turnId = runtimeActiveTurnId(session);
+        if (!turnId) {
           reply("error", { message: "There is no active task to interrupt." });
           return;
         }
@@ -4017,13 +4018,31 @@ function expireAppServerRuntimeLease(session) {
 
 function sessionHasActiveWork(session) {
   return Boolean(
-    session?.turnState?.active ||
-      session?.appServer?.activeTurnId ||
+    sessionHasActiveTurn(session) ||
       session?.pendingStartupPrompts?.length ||
       session?.pendingServerRequests?.size ||
       session?.sideChat?.active ||
       realtimeBusy(session?.realtime),
   );
+}
+
+function runtimeDescription(session) {
+  if (session?.runtimeKernel !== "platform") return null;
+  return session.appServer?.describeRuntime?.() || null;
+}
+
+function runtimeActiveTurnId(session) {
+  const runtime = runtimeDescription(session);
+  if (runtime) return String(runtime.activeTurnId || "");
+  return session?.appServer?.activeTurnId || (session?.turnState?.active ? session.turnState.turnId : "");
+}
+
+function sessionHasActiveTurn(session) {
+  return Boolean(runtimeActiveTurnId(session));
+}
+
+function publicSessionTurnState(session) {
+  return publicTurnState(session?.turnState, runtimeDescription(session));
 }
 
 function resetDetachedCleanupAfterWork(session) {
@@ -4488,7 +4507,7 @@ async function appServerModels(session, argument) {
   return {
     currentModel: session.appModel || config.model || "default",
     currentReasoningEffort: session.appReasoningEffort || config.model_reasoning_effort || "default",
-    activeTurn: Boolean(session.turnState.active),
+    activeTurn: sessionHasActiveTurn(session),
     models,
     serviceTier: session.appServiceTier === "priority" ? "priority" : session.appServiceTier === "default" ? null : metadata.serviceTier,
     modelContextWindow: metadata.modelContextWindow,
@@ -4758,7 +4777,7 @@ async function submitAppServerPrompt(
   requirementText = text,
   options = {},
 ) {
-  const { references = [] } = options;
+  const { references = [], operationKey = "" } = options;
   await mediaSessionArchiveOperations.get(agentSessionSettingsKey(session.sessionId))?.catch(() => {});
   if (!session.ready || session.exited) throw new Error("App Server is still starting or has exited.");
   const state = session.turnState;
@@ -4777,15 +4796,16 @@ async function submitAppServerPrompt(
   if ((session.homeTurnSubmissionAdmission || homeTurnAdmissions.has(`thread:${session.sessionId}`)) && !options.homeAdmission) {
     throw new Error("A Home turn is being admitted for this Session. Please wait before sending another message.");
   }
-  if (options.rejectIfBusy && (state.active || appServer.activeTurnId)) {
+  if (options.rejectIfBusy && sessionHasActiveTurn(session)) {
     const error = homeGatewayError(409, "This Agent Session became busy while this turn was being admitted.");
     error.homeTurnNotSubmitted = true;
     throw error;
   }
   let lateSteer = false;
 
-  if (wantsQueue && appServer.activeTurnId) {
+  if (wantsQueue && sessionHasActiveTurn(session)) {
     const requirement = turnRequirement(state, requirementText, "queued", "queued");
+    if (operationKey) requirement.id = operationKey;
     state.queuedTurns.push(requirement);
     trimTrackedRequirements(state);
     queuePersonalMemoryCitation(session, requirement.id, personalMemory.citation);
@@ -4794,12 +4814,13 @@ async function submitAppServerPrompt(
         ...appServerTurnAccess(session),
         additionalContext: appServerTurnAdditionalContext(session, personalMemory.additionalContext),
         clientUserMessageId: requirement.id,
+        operationKey: operationKey || undefined,
       })
       .catch((error) => {
         if (error.code === 'QUEUED_TURN_CANCELLED') return;
         removeQueuedPersonalMemoryCitation(session, requirement.id);
         requirement.status = "failed";
-        if (!appServer.activeTurnId) state.active = false;
+        if (session.runtimeKernel !== "platform" && !appServer.activeTurnId) state.active = false;
         appendSessionOutput(session, `\r\n\x1b[31mQueued prompt failed: ${error.message}\x1b[0m\r\n`);
         persistRestorableWebSession(session);
         broadcast(session, "status", publicSession(session));
@@ -4809,17 +4830,17 @@ async function submitAppServerPrompt(
     return { deliveryMode: "queue", skills: activeSkills };
   }
 
-  if (appServer.activeTurnId) {
+  if (sessionHasActiveTurn(session)) {
     const requirement = turnRequirement(state, requirementText, "followup", "working");
+    if (operationKey) requirement.id = operationKey;
     state.requirements.push(requirement);
     trimTrackedRequirements(state);
     try {
       const result = await appServer.steerTurn(input(steerPromptText(text, state.requirements.length)), {
         additionalContext: appServerTurnAdditionalContext(session, personalMemory.additionalContext),
         clientUserMessageId: requirement.id,
+        operationKey: operationKey || undefined,
       });
-      state.active = true;
-      state.turnId = result.turnId;
       session.personalMemoryCitationsByTurn.set(
         result.turnId,
         mergeMemoryCitations(session.personalMemoryCitationsByTurn.get(result.turnId), personalMemory.citation),
@@ -4847,6 +4868,7 @@ async function submitAppServerPrompt(
     wantsQueue || lateSteer ? "queued" : "original",
     "working",
   );
+  if (operationKey) requirement.id = operationKey;
   state.requirements = [requirement];
   session.lastAssistantMessage = "";
   queuePersonalMemoryCitation(session, requirement.id, personalMemory.citation);
@@ -4856,13 +4878,18 @@ async function submitAppServerPrompt(
       ...appServerTurnAccess(session),
       additionalContext: appServerTurnAdditionalContext(session, personalMemory.additionalContext),
       clientUserMessageId: requirement.id,
+      operationKey: operationKey || undefined,
     });
   } catch (error) {
     removeQueuedPersonalMemoryCitation(session, requirement.id);
+    requirement.status = "failed";
+    if (session.runtimeKernel !== "platform") state.active = Boolean(appServer.activeTurnId);
     throw error;
   }
-  state.turnId = appServer.activeTurnId ? turn.id : state.turnId;
-  state.active = Boolean(appServer.activeTurnId);
+  if (session.runtimeKernel !== "platform") {
+    state.turnId = appServer.activeTurnId ? turn.id : state.turnId;
+    state.active = Boolean(appServer.activeTurnId);
+  }
   persistRestorableWebSession(session);
   broadcast(session, "status", publicSession(session));
   return { deliveryMode: wantsQueue || lateSteer ? "queue-fallback" : "new", skills: activeSkills };
@@ -4892,7 +4919,7 @@ async function drainAppServerStartupPrompts(session) {
         kind: "startup-submit",
         receivedAt: Date.now(),
         skills: submission.skills,
-        turnState: publicTurnState(session.turnState),
+        turnState: publicSessionTurnState(session),
       });
     } catch (error) {
       if (prompt.activatesThink) session.thinkSkillActivationPending = false;
@@ -5681,7 +5708,7 @@ async function createSideChat(session) {
       ephemeral: true,
       excludeTurns: true,
     };
-    if (session.turnState.active && session.turnState.turnId) forkParams.beforeTurnId = session.turnState.turnId;
+    if (runtimeActiveTurnId(session)) forkParams.beforeTurnId = runtimeActiveTurnId(session);
     const result = await client.forkThread(forkParams);
     sideChat.threadId = String(result?.thread?.id || client.threadId || "");
     if (!sideChat.threadId) throw new Error("Codex 没有返回临时对话 ID。");
@@ -5874,7 +5901,7 @@ function normalizeRealtimeTransport(value) {
 
 async function startRealtimeConversation(session, { voice, transport } = {}) {
   if (!session.ready || session.exited) throw new Error("当前 Session 还没有准备好。");
-  if (session.turnState.active || session.appServer.activeTurnId) {
+  if (sessionHasActiveTurn(session)) {
     throw new Error("主 Session 仍在执行任务，请等当前 turn 完成后再开始实时对话。");
   }
   if (realtimeBusy(session.realtime)) throw new Error("实时对话已经在进行。");
@@ -6260,9 +6287,9 @@ function appServerUserMessageContent(session, content) {
   const text = [];
   const attachments = [];
   for (const entry of content) {
-    if (typeof entry === "string") text.push(entry);
+    if (typeof entry === "string") text.push(presentAppServerUserText(entry));
     else if (entry?.type === "text" && entry.text) {
-      if (!isAttachmentPromptText(entry.text)) text.push(entry.text);
+      if (!isAttachmentPromptText(entry.text)) text.push(presentAppServerUserText(entry.text));
     } else if (entry?.type === "image" && entry.url) text.push(`图片：${entry.url}`);
     else if (["localImage", "localAudio", "mention"].includes(entry?.type) && entry.path) {
       attachments.push(appServerMessageAttachment(session, entry));
@@ -6488,7 +6515,7 @@ function handleAppServerNotification(session, message) {
   if (notificationThreadId && session.sessionId && notificationThreadId !== session.sessionId) return;
   // Old/duplicate completions must not mutate the current product projection or
   // trigger previews, memory processing and notifications a second time.
-  if (method === 'turn/completed' && !acceptTrackedTurnCompletion(session.turnState, cleanTurnId(params.turn?.id))) return;
+  if (method === 'turn/completed' && !acceptTrackedTurnCompletion(session.turnState, cleanTurnId(params.turn?.id), runtimeDescription(session))) return;
   // Resume/status/context notifications describe a thread; they are not new work.
   // Only actual turn/item activity can move a conversation in Recent.
   if (notificationThreadId && (method.startsWith('turn/') || method.startsWith('item/') || (method === 'error' && params.turnId))) session.lastActivityAt = new Date().toISOString();
@@ -7090,7 +7117,7 @@ function publicSession(session, snapshot = null) {
       sideChat: true,
       realtimeV3: true,
     },
-    turnState: publicTurnState(session.turnState),
+    turnState: publicSessionTurnState(session),
     ...resultState,
   };
 }
@@ -7201,7 +7228,7 @@ function persistWebSession(session) {
       [APP_SERVER_RELEASE_REASON_DETACHED_TTL, APP_SERVER_RELEASE_REASON_IDLE_TTL].includes(session.releaseReason)
         ? session.releaseReason
         : "",
-    turnState: publicTurnState(session.turnState),
+    turnState: publicSessionTurnState(session),
     operationReceipts: serializableSessionOperationReceipts(session.operationReceipts),
     uiRevision: session.uiRevision || 0,
   };

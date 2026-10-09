@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { acceptTrackedTurnCompletion, completeTrackedTurn, restoreTurnState, interruptedTurnStateAfterProcessLoss, turnRequirement } from "../lib/agent-turn-projection.js";
+import { acceptTrackedTurnCompletion, completeTrackedTurn, publicTurnState, restoreTurnState, interruptedTurnStateAfterProcessLoss, turnRequirement } from "../lib/agent-turn-projection.js";
 function working() {
   const state = restoreTurnState({ active: true, turnId: "current", sequence: 1, lastCompletedTurnId: "previous" });
   state.requirements = [turnRequirement(state, "current request", "original", "working")];
@@ -37,4 +37,14 @@ test("completion before the start response is projected, and process loss preser
   assert.equal(lost.requirements[0].status, "interrupted");
   assert.equal(lost.requirements[0].text, "keep this request");
   assert.equal(acceptTrackedTurnCompletion(lost, ""), false);
+});
+
+test("Platform Runtime state is authoritative for the public projection and rejects an old completion", () => {
+  const session = working();
+  const runtime = { activeTurnId: "newer-turn" };
+  assert.equal(acceptTrackedTurnCompletion(session.turnState, "current", runtime), false);
+  assert.deepEqual(publicTurnState(session.turnState, runtime).active, true);
+  assert.equal(publicTurnState(session.turnState, runtime).turnId, "newer-turn");
+  assert.equal(publicTurnState(session.turnState, { activeTurnId: null }).active, false);
+  assert.equal(publicTurnState(session.turnState, { activeTurnId: null }).turnId, "");
 });

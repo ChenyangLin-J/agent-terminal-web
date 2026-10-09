@@ -53,13 +53,40 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
   const emit = (event) => listeners.forEach((listener) => listener(event));
 
   const adapter = {
+    submissionMessage(action, payload) {
+      if (!['send', 'append', 'queue'].includes(action) || /^\/(?:memories|status|usage|model|permissions|fast|skills|goal|rename|compact|diff|review|mcp|plugins|hooks)(?:\s|$)/.test(payload.text || '')) return null;
+      return { role: 'user', content: payload.text || payload.prompt || '', references: payload.references || [],
+        attachments: (payload.attachments || []).map(item => ({ ...item, id: item.path || item.id, name: item.originalName || item.name, mimeType: item.mime || item.mimeType })) };
+    },
+    isSubmissionEcho(snapshot, submission) {
+      const baseline = new Set(submission.baseline);
+      const turnId = submission.result?.deliveryMode === 'queue' ? '' : submission.result?.turnState?.turnId;
+      return (snapshot.messages || []).some(message => message.role === 'user' && !message.submissionId
+        && (message.id === submission.idempotencyKey || (!baseline.has(message.id) && message.content === submission.message.content
+        && (!turnId || !message.turnId || message.turnId === turnId)
+        && JSON.stringify((message.references || []).map(item => item.threadId || item.id).sort()) === JSON.stringify((submission.message.references || []).map(item => item.threadId || item.id).sort())
+        && JSON.stringify((message.attachments || []).map(item => item.path || item.id).sort()) === JSON.stringify((submission.message.attachments || []).map(item => item.path || item.id).sort()))));
+    },
+    reconcileSelection(snapshot, rows) {
+      const id = snapshot.sessionId;
+      const summary = rows.find(item => item.id === id) || rows.find(item => snapshot.threadId && (item.threadId || item.sessionId) === snapshot.threadId);
+      if (summary) adoptCatalogBinding(id, summary);
+      const target = targets.get(id) || id;
+      const bindingChanged = Boolean(snapshot.webSessionId && snapshot.webSessionId !== target)
+        || (Boolean(targets.has(id)) && Boolean(snapshot.preview))
+        || (Boolean(snapshot.released) && !snapshot.preview);
+      const snapshotRequired = summary && catalogVersion(summary) !== catalogVersion(snapshot.session || {})
+        && (Number(summary.sessionRevision ?? -1) > Number(snapshot.revision ?? -1)
+          || Date.parse(summary.updatedAt || 0) > Date.parse(snapshot.session?.lastActivityAt || 0));
+      return { bindingChanged, snapshotRequired: Boolean(snapshotRequired) };
+    },
     resolveSessionId: (id) => [...targets].find(([, target]) => target === id)?.[0] || id,
     async listSessions({ query = "", archived = false, cursor = null, signal } = {}) {
       const params = new URLSearchParams({ q: query, archived: archived ? '1' : '0', limit: '20' });
       if (cursor) params.set('cursor', cursor);
       const result = await json(`/api/platform/sessions?${params}`, { signal });
       const aliases = new Map([...targets].map(([alias, target]) => [target, alias]));
-      const values = (result.sessions || []).map((value) => normalizeSession({ ...value, id: aliases.get(value.id) || value.id }));
+      const values = (result.sessions || []).map((value) => normalizeSession({ ...value, attachmentId: value.id, id: aliases.get(value.id) || value.id }));
       for (const value of values) {
         const previous = summaries.get(value.id);
         summaries.set(value.id, value);
@@ -75,6 +102,7 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
       if (!id) return current;
       const existing = current.find((item) => item.id === id);
       if (!catalogEventIsNewer(existing, incoming, event)) return current;
+      adoptCatalogBinding(id, incoming);
       summaries.set(id, { ...incoming, id });
       return sortSessionSummaries(current.map((item) => item.id === id ? { ...item, ...incoming, id } : item));
     },
@@ -104,6 +132,7 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
         // snapshot, even when the HTTP response resolves afterwards.
         if (baseline.has(item.id) && baseline.get(item.id) !== catalogVersion(item)) return item;
         const next = { ...item, ...incoming, id: item.id, sessionRevision: incoming.sessionRevision };
+        adoptCatalogBinding(item.id, incoming);
         summaries.set(item.id, next);
         return next;
       });
@@ -165,6 +194,10 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
         if ((targets.get(id) || id) !== target) return adapter.readSession(id, { signal });
         return rememberPreview(id, enriched);
       }
+      const actualTarget = result.session?.id || target;
+      if (actualTarget !== target) { bindTarget(id, actualTarget); target = actualTarget; }
+      released.delete(id);
+      previews.delete(id);
       const snapshot = normalizeSnapshot(result);
       const catalog = await presentationMetadata(result.session?.cwd || '.');
       if ((targets.get(id) || id) !== target) return adapter.readSession(id, { signal });
@@ -196,7 +229,7 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
       return normalizeSnapshot(current);
     },
 
-    async execute(id, action, payload = {}, { idempotencyKey } = {}) {
+    async execute(id, action, payload = {}, { idempotencyKey, signal } = {}) {
       if (action === 'loadTechnicalDetails') {
         const threadId = knownThread(id) || (await adapter.readSession(id)).threadId;
         const key = `${threadId}:${payload.turnId}`;
@@ -253,6 +286,7 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
             if (lazyMetadata) await readMetadata(draft.cwd || '.');
             rememberPendingProfile(id, draftSnapshot(id).executionProfile);
             const created = await adapter.createSession({ ...draft, sessionId: '', access: serverAccess(pendingProfiles.get(id).accessMode), startRuntime: true }, { idempotencyKey: `launch:${id.slice(6)}` });
+            checkAborted(signal);
             bindTarget(id, created.sessionId);
             const waiting = draftSubscriptions.get(id);
             if (waiting) waiting.cleanup = adapter.subscribeSession(id, waiting.options);
@@ -261,6 +295,7 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
         }
         await launches.get(id);
       }
+      checkAborted(signal);
       const target = targets.get(id) || id;
       if (pendingProfiles.has(id) && ['send', 'append', 'queue'].includes(action)) {
         if (!profileApplications.has(id)) {
@@ -311,9 +346,10 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
         globalThis.dispatchEvent?.(new CustomEvent('agent-web-open-session-panel', { detail: { sessionId: id, panel: 'command', result } }));
         return result;
       }
+      checkAborted(signal);
       const message = actionMessage(action, { ...payload, notificationApp: notificationTarget.app, notificationDeviceId: notificationTarget.deviceId }, idempotencyKey);
       if (!message) throw new Error(`Unsupported Agent Web session action: ${action}`);
-      return connection.send(message, { idempotencyKey });
+      return connection.send(message, { idempotencyKey, signal });
     },
 
     subscribeSession(id, { onEvent, onConnection, signal, afterRevision } = {}) {
@@ -449,6 +485,15 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
     },
   };
   return adapter;
+
+  function adoptCatalogBinding(id, summary) {
+    const nativeId = knownThread(id) || summaries.get(id)?.threadId || summaries.get(id)?.sessionId;
+    const incomingThread = summary.threadId || summary.sessionId;
+    const incomingTarget = summary.attachmentId || summary.id;
+    if (!sourceSession && nativeId && nativeId === incomingThread && !summary.released && !incomingTarget.startsWith('history:') && incomingTarget !== (targets.get(id) || id)) {
+      bindTarget(id, incomingTarget); released.delete(id); previews.delete(id);
+    }
+  }
 
   function knownThread(id) { return previews.get(id)?.threadId || threadBySession.get(id) || released.get(id)?.sessionId || (id.startsWith('history:') && !targets.has(id) ? id.slice(8) : null); }
 
@@ -649,6 +694,7 @@ export function applyAgentWebEvent(snapshot = {}, event = {}) {
 function normalizeSession(session = {}) {
   return {
     ...session,
+    attachmentId: session.attachmentId || session.id,
     id: String(session.id || session.sessionId || ""),
     sessionId: String(session.sessionId || session.id || ""),
     title: session.title || "New Codex session",
@@ -670,6 +716,9 @@ function catalogEventIsNewer(current, incoming, event) {
   if (!current) return false;
   // sessionRevision is the ordering domain for status broadcasts. outputRevision
   // counts terminal output bytes/events and must never be compared with it.
+  if (current.attachmentId && incoming.attachmentId && current.attachmentId !== incoming.attachmentId) {
+    return !incoming.released && Date.parse(incoming.updatedAt || 0) >= Date.parse(current.updatedAt || 0);
+  }
   const previousRevision = Number(current.sessionRevision ?? -1);
   const incomingRevision = Number(event?.revision ?? incoming.sessionRevision ?? -1);
   if (previousRevision >= 0 && incomingRevision >= 0) return incomingRevision > previousRevision;
@@ -751,3 +800,5 @@ function withMetadata(snapshot, catalog) {
     accessModes: [{ id: 'full', label: '完全访问' }, { id: 'restricted', label: '按需确认' }],
   };
 }
+
+function checkAborted(signal) { if (signal?.aborted) throw new DOMException('Session operation was cancelled before submission.', 'AbortError'); }

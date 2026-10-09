@@ -190,6 +190,20 @@ test("platform client steers the exact active turn and surfaces late-steer error
   await assert.rejects(() => client.steerTurn("Too late"), /no active turn/i);
 });
 
+test("platform client preserves product submission correlation on the native user message", async (t) => {
+  const { fake, client, kernel } = createClient();
+  t.after(() => { client.close(); kernel.close(); });
+  await client.start();
+  await client.startThread({ cwd: "/tmp" });
+  await client.startTurn("Correlated request", {
+    clientUserMessageId: "operation-123",
+    operationKey: "operation-123",
+  });
+  const start = fake.received.find((message) => message.method === "turn/start");
+  assert.equal(start.params.clientUserMessageId, "operation-123");
+  assert.equal(start.params.operationKey, "operation-123");
+});
+
 test("platform client delivers error notifications without requiring an error listener", async (t) => {
   const { fake, client, kernel } = createClient();
   t.after(() => {
@@ -335,6 +349,24 @@ test("platform client queues turns behind the active turn and drains on completi
   assert.deepEqual(starts[1].params.input, [{ type: "text", text: "Next turn" }]);
 });
 
+test("kernel state does not revive a completed Turn when its start response arrives late", async (t) => {
+  const fake = createFakeAppServer();
+  fake.completeBeforeTurnStartResponse = true;
+  const { client, kernel } = createClient({ fake });
+  t.after(() => { client.close(); kernel.close(); });
+  await client.start();
+  await client.startThread({ cwd: "/tmp" });
+
+  const turn = await client.startTurn("Very fast task");
+  assert.equal(turn.id, "turn-1");
+  assert.equal(client.describeRuntime().activeTurnId, null);
+  assert.equal(client.activeTurnId, "");
+
+  const next = await client.startTurn("Next task");
+  assert.equal(next.id, "turn-2");
+  assert.equal(client.activeTurnId, "turn-2");
+});
+
 test("platform client resumes a thread and restores the active turn", async (t) => {
   const { fake, client, kernel } = createClient({ sessionId: "web-resume" });
   t.after(() => {
@@ -414,6 +446,7 @@ function tick() {
 
 function createFakeAppServer() {
   const child = new EventEmitter();
+  const fake = { child, stdout: null, stderr: null, received: null, send: null, completeBeforeTurnStartResponse: false };
   const stdout = new PassThrough();
   const stderr = new PassThrough();
   const received = [];
@@ -479,6 +512,14 @@ function createFakeAppServer() {
     }
     if (message.method === "turn/start") {
       turnNumber += 1;
+      if (fake.completeBeforeTurnStartResponse) {
+        fake.completeBeforeTurnStartResponse = false;
+        const turn = { id: `turn-${turnNumber}`, status: "completed" };
+        send({ method: "turn/started", params: { threadId: message.params.threadId, turn } });
+        send({ method: "turn/completed", params: { threadId: message.params.threadId, turn } });
+        send({ id: message.id, result: { turn } });
+        return;
+      }
       send({ id: message.id, result: { turn: { id: `turn-${turnNumber}` } } });
       return;
     }
@@ -509,5 +550,6 @@ function createFakeAppServer() {
     send({ id: message.id, result: {} });
   }
 
-  return { child, stdout, stderr, received, send };
+  Object.assign(fake, { stdout, stderr, received, send });
+  return fake;
 }

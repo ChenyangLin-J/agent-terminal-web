@@ -23,6 +23,7 @@ const controller = createSessionHostController({
   adapter,
   initialSessionId,
   independentStartup: true,
+  submissionFeedback: true,
   capabilities: {
     attachments: true,
     queue: true,

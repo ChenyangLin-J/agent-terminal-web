@@ -53,8 +53,14 @@ details, inventories or command result bodies.
 
 Before a completion updates previews, product requirements, memory processing or
 notifications, its Turn identity must match the current projection and must not
-already be completed. Completion before the start response is also valid; the
-response cannot restore a phantom active task. An interrupted client release waits
+already be completed. Completion before either a start or steer response is valid; those responses do
+not set Platform execution state. Public snapshots, receipts, Home responses and
+stop/busy guards read the facade's synchronous `describeRuntime()`. Requirements
+retain only product text/status; a rejected start marks its requirement failed.
+The configured legacy rollback client still projects its actual active Turn ID.
+Native user messages retain the browser operation identity through
+`clientUserMessageId`. Product follow-up wrappers stay in the provider prompt and
+are removed from transcript presentation, preserving the original user text. An interrupted client release waits
 for completion before unsubscribe, with a bounded wait and an observable failure.
 
 ## Stores and trust boundaries
@@ -106,7 +112,7 @@ translation, thread isolation, product projections, persistence and side effects
 `agent-session-commands.test.js`, `agent-web-connection.test.js` and the service
 integration fixtures exercise those boundaries without inspecting function layout.
 
-The formal dependency is Platform v0.37.0, including the `describeRuntime()` and
+The formal dependency is Platform v0.43.0, including the `describeRuntime()` and
 release/lease contracts used by this adapter. Normal builds and tests use that
 immutable published package. For an unreleased paired build, set
 `AGENT_PLATFORM_CANDIDATE` to the Platform worktree for both the browser build and
@@ -148,3 +154,17 @@ Root/index routes serve the activated generated HTML, and fixed legacy entry
 asset URLs redirect through the current manifest. A missing build returns 503.
 
 `lib/platform-file-preview.js` resolves authenticated local files within the real workspace root and returns shared Platform preview descriptors and raw media. Symlinks outside the root are rejected. Text size is checked before reading; active HTML never becomes an unsandboxed same-origin raw document. Preview state and latest-request cancellation belong to the product controller.
+
+The Web adapter opts into Platform Host submission feedback. Preparation and
+acknowledgement are bounded; input recovery uses the existing Composer error
+contract, while an unknown result retains the same operation ID. The adapter
+maps native echo IDs (with a baseline-aware compatibility fallback) and never
+changes execution status for a temporary message. A WebSocket handshake also has
+a deadline, and cancelled preparation cannot issue a late native submit.
+
+Web attachment IDs are transport bindings for a native logical thread. A live
+catalogue entry for the same thread replaces released metadata and supplies the
+new binding to Platform's selected Session recovery. Old deep-link reads use the
+actual attachment returned by the server before subscribing. Catalogue activity,
+foreground recovery and restart revision changes reconcile only the selected
+body; they do not open connections or load transcripts for other history rows.

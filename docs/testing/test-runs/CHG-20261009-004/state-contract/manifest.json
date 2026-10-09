@@ -1,0 +1,152 @@
+{
+  "schemaVersion": 1,
+  "tool": "workspace-playwright",
+  "name": "submission-and-native-binding-state",
+  "command": "record",
+  "status": "passed",
+  "startedAt": "2026-10-09T08:09:31.282Z",
+  "finishedAt": "2026-10-09T08:09:57.111Z",
+  "durationMs": 25829,
+  "flow": "/Users/mac/Documents/worktrees/CHG-20261009-004/agent-terminal-web/scripts/testing/session-state-contract.flow.mjs",
+  "baseUrl": "http://127.0.0.1:4309/",
+  "traceMode": "failure",
+  "profiles": [
+    {
+      "name": "desktop",
+      "status": "passed",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "steps": [
+        {
+          "number": 1,
+          "type": "checkpoint",
+          "title": "旧连接按需展示历史，不启动任务",
+          "screenshot": "screenshots/01-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        },
+        {
+          "number": 2,
+          "type": "checkpoint",
+          "title": "准备完成前用户消息立即出现",
+          "screenshot": "screenshots/02-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        },
+        {
+          "number": 3,
+          "type": "checkpoint",
+          "title": "完成早于追加回包，迟到回包不会恢复执行中",
+          "screenshot": "screenshots/03-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        },
+        {
+          "number": 4,
+          "type": "checkpoint",
+          "title": "启动失败显示错误并恢复输入",
+          "screenshot": "screenshots/04-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        },
+        {
+          "number": 5,
+          "type": "checkpoint",
+          "title": "释放旧连接后另一端恢复，同一正文自动接到新连接",
+          "screenshot": "screenshots/05-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        },
+        {
+          "number": 6,
+          "type": "checkpoint",
+          "title": "断线重连补齐完成状态，消息与草稿保留",
+          "screenshot": "screenshots/06-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        }
+      ],
+      "videos": [
+        {
+          "segment": 1,
+          "file": "video.webm",
+          "bytes": 671802,
+          "finalUrl": "http://127.0.0.1:4309/"
+        }
+      ],
+      "trace": null,
+      "pages": [
+        {
+          "number": 1,
+          "finalUrl": "http://127.0.0.1:4309/"
+        }
+      ],
+      "error": null
+    },
+    {
+      "name": "mobile",
+      "status": "passed",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "steps": [
+        {
+          "number": 1,
+          "type": "checkpoint",
+          "title": "旧连接按需展示历史，不启动任务",
+          "screenshot": "screenshots/01-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        },
+        {
+          "number": 2,
+          "type": "checkpoint",
+          "title": "准备完成前用户消息立即出现",
+          "screenshot": "screenshots/02-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        },
+        {
+          "number": 3,
+          "type": "checkpoint",
+          "title": "完成早于追加回包，迟到回包不会恢复执行中",
+          "screenshot": "screenshots/03-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        },
+        {
+          "number": 4,
+          "type": "checkpoint",
+          "title": "启动失败显示错误并恢复输入",
+          "screenshot": "screenshots/04-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        },
+        {
+          "number": 5,
+          "type": "checkpoint",
+          "title": "释放旧连接后另一端恢复，同一正文自动接到新连接",
+          "screenshot": "screenshots/05-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        },
+        {
+          "number": 6,
+          "type": "checkpoint",
+          "title": "断线重连补齐完成状态，消息与草稿保留",
+          "screenshot": "screenshots/06-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        }
+      ],
+      "videos": [
+        {
+          "segment": 1,
+          "file": "video.webm",
+          "bytes": 351237,
+          "finalUrl": "http://127.0.0.1:4309/"
+        }
+      ],
+      "trace": null,
+      "pages": [
+        {
+          "number": 1,
+          "finalUrl": "http://127.0.0.1:4309/"
+        }
+      ],
+      "error": null
+    }
+  ],
+  "outputDir": "/Users/mac/Documents/worktrees/CHG-20261009-004/agent-terminal-web/docs/testing/test-runs/CHG-20261009-004/state-contract"
+}

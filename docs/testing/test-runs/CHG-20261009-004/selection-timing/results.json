@@ -8,7 +8,7 @@
     },
     "first": {
       "phase": "selection-visible",
-      "totalMs": 54,
+      "totalMs": 68,
       "cached": false,
       "messages": 2
     },
@@ -18,7 +18,19 @@
       "cached": true,
       "messages": 2
     },
-    "snapshotBytes": 3046,
+    "releasedFirst": {
+      "phase": "selection-visible",
+      "totalMs": 43,
+      "cached": false,
+      "messages": 2
+    },
+    "releasedWarm": {
+      "phase": "selection-visible",
+      "totalMs": 24,
+      "cached": true,
+      "messages": 2
+    },
+    "snapshotBytes": 3052,
     "closedExecutionRecords": 315,
     "processReads": 1,
     "passed": true
@@ -32,17 +44,29 @@
     },
     "first": {
       "phase": "selection-visible",
-      "totalMs": 40,
+      "totalMs": 46,
       "cached": false,
       "messages": 2
     },
     "warm": {
       "phase": "selection-visible",
+      "totalMs": 29,
+      "cached": true,
+      "messages": 2
+    },
+    "releasedFirst": {
+      "phase": "selection-visible",
+      "totalMs": 44,
+      "cached": false,
+      "messages": 2
+    },
+    "releasedWarm": {
+      "phase": "selection-visible",
       "totalMs": 31,
       "cached": true,
       "messages": 2
     },
-    "snapshotBytes": 3040,
+    "snapshotBytes": 3046,
     "closedExecutionRecords": 315,
     "processReads": 1,
     "passed": true

@@ -27,8 +27,28 @@ async function fixture(t) {
     const response = await fetch(`http://127.0.0.1:${server.address().port}${pathname}`, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
     return { status: response.status, body: await response.json() };
   };
-  return { request, host, counts: () => ({ created, cancelled }) };
+  return { request, host, origin: `http://127.0.0.1:${server.address().port}`, counts: () => ({ created, cancelled }) };
 }
+
+test('selected JSON negotiates gzip, retains UTF-8 data and private no-store, and honors identity', async t => {
+  const { host, origin } = await fixture(t);
+  const live = host.create('.', { title: 'A' });
+  const value = { session: { id: live.id }, transcript: { items: [{ type: 'assistant', phase: 'final_answer', text: '这是完整的正文。'.repeat(5000) }] } };
+  host.snapshot = () => value;
+  let timing;
+  host.logSnapshot = value => { timing = value; };
+  for (const encoding of ['gzip', 'identity', 'gzip;q=0, identity']) {
+    const response = await fetch(`${origin}/api/platform/sessions/${live.id}`, { headers: { 'Accept-Encoding': encoding } });
+    assert.deepEqual(await response.json(), value);
+    assert.equal(response.headers.get('Cache-Control'), 'private, no-store');
+    assert.match(response.headers.get('Vary'), /Accept-Encoding/);
+    assert.equal(Number(response.headers.get('X-Agent-Snapshot-Bytes')), Buffer.byteLength(JSON.stringify(value)));
+    if (encoding === 'gzip') {
+      assert.equal(response.headers.get('Content-Encoding'), 'gzip');
+      assert.ok(timing.encodedBytes < timing.bytes / 10);
+    } else assert.equal(response.headers.get('Content-Encoding'), null);
+  }
+});
 
 test('create and queue cancellation replay receipts without repeating their side effects', async t => {
   const { request, counts } = await fixture(t);

@@ -36,11 +36,11 @@ export default async function ({ page, evidence, baseUrl, profile }) {
   await showList();
   const row = page.locator('.cwu-browser-row-main').filter({ hasText: `状态验收 ${profile}` });
   await row.waitFor();
-  const select = async (cached) => {
+  const select = async (cached, targetRow = row, targetProfile = profile) => {
     await showList();
     const count = metrics.length;
-    await row.click();
-    await page.getByText(`历史答复 ${profile}`, { exact: true }).waitFor();
+    await targetRow.click();
+    await page.getByText(`历史答复 ${targetProfile}`, { exact: true }).waitFor();
     await page.waitForFunction(() => document.querySelectorAll('.cwu-message').length === 2);
     for (let i = 0; i < 50 && metrics.length === count; i++) await page.waitForTimeout(20);
     assert.ok(metrics.length > count, 'selection paint metric must be emitted');
@@ -73,7 +73,16 @@ export default async function ({ page, evidence, baseUrl, profile }) {
   assert.equal((await processResponse.json()).items.length, 315);
   assert.equal(processes.length, 1);
   await evidence.checkpoint('展开执行记录后才读取完整历史详情');
+  // A released attachment is still an idle, verified conversation. It must
+  // retain the same fast return without starting a native Runtime.
+  await showList();
+  const releasedRow = page.locator('.cwu-browser-row-main').filter({ hasText: `状态验收 released-${profile}` });
+  const releasedFirst = await select(false, releasedRow, `released-${profile}`);
+  await showList();
+  await page.getByRole('button', { name: '新建对话', exact: true }).click();
+  const releasedWarm = await select(true, releasedRow, `released-${profile}`);
+  await evidence.checkpoint('旧连接已释放的会话也能在五百毫秒内切回');
   assert.deepEqual(errors, []);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-  process.stdout.write(JSON.stringify({ profile, network: 'loopback Chromium, synthetic native history and 1500ms revalidation delay', budgetsMs: { first: 2000, warm: 500 }, first, warm, snapshotBytes: Buffer.byteLength(JSON.stringify(current)), closedExecutionRecords: 315, processReads: processes.length, passed: true }) + '\n');
+  process.stdout.write(JSON.stringify({ profile, network: 'loopback Chromium, synthetic native history and 1500ms revalidation delay', budgetsMs: { first: 2000, warm: 500 }, first, warm, releasedFirst, releasedWarm, snapshotBytes: Buffer.byteLength(JSON.stringify(current)), closedExecutionRecords: 315, processReads: processes.length, passed: true }) + '\n');
 }

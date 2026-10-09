@@ -1,7 +1,7 @@
 # session-selection-duration-and-demand-loading
 
 - Status: **passed**
-- Started: 2026-10-09T09:00:25.912Z
+- Started: 2026-10-09T09:15:46.059Z
 - Flow: `/Users/mac/Documents/worktrees/CHG-20261009-004/agent-terminal-web/scripts/testing/session-selection-timing.flow.mjs`
 
 ## desktop
@@ -26,6 +26,10 @@ Viewport: 1440 × 900. Status: **passed**.
 
 ![展开执行记录后才读取完整历史详情](desktop/screenshots/03-checkpoint.png)
 
+#### 4. 旧连接已释放的会话也能在五百毫秒内切回
+
+![旧连接已释放的会话也能在五百毫秒内切回](desktop/screenshots/04-checkpoint.png)
+
 ## mobile
 
 Viewport: 390 × 844. Status: **passed**.
@@ -47,6 +51,10 @@ Viewport: 390 × 844. Status: **passed**.
 #### 3. 展开执行记录后才读取完整历史详情
 
 ![展开执行记录后才读取完整历史详情](mobile/screenshots/03-checkpoint.png)
+
+#### 4. 旧连接已释放的会话也能在五百毫秒内切回
+
+![旧连接已释放的会话也能在五百毫秒内切回](mobile/screenshots/04-checkpoint.png)
 
 > URLs in the manifest are sanitized. Video and screenshots contain the rendered viewport; traces can contain request data and should be promoted or shared only after review.
 

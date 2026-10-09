@@ -58,12 +58,18 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
       const summary = rows.find(item => item.id === id) || rows.find(item => snapshot.threadId && (item.threadId || item.sessionId) === snapshot.threadId);
       if (!summary || !['idle', 'unread'].includes(summary.status) || snapshot.status !== 'idle'
         || snapshot.session?.turnState?.active || summary.turnState?.active || summary.pendingServerRequestCount
-        || snapshot.pendingRequests?.length || summary.ready === false) return null;
+        || snapshot.pendingRequests?.length || (summary.ready === false && !snapshot.preview)) return null;
       const target = targets.get(id) || id;
       if (snapshot.webSessionId && snapshot.webSessionId !== target) return null;
       if (snapshot.preview && targets.has(id)) return null;
       if (summary.attachmentId && snapshot.webSessionId && summary.attachmentId !== snapshot.webSessionId) return null;
-      return JSON.stringify([snapshot.threadId, snapshot.webSessionId || target, catalogVersion(summary)]);
+      // Client attach/detach and model metadata advance sessionRevision without
+      // changing conversation data. Attest its semantic output/lifecycle version
+      // so merely switching away cannot invalidate an otherwise verified body.
+      return JSON.stringify([snapshot.threadId, snapshot.webSessionId || target,
+        summary.outputRevision ?? null, summary.updatedAt || '', summary.status || '',
+        summary.turnState?.turnId || '', summary.turnState?.lastCompletedTurnId || summary.lastCompletedTurnId || '',
+        Boolean(summary.hasUnreadResult)]);
     },
     submissionMessage(action, payload) {
       if (!['send', 'append', 'queue'].includes(action) || /^\/(?:memories|status|usage|model|permissions|fast|skills|goal|rename|compact|diff|review|mcp|plugins|hooks)(?:\s|$)/.test(payload.text || '')) return null;
@@ -767,6 +773,7 @@ async function json(url, options = {}) {
     console.info('AgentWebTiming', JSON.stringify({ phase: 'snapshot-read',
       headersMs: Math.round(headersAt - started), bodyMs: Math.round(performance.now() - headersAt),
       totalMs: Math.round(performance.now() - started), bytes: Number(response.headers?.get('x-agent-snapshot-bytes') || response.headers?.get('content-length') || 0),
+      encodedBytes: Number(response.headers?.get('x-agent-snapshot-encoded-bytes') || response.headers?.get('content-length') || 0),
       serverTiming: response.headers?.get('server-timing') || '' }));
   }
   if (!response.ok) throw Object.assign(new Error(body.error?.message || body.error || `Request failed (${response.status}).`), { knownResult: response.status >= 400 && response.status < 500 });

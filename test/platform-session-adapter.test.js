@@ -4,7 +4,7 @@ import test from "node:test";
 import { applyAgentWebEvent, createAgentWebSessionAdapter, normalizeSnapshot, previewSnapshot } from "../public/platform-agent-web-adapter.js";
 import { agentWebSessionContext } from '../public/platform-agent-web-adapter.js';
 
-test('warm body eligibility is pure and rejects unknown, newer active, or replaced native binding', t => {
+test('warm body eligibility ignores connection metadata and rejects unknown, newer output, active or replaced binding', t => {
   const adapter = createAgentWebSessionAdapter({ clientId: 'cache-key-test', lazyMetadata: true });
   t.after(() => adapter.dispose());
   const snapshot = normalizeSnapshot({ session: { id: 'web-a', sessionId: 'native-a', ready: true, turnState: { active: false } } });
@@ -13,9 +13,14 @@ test('warm body eligibility is pure and rejects unknown, newer active, or replac
   assert.equal(adapter.getSnapshotCacheKey(snapshot, []), null);
   const key = adapter.getSnapshotCacheKey(snapshot, [row]);
   assert.ok(key);
-  assert.notEqual(adapter.getSnapshotCacheKey(snapshot, [{ ...row, sessionRevision: 2 }]), key);
+  assert.equal(adapter.getSnapshotCacheKey(snapshot, [{ ...row, sessionRevision: 2, connectedClients: 0 }]), key);
+  assert.notEqual(adapter.getSnapshotCacheKey(snapshot, [{ ...row, outputRevision: 2 }]), key);
+  assert.notEqual(adapter.getSnapshotCacheKey(snapshot, [{ ...row, lastCompletedTurnId: 'new-turn' }]), key);
   assert.equal(adapter.getSnapshotCacheKey(snapshot, [{ ...row, status: 'running', turnState: { active: true } }]), null);
   assert.equal(adapter.getSnapshotCacheKey(snapshot, [{ ...row, attachmentId: 'replacement' }]), null);
+  const preview = { ...snapshot, preview: true, released: true };
+  assert.ok(adapter.getSnapshotCacheKey(preview, [{ ...row, ready: false, released: true }]));
+  assert.equal(adapter.getSnapshotCacheKey(snapshot, [{ ...row, ready: false }]), null);
   assert.equal(snapshot.webSessionId, 'web-a');
 });
 

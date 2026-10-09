@@ -7,6 +7,7 @@ import { createSessionReferenceEnvelopeInput, normalizeSessionReferences, parseS
 import { registerPlatformSessionRoutes } from './lib/platform-session-routes.js';
 import { createPlatformSessionEvents } from './lib/platform-session-events.js';
 import { projectSessionTranscript } from './lib/session-transcript-projection.js';
+import { encodeSessionJson } from './lib/session-json-response.js';
 import { registerPlatformFilePreviewRoutes } from './lib/platform-file-preview.js';
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -1770,8 +1771,9 @@ app.get("/api/session-preview/:id", async (req, res) => {
         } catch { /* Preserve unknown workspace metadata. */ }
       }
     }
+    if (contextSession) scheduleAppServerContext(contextSession);
     const context = contextSession
-      ? await appServerContext(contextSession)
+      ? appServerContextSnapshot(contextSession)
       : { tokenUsage: publicAppTokenUsage(await appServerDiskTokenUsage(id)) };
     if (historyCursor) {
       let conversation;
@@ -1801,14 +1803,14 @@ app.get("/api/session-preview/:id", async (req, res) => {
         });
       }
       res.set("Cache-Control", "private, no-store");
-      res.json({ conversation, ...context });
+      res.send(await encodeSessionJson(req, res, { conversation, ...context }));
       return;
     }
     if (liveSource) {
       try {
         const live = await readLiveSessionPreview(liveSource, id);
         res.set("Cache-Control", "private, no-store");
-        res.json({ ...live, ...context });
+        res.send(await encodeSessionJson(req, res, { ...live, ...context }));
         return;
       } catch (error) {
         logAgentEvent("live-session-preview-fallback", {
@@ -1848,15 +1850,15 @@ app.get("/api/session-preview/:id", async (req, res) => {
         ? cached
         : saveSessionPreview(CODEX_SESSION_PREVIEWS_FILE, { ...extracted, sessionId: id })
       : null;
-    if (liveSource) res.set("Cache-Control", "private, no-store");
-    res.json({
+    res.set("Cache-Control", "private, no-store");
+    res.send(await encodeSessionJson(req, res, {
       ...context,
       cwd: contextSession?.cwd,
       access: contextSession?.access,
       preview,
       conversation: conversation || { turns: [], hasEarlier: false },
       ...(liveSource ? { live: true, active: true } : {}),
-    });
+    }));
   } catch (error) {
     console.error(`Failed to read session preview ${id}: ${error.message}`);
     res.status(500).json({ error: "Session preview is unavailable." });
@@ -4486,8 +4488,12 @@ async function appServerContext(session) {
   session.appConfiguredContextWindow = Number(config.model_context_window || 0);
   // A notification arriving during the disk read is newer than that read.
   if (!session.appTokenUsage && diskUsage) session.appDiskTokenUsage = diskUsage;
-  return { sessionId: session.sessionId, model: session.appModel || session.appConfiguredModel,
-    reasoningEffort: session.appReasoningEffort || session.appConfiguredReasoningEffort,
+  return appServerContextSnapshot(session);
+}
+
+function appServerContextSnapshot(session) {
+  return { sessionId: session.sessionId, model: session.appModel || session.appConfiguredModel || session.model || '',
+    reasoningEffort: session.appReasoningEffort || session.appConfiguredReasoningEffort || session.reasoningEffort || '',
     tokenUsage: publicAppTokenUsage(session.appTokenUsage || session.appDiskTokenUsage, session.appConfiguredContextWindow) };
 }
 
@@ -4499,7 +4505,7 @@ function scheduleAppServerContext(session) {
     session.appContextUpdatedAt = Date.now();
     const next = JSON.stringify([session.appConfiguredModel, session.appConfiguredReasoningEffort,
       session.appConfiguredContextWindow, session.appDiskTokenUsage]);
-    if (!session.exited && previous !== next) broadcast(session, 'status', publicSession(session));
+    if (sessions.get(session.id) === session && !session.exited && previous !== next) broadcast(session, 'status', publicSession(session));
   }).catch(error => logAgentEvent('session-context-read-failed', { webSessionId: session.id,
     message: cleanClientLogValue(error.message, 200) })).finally(() => { session.appContextRead = null; });
 }

@@ -7,7 +7,7 @@ const RETRYABLE_ACTIONS = new Set([
   "send", "append", "queue", "respond", "approve", "decline", "stop", "resume", "editFork", "fork",
 ]);
 
-export function createAgentWebSessionAdapter({ clientId = browserClientId(), sourceSession = '', title = '', notificationTarget = {} } = {}) {
+export function createAgentWebSessionAdapter({ clientId = browserClientId(), sourceSession = '', title = '', notificationTarget = {}, lazyMetadata = false } = {}) {
   const listeners = new Set();
   const connections = new Map();
   const targets = storedEntries('agent-web.session-aliases');
@@ -55,7 +55,7 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
   const adapter = {
     resolveSessionId: (id) => [...targets].find(([, target]) => target === id)?.[0] || id,
     async listSessions({ query = "", archived = false, cursor = null, signal } = {}) {
-      const params = new URLSearchParams({ q: query, archived: archived ? '1' : '0' });
+      const params = new URLSearchParams({ q: query, archived: archived ? '1' : '0', limit: '20' });
       if (cursor) params.set('cursor', cursor);
       const result = await json(`/api/platform/sessions?${params}`, { signal });
       const aliases = new Map([...targets].map(([alias, target]) => [target, alias]));
@@ -85,7 +85,7 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
       const found = new Map();
       let cursor = null;
       do {
-        const params = new URLSearchParams({ archived: '1' });
+        const params = new URLSearchParams({ archived: '1', limit: '20' });
         if (cursor) params.set('cursor', cursor);
         const page = await json(`/api/platform/sessions?${params}`, { signal });
         for (const raw of page.sessions || []) {
@@ -115,11 +115,17 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
       const source = previews.get(id)?.threadId || summaries.get(id)?.threadId;
       return { references: result.sessions.map(item => item.reference).filter(item => item && item.threadId !== source && !item.archived) };
     },
+    async loadExecutionOptions(id, { cwd: currentCwd } = {}) {
+      const snapshot = drafts.has(id) && !targets.has(id) ? draftSnapshot(id) : previews.get(id);
+      const cwd = currentCwd || snapshot?.cwd || snapshot?.session?.cwd || summaries.get(id)?.cwd || '.';
+      const catalog = await readMetadata(cwd);
+      return withMetadata(snapshot || {}, catalog);
+    },
     resolveSessionReferences: (sourceThreadId, references) => json('/api/platform/session-references/resolve', { method: 'POST', body: JSON.stringify({ sourceThreadId, references }) }),
     openSessionReference: (reference) => [...summaries.values()].find(item => item.reference?.threadId === reference.threadId)?.id || `history:${reference.threadId}`,
 
     async readSession(id, { signal } = {}) {
-      if (drafts.has(id) && !targets.has(id)) { enrichDraft(id); return draftSnapshot(id); }
+      if (drafts.has(id) && !targets.has(id)) { if (!lazyMetadata) enrichDraft(id); return draftSnapshot(id); }
       let target = targets.get(id) || id;
       if (id.startsWith('history:') && !targets.has(id)) {
         const params = new URLSearchParams(sourceSession ? { sourceSession } : {});
@@ -129,7 +135,7 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
         const previous = previews.get(id);
         const previewTitle = summaries.get(id)?.title || (previous?.titleIsFallback ? '' : previous?.title) || title;
         const snapshot = previewSnapshot(id, value, { sourceSession, title: previewTitle });
-        const metadata = await readMetadata(value.cwd || '.').catch(() => null);
+        const metadata = await presentationMetadata(value.cwd || '.');
         const enriched = withMetadata({ ...snapshot, executionProfile: historyProfiles.get(id) || snapshot.executionProfile }, metadata);
         if (targets.has(id)) return adapter.readSession(id, { signal });
         return rememberPreview(id, enriched);
@@ -155,12 +161,12 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
           return { conversation: { turns: [] } };
         });
         const snapshot = { ...previewSnapshot(`history:${metadata.sessionId}`, value, { title: metadata.title }), sessionId: id, threadId: metadata.sessionId, released: true, status: 'idle', session: metadata, tokenUsage: value.tokenUsage ?? metadata.tokenUsage ?? null };
-        const enriched = withMetadata(snapshot, await readMetadata(metadata.cwd || value.cwd || '.').catch(() => null));
+        const enriched = withMetadata(snapshot, await presentationMetadata(metadata.cwd || value.cwd || '.'));
         if ((targets.get(id) || id) !== target) return adapter.readSession(id, { signal });
         return rememberPreview(id, enriched);
       }
       const snapshot = normalizeSnapshot(result);
-      const catalog = await readMetadata(result.session?.cwd || '.').catch(() => catalogs.get(result.session?.cwd || '.'));
+      const catalog = await presentationMetadata(result.session?.cwd || '.');
       if ((targets.get(id) || id) !== target) return adapter.readSession(id, { signal });
       threadBySession.set(id, snapshot.threadId);
       return withProcesses({ ...withMetadata(snapshot, catalog), sessionId: id, webSessionId: target });
@@ -169,11 +175,11 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
     async createSession(payload = {}, { idempotencyKey } = {}) {
       if (!payload.sessionId && payload.startRuntime !== true) {
         const id = `draft:${idempotencyKey || crypto.randomUUID()}`;
-        if (drafts.has(id)) { enrichDraft(id); return draftSnapshot(id); }
+        if (drafts.has(id)) { if (!lazyMetadata) enrichDraft(id); return draftSnapshot(id); }
         const draft = { ...payload, id, sessionId: id, isDraft: true, contextLabel: '', title: payload.title || '新对话', status: 'idle', updatedAt: new Date().toISOString() };
         drafts.set(id, draft);
         persistEntries('agent-web.session-drafts', drafts);
-        enrichDraft(id);
+        if (!lazyMetadata) enrichDraft(id);
         return draftSnapshot(id);
       }
       const result = await json("/api/platform/sessions", {
@@ -238,11 +244,13 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
           draftSubscriptions.get(id)?.options.onEvent?.({ type: 'preview-snapshot', sessionId: id, payload: draftSnapshot(id) });
           return patch;
         }
-        if (action === 'readContext' || action === 'models') { enrichDraft(id); return action === 'models' ? catalogs.get(drafts.get(id).cwd || '.') || {} : { tokenUsage: draftSnapshot(id).tokenUsage, isDraft: true }; }
+        if (action === 'models') return readMetadata(drafts.get(id).cwd || '.');
+        if (action === 'readContext') return { tokenUsage: draftSnapshot(id).tokenUsage, isDraft: true };
         if (!['send', 'append', 'queue'].includes(action)) throw new Error('先发送一条消息，再使用会话工具。');
         if (!launches.has(id)) {
           const launch = (async () => {
             const draft = drafts.get(id);
+            if (lazyMetadata) await readMetadata(draft.cwd || '.');
             rememberPendingProfile(id, draftSnapshot(id).executionProfile);
             const created = await adapter.createSession({ ...draft, sessionId: '', access: serverAccess(pendingProfiles.get(id).accessMode), startRuntime: true }, { idempotencyKey: `launch:${id.slice(6)}` });
             bindTarget(id, created.sessionId);
@@ -460,6 +468,9 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
     if (metadataReads.has(cwd)) return metadataReads.get(cwd);
     const promise = json(`/api/platform/session-metadata?${new URLSearchParams({ cwd })}`).then(value => { catalogs.set(cwd, value); return value; }).finally(() => metadataReads.delete(cwd));
     metadataReads.set(cwd, promise); return promise;
+  }
+  function presentationMetadata(cwd) {
+    return lazyMetadata ? Promise.resolve(catalogs.get(cwd)) : readMetadata(cwd).catch(() => catalogs.get(cwd));
   }
   function enrichDraft(id) {
     const cwd = drafts.get(id).cwd || '.';

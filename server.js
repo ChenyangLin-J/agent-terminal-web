@@ -71,6 +71,9 @@ import {
   readAgentSessionFavorites,
   setAgentSessionFavorite,
 } from "./lib/agent-session-favorites.js";
+import { createSessionListSnapshot } from "./lib/session-list-snapshot.js";
+import { readThreadCatalogWindow } from "./lib/thread-catalog-window.js";
+import { registerGeneratedEntryRoutes, setGeneratedAssetCacheHeaders } from "./lib/generated-asset-cache.js";
 import {
   createSessionTitleService,
   createSyncObjectStateStore,
@@ -370,6 +373,10 @@ app.get("/share/:token", async (req, res) => {
   res.type("html").send(renderSessionSharePage(share));
 });
 app.use("/shared", express.static(path.join(WORKSPACE_ROOT, "shared-web")));
+registerGeneratedEntryRoutes(app, path.join(__dirname, "public", "generated"));
+app.use("/generated", express.static(path.join(__dirname, "public", "generated"), {
+  setHeaders: setGeneratedAssetCacheHeaders,
+}));
 app.use("/", express.static(path.join(__dirname, "public")));
 app.use("/vendor/markdown-it", express.static(path.join(__dirname, "node_modules", "markdown-it", "dist")));
 
@@ -1418,15 +1425,16 @@ async function admitHomeTurn({ threadId, attachId, requestId, text, attachments 
 }
 
 app.get("/api/sessions", (_req, res) => {
-  const favoriteSessionIds = favoriteSessionIdsForHost();
+  const snapshot = sessionListSnapshot();
+  const favoriteSessionIds = snapshot.favorites;
   const liveSessions = [...sessions.values()]
     .filter((session) => !session.exited)
-    .map(publicSession)
+    .map((session) => publicSession(session, snapshot))
     .map((session) => ({
       ...session,
       favorited: favoriteSessionIds.has(session.sessionId),
     }));
-  const restoredSessions = listDetachedSessions().filter(
+  const restoredSessions = listDetachedSessions(snapshot).filter(
     (session) => !sessions.has(session.id) && !liveSessions.some((liveSession) => liveSession.id === session.id),
   ).map((session) => ({
     ...session,
@@ -1468,11 +1476,12 @@ registerPlatformSessionRoutes(app, {
   create: createAppServerSession, findReusable: findReusableSession,
   resolvePath: resolveWorkspacePath, access: normalizeAccessMode, title: cleanTitle, purpose: normalizeSessionPurpose,
   snapshot: platformSessionSnapshot, persist: persistWebSession,
-  listWebSessions: () => [...[...sessions.values()].filter((session) => !session.exited).map(publicSession), ...listDetachedSessions()],
-  listCodexSessions, searchSessions: searchCodexSessions, favoriteIds: favoriteSessionIdsForHost,
+  listSnapshot: sessionListSnapshot,
+  listWebSessions: (snapshot) => [...[...sessions.values()].filter((session) => !session.exited).map((session) => publicSession(session, snapshot)), ...listDetachedSessions(snapshot)],
+  listCodexSessions, searchSessions: searchCodexSessions, favoriteIds: (snapshot) => snapshot?.favorites || favoriteSessionIdsForHost(),
   status: appServerStatus, models: appServerModels, metadata: appServerSessionMetadata,
   context: appServerContext, prepareSnapshot: appServerContext,
-  archiveIds: () => new Set(Object.keys(readSessionArchiveSync())),
+  archiveIds: (snapshot) => new Set(Object.keys(snapshot?.archive || readSessionArchiveSync())),
   resolveReferences: resolveSessionReferences,
   validThread: isValidSessionId, validTurn: isCodexTurnId, readProcess: loadHistoricalSessionProcess,
   broadcast: (session) => broadcast(session, 'status', publicSession(session)),
@@ -3095,9 +3104,9 @@ function restorePersistedSession(id) {
   );
 }
 
-function listDetachedSessions() {
-  const records = readPersistedWebSessions();
-  const archivedPersonalSessionIds = new Set(Object.keys(readSessionArchiveSync()));
+function listDetachedSessions(snapshot = sessionListSnapshot()) {
+  const records = snapshot.records;
+  const archivedPersonalSessionIds = new Set(Object.keys(snapshot.archive));
   const items = [];
   let recordsChanged = false;
 
@@ -3124,7 +3133,7 @@ function listDetachedSessions() {
     const resultState = agentSessionResultState(
       record.sessionId,
       record.turnState?.lastCompletedTurnId,
-      null,
+      isValidSessionId(record.sessionId) ? agentSessionSetting(snapshot.settings, record.sessionId) : {},
     );
     const turnState = !explicitlyReleased
       ? interruptedTurnStateAfterProcessLoss(record.turnState, record.lastActivityAt)
@@ -7006,11 +7015,13 @@ function outputReplay(session, afterRevision) {
   };
 }
 
-function publicSession(session) {
+function publicSession(session, snapshot = null) {
   const resultState = agentSessionResultState(
     session.sessionId,
     session.turnState?.lastCompletedTurnId,
-    null,
+    snapshot && typeof snapshot === "object"
+      ? isValidSessionId(session.sessionId) ? agentSessionSetting(snapshot.settings, session.sessionId) : {}
+      : null,
   );
   return {
     id: session.id,
@@ -7238,6 +7249,16 @@ function normalizePersistedWebSessions(records) {
 
 function readAgentSessionSettings() {
   return agentSessionSettingsState.read();
+}
+
+function sessionListSnapshot() {
+  return createSessionListSnapshot({
+    settings: readAgentSessionSettings,
+    records: readPersistedWebSessions,
+    archive: readSessionArchiveSync,
+    favorites: favoriteSessionIdsForHost,
+    titles: readSessionTitles,
+  });
 }
 
 function agentSessionSettingsKey(sessionId, hostId = PERSONAL_AGENT_HOST.id) {
@@ -7732,10 +7753,10 @@ async function drainSessionProcessIndexWarmQueue() {
   }
 }
 
-async function listCodexSessions({ archived }) {
+async function listCodexSessions({ archived, limit, includeLocallyArchived }, snapshot = sessionListSnapshot()) {
   if (nativeThreadCatalogEnabled()) {
     try {
-      return await listCodexSessionsFromAppServer({ archived });
+      return await listCodexSessionsFromAppServer({ archived, limit, includeLocallyArchived }, snapshot);
     } catch (error) {
       logAgentEvent("native-thread-list-fallback", {
         archived,
@@ -7744,18 +7765,25 @@ async function listCodexSessions({ archived }) {
       });
     }
   }
-  return listCodexSessionsFromFiles({ archived });
+  return listCodexSessionsFromFiles({ archived, limit }, snapshot);
 }
 
-async function listCodexSessionsFromAppServer({ archived }) {
+async function listCodexSessionsFromAppServer({ archived, limit, includeLocallyArchived }, snapshot = sessionListSnapshot()) {
   const [page, customTitles, persistedRecords] = await Promise.all([
     cachedThreadCatalogPage({ archived }),
-    readSessionTitles(),
-    Promise.resolve(readPersistedWebSessions()),
+    snapshot.titles,
+    Promise.resolve(snapshot.records),
   ]);
   const persistedByCodexId = latestPersistedSessionsByCodexId(persistedRecords);
-  const sessionSettings = readAgentSessionSettings();
-  return (Array.isArray(page?.data) ? page.data : [])
+  const sessionSettings = snapshot.settings;
+  const threads = limit === undefined ? (Array.isArray(page?.data) ? page.data : []) : await readThreadCatalogWindow(page, {
+    limit,
+    include: thread => isValidSessionId(thread?.id) && (archived || includeLocallyArchived || !snapshot.archive[thread.id]),
+    readPage: params => withSharedAppServer(client => client.listThreads({
+      ...params, archived: Boolean(archived), sortKey: "updated_at", sortDirection: "desc",
+    })),
+  });
+  return threads
     .map((thread) => nativeThreadSessionMeta(thread, {
       archived: Boolean(archived),
       customTitles,
@@ -7817,18 +7845,18 @@ function invalidateThreadCatalog() {
   emitCatalogControlEvent();
 }
 
-async function listCodexSessionsFromFiles({ archived }) {
+async function listCodexSessionsFromFiles({ archived, limit }, snapshot = sessionListSnapshot()) {
   const activeFiles = (await walkFiles(CODEX_SESSIONS_ROOT)).map((file) => ({ file, fileArchived: false }));
   const archivedFiles = (await walkFiles(CODEX_ARCHIVED_SESSIONS_ROOT)).map((file) => ({
     file,
     fileArchived: true,
   }));
   const files = [...activeFiles, ...archivedFiles];
-  const customTitles = await readSessionTitles();
-  const archivedSessions = await readSessionArchive();
-  const persistedRecords = readPersistedWebSessions();
+  const customTitles = await snapshot.titles;
+  const archivedSessions = snapshot.archive;
+  const persistedRecords = snapshot.records;
   const persistedByCodexId = latestPersistedSessionsByCodexId(persistedRecords);
-  const sessionSettings = readAgentSessionSettings();
+  const sessionSettings = snapshot.settings;
   const items = [];
 
   for (const { file, fileArchived } of files) {
@@ -7854,14 +7882,14 @@ async function listCodexSessionsFromFiles({ archived }) {
 
   return items
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-    .slice(0, 40);
+    .slice(0, limit ?? 40);
 }
 
-async function searchCodexSessions(searchTerm) {
+async function searchCodexSessions(searchTerm, snapshot = sessionListSnapshot()) {
   if (!nativeThreadCatalogEnabled()) {
     const [active, archived] = await Promise.all([
-      listCodexSessionsFromFiles({ archived: false }),
-      listCodexSessionsFromFiles({ archived: true }),
+      listCodexSessionsFromFiles({ archived: false }, snapshot),
+      listCodexSessionsFromFiles({ archived: true }, snapshot),
     ]);
     const query = searchTerm.toLocaleLowerCase();
     return [...active, ...archived]
@@ -7886,10 +7914,10 @@ async function searchCodexSessions(searchTerm) {
       });
       return [active, archived];
     }),
-    readSessionTitles(),
+    snapshot.titles,
   ]);
-  const persistedByCodexId = latestPersistedSessionsByCodexId(readPersistedWebSessions());
-  const sessionSettings = readAgentSessionSettings();
+  const persistedByCodexId = latestPersistedSessionsByCodexId(snapshot.records);
+  const sessionSettings = snapshot.settings;
   return pages
     .flatMap((page, pageIndex) =>
       (Array.isArray(page?.data) ? page.data : []).map((result) => ({
@@ -8083,12 +8111,13 @@ function threadStatusLabel(status) {
 }
 
 async function listRecentAgentSessions(limit = 40) {
-  const savedSessions = await listCodexSessions({ archived: false });
+  const snapshot = sessionListSnapshot();
+  const savedSessions = await listCodexSessions({ archived: false }, snapshot);
   const previews = readSessionPreviews(CODEX_SESSION_PREVIEWS_FILE);
-  const persistedByCodexId = latestPersistedSessionsByCodexId(readPersistedWebSessions());
+  const persistedByCodexId = latestPersistedSessionsByCodexId(snapshot.records);
   const liveSessions = [
-    ...[...sessions.values()].filter((session) => !session.exited).map(publicSession),
-    ...listDetachedSessions(),
+    ...[...sessions.values()].filter((session) => !session.exited).map(session => publicSession(session, snapshot)),
+    ...listDetachedSessions(snapshot),
   ];
   const liveByCodexId = new Map();
 

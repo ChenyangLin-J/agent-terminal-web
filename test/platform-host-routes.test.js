@@ -54,6 +54,54 @@ test('live full-text search finds message bodies and rejects invalid paging', as
   assert.equal((await request('/api/platform/sessions?cursor=-1')).status, 400);
 });
 
+test('bounded catalogue paging retains the default contract, ordering and favorites', async t => {
+  const { request, host } = await fixture(t);
+  const rows = Array.from({ length: 67 }, (_, i) => ({ id: `thread-${i}`, title: `History ${i}`, updatedAt: new Date(Date.UTC(2026, 9, 9) - i * 1000).toISOString() }));
+  const limits = [];
+  host.listCodexSessions = async options => { limits.push(options.limit); return rows.slice(0, options.limit); };
+  host.favoriteIds = () => new Set(['thread-21']);
+  const legacy = await request('/api/platform/sessions');
+  assert.equal(legacy.body.sessions.length, 50);
+  assert.equal(legacy.body.nextCursor, '50');
+  assert.equal(limits[0], undefined);
+  const pages = [];
+  let cursor = '0';
+  do {
+    const response = await request(`/api/platform/sessions?limit=20&cursor=${cursor}`);
+    assert.equal(response.status, 200);
+    assert.ok(response.body.sessions.length <= 20);
+    pages.push(...response.body.sessions);
+    cursor = response.body.nextCursor;
+  } while (cursor);
+  assert.deepEqual(pages.map(row => row.threadId), rows.map(row => row.id));
+  assert.equal(pages[21].favorited, true);
+  assert.ok(pages.every(row => row.reference?.threadId === row.threadId));
+  for (const invalid of ['', '0', '-1', '51', '1.5', 'abc']) {
+    assert.equal((await request(`/api/platform/sessions?limit=${invalid}`)).status, 400);
+  }
+  assert.deepEqual((await request('/api/platform/sessions?limit=20&cursor=100')).body, { sessions: [], nextCursor: null });
+});
+
+test('one request snapshot is passed through all catalogue projections and refreshed on the next request', async t => {
+  const { request, host } = await fixture(t);
+  let reads = 0;
+  const seen = [];
+  host.listSnapshot = () => ({ request: ++reads });
+  host.archiveIds = snapshot => { seen.push(snapshot); return new Set(); };
+  host.listWebSessions = snapshot => { seen.push(snapshot); return []; };
+  host.listCodexSessions = async (_, snapshot) => { seen.push(snapshot); return []; };
+  host.favoriteIds = snapshot => { seen.push(snapshot); return new Set(); };
+  await request('/api/platform/sessions?archived=1&limit=20');
+  assert.equal(reads, 1);
+  assert.equal(seen.length, 5);
+  assert.ok(seen.every(snapshot => snapshot === seen[0]));
+  const first = seen[0]; seen.length = 0;
+  host.searchSessions = async (_, snapshot) => { seen.push(snapshot); return []; };
+  await request('/api/platform/sessions?q=search&limit=20');
+  assert.equal(reads, 2);
+  assert.ok(seen.every(snapshot => snapshot === seen[0] && snapshot !== first));
+});
+
 test('the catalog keeps the live attachment over older released records for the same thread', async t => {
   const { request, host } = await fixture(t);
   const live = { id: 'live', sessionId: 'thread-a', title: 'Existing', lastActivityAt: '2026-10-05T06:26:00Z', turnState: { active: true } };

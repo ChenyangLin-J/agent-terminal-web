@@ -15,7 +15,7 @@ test("the first message activates a previewed Session and keeps permissions loca
   );
   assert.match(
     server,
-    /function listDetachedSessions\(\)[\s\S]*archivedPersonalSessionIds\.has\(String\(record\.sessionId \|\| ""\)\)[\s\S]*\) \{\s*continue;/,
+    /function listDetachedSessions\([^\n]*\)[\s\S]*archivedPersonalSessionIds\.has\(String\(record\.sessionId \|\| ""\)\)[\s\S]*\) \{\s*continue;/,
   );
 
 });

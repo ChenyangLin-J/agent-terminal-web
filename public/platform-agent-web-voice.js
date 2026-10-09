@@ -1,7 +1,10 @@
 /** Agent Web owns its transcription endpoint and durable recording recovery. */
-export function agentWebVoiceCapture(sessionId, factory = globalThis.VoiceCapture) {
+import { loadAgentWebVoice } from './platform-agent-web-features.js';
+
+export function agentWebVoiceCapture(sessionId, factory) {
   return {
     async start(hooks = {}) {
+      factory ||= globalThis.VoiceCapture || await loadAgentWebVoice();
       if (!factory?.create) throw new Error('语音输入暂时不可用。');
       let transcript = '';
       let complete, fail;

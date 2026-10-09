@@ -6,6 +6,7 @@ import { agentWebVoiceCapture } from './platform-agent-web-voice.js';
 import { agentWebNotificationTarget, enableAgentWebNotifications } from './platform-agent-web-notifications.js';
 import { memorySourceEntriesForMessage, normalizeAgentWebSideChatPanel } from './platform-agent-web-product-controller.js';
 import { agentWebSessionContext } from './platform-agent-web-adapter.js';
+import { openAgentWebMemories, openAgentWebIntegrations } from './platform-agent-web-features.js';
 
 export function createAgentWebExtensions({ product, controller, adapter }) {
   return {
@@ -73,9 +74,9 @@ function ProductSettingsMenu({ product, controller, closeList }) {
       <summary aria-label="产品设置" title="产品设置"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><path d="m9.5 3-.5 2-2 1-2-.5L3.5 8l1.5 1.5v3L3.5 14l1 2.5 2-.5 2 1 .5 2h3l.5-2 2-1 2 .5 1-2.5-1.5-1.5v-3L18 8l-1-2.5-2 .5-2-1-.5-2z"/><circle cx="10.5" cy="11" r="3"/></svg></summary>
       <div>
         <button type="button" onClick={chooseWorkspace}>新对话工作区</button>
-        <button type="button" onClick={() => { setOpen(false); closeList?.(); const session = controller.getSnapshot().session?.session; globalThis.AgentMemories?.open?.({ projects: session?.memoryProjects, mode: session?.memoryProjectMode, source: session?.memoryProjectSource,
-          onProjectChange: session ? (routing) => controller.execute('raw', { type: 'set-memory-projects', ...routing }) : undefined }); }}>记忆</button>
-        <button type="button" onClick={() => { setOpen(false); closeList?.(); globalThis.AgentIntegrations?.open?.(); }}>集成</button>
+        <button type="button" onClick={() => { setOpen(false); closeList?.(); const session = controller.getSnapshot().session?.session; void openAgentWebMemories({ projects: session?.memoryProjects, mode: session?.memoryProjectMode, source: session?.memoryProjectSource,
+          onProjectChange: session ? (routing) => controller.execute('raw', { type: 'set-memory-projects', ...routing }) : undefined }).catch(error => setNotice(error.message)); }}>记忆</button>
+        <button type="button" onClick={() => { setOpen(false); closeList?.(); void openAgentWebIntegrations().catch(error => setNotice(error.message)); }}>集成</button>
         <button type="button" onClick={showUpdates}>Codex 更新</button>
         <button type="button" onClick={restart}>服务管理</button>
         <button type="button" onClick={enablePwa}>离线支持</button>

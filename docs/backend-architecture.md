@@ -120,6 +120,30 @@ recording a preview so generated assets are stable.
 
 ### Catalogue events and local file previews
 
+The product opts into independent Session startup and requests 20 catalogue rows
+at a time. Opening a Session and creating a local draft do not await model
+metadata; execution options and the first send load it on demand. The first send
+still applies the configured model/effort/access before starting the Turn.
+Memory management, integration settings and dictation scripts load on entry;
+Agent execution memory remains a backend concern. A native attachment picker
+and draft creation remain local interactions without a page reload. The build
+maps Platform's optional lazy Markdown entry, activates content-addressed assets
+through generated HTML/manifest, and retains preceding chunks for open tabs.
+
 `lib/platform-session-events.js` narrows status broadcasts to catalogue metadata and exposes authenticated bounded SSE replay. The browser applies these updates without subscribing to every Runtime. `public/platform-agent-web-catalog.js` owns visibility, reconnect and metadata-only reconciliation; the adapter preserves newer event rows against delayed HTTP snapshots and rejects earlier revisions or completed Turn IDs. Restart identifiers reset process-local ordering.
+
+Catalogue requests share a lazy request-local snapshot of settings, Web records,
+title/archive overrides and favorites. Each authoritative store is read and
+normalized at most once per request; the next request reads it again. No process
+cache replaces those stores. `GET /api/platform/sessions?limit=20` uses the existing
+decimal `cursor` / `nextCursor` contract with a validated limit of 1–50. Omitting
+`limit` retains the existing 50-row response and first native metadata page.
+Explicit bounded requests extend native metadata pages only to the requested
+window plus one row, without hydrating historical conversations. Search retains
+its existing result limits. Generated JS/CSS/font filenames with the build's
+eight-character content hash receive immutable year-long caching. Generated HTML
+and the manifest use `no-cache`; other unversioned files keep `max-age=0`.
+Root/index routes serve the activated generated HTML, and fixed legacy entry
+asset URLs redirect through the current manifest. A missing build returns 503.
 
 `lib/platform-file-preview.js` resolves authenticated local files within the real workspace root and returns shared Platform preview descriptors and raw media. Symlinks outside the root are rejected. Text size is checked before reading; active HTML never becomes an unsandboxed same-origin raw document. Preview state and latest-request cancellation belong to the product controller.

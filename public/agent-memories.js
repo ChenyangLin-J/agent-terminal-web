@@ -49,7 +49,7 @@
       void loadView();
     });
   });
-  void refreshStatus();
+  if (document.documentElement.dataset.agentFeaturesLazy !== 'true') void refreshStatus();
 
   function open(options = {}) {
     actionFeedback = null;

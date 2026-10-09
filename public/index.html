@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-agent-features-lazy="true">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
@@ -39,9 +39,7 @@
         min-height: 0;
       }
     </style>
-    <link rel="stylesheet" href="/agent-memories.css?v=20261003-change-timeline-1" />
-    <link rel="stylesheet" href="/agent-integrations.css?v=20260825-custom-keys-1" />
-    <link rel="stylesheet" href="/generated/session-app.css" />
+    <link rel="stylesheet" href="__SESSION_APP_CSS__" />
   </head>
   <body>
     <main id="platform-session-application" aria-label="Agent Web"></main>
@@ -94,14 +92,8 @@
         <section id="memory-content" class="memory-content" aria-live="polite"></section>
       </form>
     </dialog>
-    <script src="/vendor/markdown-it/markdown-it.min.js?v=14.3.0"></script>
-    <script src="/app-markdown.js?v=20260825-mobile-files-1"></script>
-    <script src="/agent-memories.js?v=20261003-change-timeline-1"></script>
-    <script src="/agent-integrations.js?v=20260825-custom-keys-1"></script>
-    <script src="/shared/voice-recovery-store.js?v=20260717-2"></script>
-    <script src="/shared/voice-capture-widget.js?v=20260717-recovery-3"></script>
     <script type="module">
-      import("/generated/session-app.js")
+      import("__SESSION_APP_JS__")
         .then(() => document.body.classList.add("platform-session-ready"))
         .catch((error) => document.querySelector('#platform-session-application').textContent = '界面资源加载失败，请构建 Session UI 后刷新。');
     </script>

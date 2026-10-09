@@ -1,0 +1,81 @@
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const threadId = i => `019f9db4-cdfd-7c10-b477-${i.toString(16).padStart(12, '0')}`;
+
+test('real catalogue assembly reads and normalizes stores once for many detached rows and sees subsequent edits', async t => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'agent-list-snapshot-'));
+  const workspace = path.join(temporary, 'workspace');
+  const state = path.join(temporary, 'state');
+  const codex = path.join(state, 'codex');
+  await mkdir(workspace, { recursive: true }); await mkdir(codex, { recursive: true });
+  const records = Object.fromEntries(Array.from({ length: 65 }, (_, i) => {
+    const id = `web-session-${i.toString().padStart(3, '0')}`;
+    return [id, { id, sessionId: threadId(i), title: `Conversation ${i}`, cwd: workspace, transport: 'app-server', access: 'full', startedAt: '2026-10-01T00:00:00Z', lastActivityAt: new Date(Date.UTC(2026, 9, 9) - i * 1000).toISOString() }];
+  }));
+  const settings = Object.fromEntries(Array.from({ length: 1222 }, (_, i) => [threadId(i), { access: 'full', lastCompletedTurnId: `turn-${i}`, lastViewedTurnId: i === 21 ? 'turn-21' : '', lastCompletedAt: '2026-10-09T00:00:00Z' }]));
+  const files = { records: path.join(codex, 'agent-web-sessions.json'), settings: path.join(codex, 'agent-session-settings.json'), archive: path.join(codex, 'session-archive.json'), titles: path.join(codex, 'session-titles.json'), favorites: path.join(temporary, 'favorites.json') };
+  await Promise.all(Object.entries({ records, settings, archive: { [threadId(1)]: { archivedAt: '2026-10-09T00:00:00Z' } }, titles: {}, favorites: [threadId(21)] }).map(([name, value]) => writeFile(files[name], JSON.stringify(value))));
+  const reads = path.join(temporary, 'reads.jsonl');
+  const bootstrap = path.join(temporary, 'instrumented-server.mjs');
+  await writeFile(reads, '');
+  await writeFile(bootstrap, `import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import http from 'node:http';
+import { AsyncLocalStorage } from 'node:async_hooks';
+const requests = new AsyncLocalStorage();
+const emit = http.Server.prototype.emit;
+http.Server.prototype.emit = function(event,...args) { return event === 'request' ? requests.run(true, () => emit.call(this,event,...args)) : emit.call(this,event,...args); };
+const names = new Map(Object.entries(${JSON.stringify(files)}).map(([name,file]) => [file,name]));
+const note = file => { const name = names.get(String(file)); if(name && requests.getStore()) fs.appendFileSync(${JSON.stringify(reads)}, JSON.stringify(name)+'\\n'); };
+const syncRead = fs.readFileSync;
+fs.readFileSync = function(file,...args) { note(file); return syncRead.call(this,file,...args); };
+const asyncRead = fsp.readFile;
+fsp.readFile = function(file,...args) { note(file); return asyncRead.call(this,file,...args); };
+await import(${JSON.stringify(pathToFileURL(path.join(projectRoot, 'server.js')).href)});
+`);
+  const auth = http.createServer((_req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"authenticated":true}'); });
+  await new Promise(resolve => auth.listen(0, '127.0.0.1', resolve));
+  const probe = http.createServer(); await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
+  const port = probe.address().port; await new Promise(resolve => probe.close(resolve));
+  const child = spawn(process.execPath, [bootstrap], { cwd: projectRoot, env: { ...process.env, HOST: '127.0.0.1', PORT: String(port), WORKSPACE_ROOT: workspace, AGENT_STATE_ROOT: state, AGENT_SESSION_FAVORITES_FILE: files.favorites, AGENT_NATIVE_THREAD_CATALOG: '0', CODEX_APP_SERVER_COMMAND: path.join(temporary, 'must-not-start-runtime'), PRIVATE_AUTH_VERIFY_URL: `http://127.0.0.1:${auth.address().port}` }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let output = ''; child.stdout.on('data', chunk => output += chunk); child.stderr.on('data', chunk => output += chunk);
+  t.after(async () => {
+    if (child.exitCode === null) { child.kill('SIGTERM'); await new Promise(resolve => child.once('exit', resolve)); }
+    await new Promise(resolve => auth.close(resolve));
+    await rm(temporary, { recursive: true, force: true });
+  });
+  const deadline = Date.now() + 5000;
+  while (!output.includes('Agent Terminal Web:') && Date.now() < deadline && child.exitCode === null) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(output.includes('Agent Terminal Web:'), output);
+  const request = async pathname => {
+    await writeFile(reads, '');
+    const response = await fetch(`http://127.0.0.1:${port}${pathname}`);
+    assert.equal(response.status, 200, output);
+    const body = await response.json();
+    const observed = (await readFile(reads, 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse);
+    assert.deepEqual(Object.fromEntries(Object.keys(files).map(name => [name, observed.filter(value => value === name).length])), { records: 1, settings: 1, archive: 1, titles: 1, favorites: 1 });
+    return body;
+  };
+  const first = await request('/api/platform/sessions?limit=20');
+  assert.equal(first.sessions.length, 20); assert.equal(first.nextCursor, '20');
+  assert.equal(first.sessions[0].hasUnreadResult, true);
+  assert.equal(first.sessions.some(row => row.sessionId === threadId(1)), false);
+  const second = await request('/api/platform/sessions?limit=20&cursor=20');
+  assert.equal(second.sessions[0].sessionId, threadId(21));
+  assert.equal(second.sessions[0].favorited, true); assert.equal(second.sessions[0].hasUnreadResult, false);
+  const legacy = await request('/api/platform/sessions');
+  assert.equal(legacy.sessions.length, 50); assert.equal(legacy.nextCursor, '50');
+  settings[threadId(0)].lastViewedTurnId = 'turn-0';
+  await writeFile(files.settings, JSON.stringify(settings));
+  assert.equal((await request('/api/platform/sessions?limit=20')).sessions[0].hasUnreadResult, false);
+  const unchanged = JSON.parse(await readFile(files.records, 'utf8'));
+  assert.deepEqual(unchanged, records);
+});

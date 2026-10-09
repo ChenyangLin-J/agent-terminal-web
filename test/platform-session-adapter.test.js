@@ -4,6 +4,35 @@ import test from "node:test";
 import { applyAgentWebEvent, createAgentWebSessionAdapter, normalizeSnapshot, previewSnapshot } from "../public/platform-agent-web-adapter.js";
 import { agentWebSessionContext } from '../public/platform-agent-web-adapter.js';
 
+test('lazy metadata keeps drafts local, loads only on demand, and deduplicates retriable reads', async t => {
+  const originals = { fetch: globalThis.fetch, localStorage: globalThis.localStorage };
+  const stored = new Map();
+  globalThis.localStorage = { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value) };
+  const calls = []; let unavailable = true;
+  globalThis.fetch = async url => {
+    calls.push(url);
+    assert.match(url, /^\/api\/platform\/session-metadata\?/);
+    if (unavailable) return Response.json({ error: 'models offline' }, { status: 503 });
+    return Response.json({ currentModel: 'saved-default', currentReasoningEffort: 'high', models: [{ id: 'saved-default' }] });
+  };
+  const adapter = createAgentWebSessionAdapter({ clientId: 'lazy-test', lazyMetadata: true });
+  t.after(() => { adapter.dispose(); for (const [key, value] of Object.entries(originals)) { if (value === undefined) delete globalThis[key]; else globalThis[key] = value; } });
+  const draft = await adapter.createSession({ cwd: '/lazy-project' }, { idempotencyKey: 'lazy-draft' });
+  await adapter.readSession(draft.id);
+  await adapter.execute(draft.id, 'readContext');
+  assert.equal(calls.length, 0);
+  await assert.rejects(adapter.loadExecutionOptions(draft.id), /models offline/);
+  assert.equal((await adapter.readSession(draft.id)).isDraft, true);
+  unavailable = false;
+  const [first, second] = await Promise.all([adapter.loadExecutionOptions(draft.id), adapter.loadExecutionOptions(draft.id)]);
+  assert.equal(first.executionProfile.model, 'saved-default');
+  assert.equal(second.executionProfile.reasoningEffort, 'high');
+  assert.equal(calls.length, 2);
+  await adapter.loadExecutionOptions(draft.id);
+  assert.equal(calls.length, 2);
+  assert.equal(new URL(calls[1], 'http://test.invalid').searchParams.get('cwd'), '/lazy-project');
+});
+
 test('Composer receives product context usage from the selected Host snapshot, independently of UI presentation fields', async () => {
   const usage = { contextUsedTokens: 6000, modelContextWindow: 258400 };
   let snapshot = normalizeSnapshot({ session: { id: 'web-a', sessionId: 'thread-a', tokenUsage: usage } });
@@ -141,7 +170,7 @@ test("candidate build never silently bundles the stable package without Session 
   const script = await readFile(new URL("../scripts/build-session-app.mjs", import.meta.url), "utf8");
   assert.match(script, /AGENT_PLATFORM_CANDIDATE/);
   assert.match(script, /src", "session-host\.js/);
-  assert.match(script, /entryNames: "session-app"/);
+  assert.match(script, /entryNames: "session-app-\[hash\]"/);
 });
 
 test("entry uses the public UI callback shapes and ships its shared styles", async () => {

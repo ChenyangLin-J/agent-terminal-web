@@ -15,13 +15,14 @@ const mount = document.querySelector("#platform-session-application");
 
 if (!mount) throw new Error("Missing #platform-session-application mount point.");
 
-const adapter = createAgentWebSessionAdapter({ sourceSession: new URLSearchParams(location.search).get('sourceSession') || '', title: new URLSearchParams(location.search).get('title') || '', notificationTarget: agentWebNotificationTarget() });
+const adapter = createAgentWebSessionAdapter({ sourceSession: new URLSearchParams(location.search).get('sourceSession') || '', title: new URLSearchParams(location.search).get('title') || '', notificationTarget: agentWebNotificationTarget(), lazyMetadata: true });
 const product = createAgentWebProductController();
 const params = new URLSearchParams(location.search);
 const initialSessionId = adapter.resolveSessionId(params.get('attach') || params.get('draftId') || (params.get('sessionId') ? `history:${params.get('sessionId')}` : ''));
 const controller = createSessionHostController({
   adapter,
   initialSessionId,
+  independentStartup: true,
   capabilities: {
     attachments: true,
     queue: true,
@@ -38,10 +39,16 @@ const execute = (action, payload) => controller.execute(action, payload);
 const stopCatalogWatch = watchAgentWebCatalog({ controller, adapter });
 if (params.get('new') === '1' && !params.get('draftId')) void controller.execute('create', { cwd: params.get('cwd') || '.', title: params.get('title') || '新对话', access: params.get('access') === 'safe' ? 'safe' : 'full' }).catch(() => {});
 const extensions = createAgentWebExtensions({ product, controller, adapter });
+extensions.renderListFilters = () => {
+  const state = controller.getSnapshot();
+  if (state.listError) return <div className="cwu-product-notice" role="alert">{state.listError}<button type="button" onClick={() => void controller.refreshSessions().catch(() => {})}>重试</button></div>;
+  return state.listLoading && !state.sessions.length ? <p className="cwu-product-notice" role="status">正在读取最近对话…</p> : null;
+};
 const detail = (state, documentPreview) => state.session ? {
   session: state.session,
   documentPreview,
   compactComposer: true,
+  composerPresentation: 'split-send',
   technicalDetailsPresentation: 'tabbed',
   labels: { composerPlaceholder: state.session.readOnly ? '子 Agent 预览为只读' : '输入问题……' },
   extensions,
@@ -68,6 +75,15 @@ const detail = (state, documentPreview) => state.session ? {
     onFinalResultVisible: ({ turnId }) => controller.markResultRead(turnId),
     onDeleteQueuedTurn: (queuedTurnId) => execute('deleteQueuedTurn', { queuedTurnId }),
     onExecutionProfileChange: (profile) => execute('executionProfile', profile),
+    onLoadExecutionOptions: async () => {
+      const id = state.selectedId;
+      const metadata = await adapter.loadExecutionOptions(id, { cwd: state.session.cwd || state.session.session?.cwd });
+      if (controller.getSnapshot().selectedId !== id) return;
+      controller.updateSession(current => ({ ...current, models: metadata.models, accessModes: metadata.accessModes,
+        executionProfile: { ...metadata.executionProfile, ...current.executionProfile,
+          model: current.executionProfile?.model || metadata.executionProfile?.model,
+          reasoningEffort: current.executionProfile?.reasoningEffort || metadata.executionProfile?.reasoningEffort } }));
+    },
     onCompact: () => execute('compact'),
     onUploadAttachments: uploadAgentWebAttachments,
     onResolveMedia: ({ path, resourceId }) => localFileUrl(path || resourceId),
@@ -90,11 +106,12 @@ function AgentWebApplication() {
     controller={controller}
     detail={(state) => detail(state, documentPreview)}
     extensions={extensions}
-    browser={{ showCreateTargetSelect: false, createTargets: [{ id: "session", label: "对话" }], groupMode: "time", groupOptions: [{ id: "time", label: "最近" }] }}
+    browser={(state) => ({ showCreateTargetSelect: false, createTargets: [{ id: "session", label: "对话" }], groupMode: "time", groupOptions: [{ id: "time", label: "最近" }], loading: Boolean(state.listLoading), loadingMore: Boolean(state.listLoadingMore), hasMore: Boolean(state.nextCursor), paginationMode: 'incremental' })}
     actions={{
       onCreate: () => controller.execute('create', { cwd: localStorage.getItem('agent-web.default-cwd') || '.', title: '新对话' }),
       onFavorite: (session, favorited) => controller.execute('favorite', { favorited }, { sessionId: session.id }).then(() => controller.refreshSessions()),
       onArchive: (session, archived) => controller.execute('archive', { archived }, { sessionId: session.id }).then(() => controller.refreshSessions()),
+      onLoadMore: () => controller.refreshSessions({ cursor: controller.getSnapshot().nextCursor }).catch(() => {}),
     }}
     labels={{ productName: "Agent Web", createAriaLabel: "新建对话", countSuffix: "个对话" }}
   />;

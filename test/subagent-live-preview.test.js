@@ -202,8 +202,7 @@ input.on("line", (line) => {
       `&sourceSession=${ready.payload.id}&title=Live%20child&access=safe`,
   );
   await page.locator('.cwu-turn-detail-actions').getByText('执行中', { exact: true }).waitFor();
-  assert.equal(await page.locator('.cwu-technical.is-tabbed').getAttribute('data-open'), 'false');
-  await page.getByRole('tab', { name: /^执行记录/ }).click();
+  assert.equal(await page.locator('.cwu-technical.is-tabbed').getAttribute('data-open'), 'true');
   await page.getByText("Reading live child output", { exact: true }).waitFor();
   await page.getByText("node inspect.js", { exact: true }).waitFor();
   await page.getByText('子 Agent · 只读 · 运行中 · 自动更新', { exact: true }).waitFor();

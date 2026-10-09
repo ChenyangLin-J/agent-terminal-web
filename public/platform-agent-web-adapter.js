@@ -611,7 +611,8 @@ function presentationFromAgentWeb(session, items, pendingRequests = []) {
         memoryCitation: item.memoryCitation || null,
         content: type === 'user' ? parseSessionReferenceEnvelopes(item.text).text : String(item.text || ''),
         references: item.references || (type === 'user' ? parseSessionReferenceEnvelopes(item.text).references : []), turnId, turnKey: turnId,
-        turnStatus: String(item.turnStatus || ''),
+        turnStatus: String(item.turnStatus || (turnId && session.turnState?.active && session.turnState.turnId === turnId ? 'inProgress'
+          : turnId && session.turnState?.lastCompletedTurnId === turnId ? session.turnState.lastStoppedTurnId === turnId ? 'interrupted' : 'completed' : '')),
         canEdit: type === 'user', canFork: type === 'user',
         attachments: (item.attachments || []).map((attachment) => ({ id: attachment.path, name: attachment.originalName, path: attachment.path, mimeType: attachment.mime, size: attachment.size })),
       });

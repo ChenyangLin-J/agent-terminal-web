@@ -3285,7 +3285,7 @@ function attachClient(session, ws, { replay = true, afterRevision = null, client
         }
       }
 
-      if (message.expectedTurnId && ['interrupt-turn', 'agent-response', 'resume-interrupted'].includes(message.type) && message.expectedTurnId !== runtimeActiveTurnId(session)) {
+      if (message.expectedTurnId && ['interrupt-turn', 'agent-response', 'resume-interrupted'].includes(message.type) && message.expectedTurnId !== (message.type === 'resume-interrupted' ? session.turnState.turnId : runtimeActiveTurnId(session))) {
         reply('error', { message: 'The requested Turn is no longer current.' }); return;
       }
       if (message.type === "client-ping") {

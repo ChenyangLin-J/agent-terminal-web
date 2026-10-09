@@ -4,9 +4,9 @@
   "name": "submission-and-native-binding-state",
   "command": "record",
   "status": "passed",
-  "startedAt": "2026-10-09T08:09:31.282Z",
-  "finishedAt": "2026-10-09T08:09:57.111Z",
-  "durationMs": 25829,
+  "startedAt": "2026-10-09T08:12:52.144Z",
+  "finishedAt": "2026-10-09T08:13:17.507Z",
+  "durationMs": 25363,
   "flow": "/Users/mac/Documents/worktrees/CHG-20261009-004/agent-terminal-web/scripts/testing/session-state-contract.flow.mjs",
   "baseUrl": "http://127.0.0.1:4309/",
   "traceMode": "failure",
@@ -66,7 +66,7 @@
         {
           "segment": 1,
           "file": "video.webm",
-          "bytes": 671802,
+          "bytes": 674996,
           "finalUrl": "http://127.0.0.1:4309/"
         }
       ],
@@ -134,7 +134,7 @@
         {
           "segment": 1,
           "file": "video.webm",
-          "bytes": 351237,
+          "bytes": 341250,
           "finalUrl": "http://127.0.0.1:4309/"
         }
       ],

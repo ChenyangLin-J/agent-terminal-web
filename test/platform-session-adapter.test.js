@@ -239,3 +239,11 @@ test('historical preview projects actual usage and configuration without launchi
   assert.deepEqual(snapshot.tokenUsage, { contextUsedTokens: 123, modelContextWindow: 456 });
   assert.equal(snapshot.executionProfile.model, 'configured'); assert.equal(snapshot.executionProfile.accessMode, 'restricted');
 });
+
+
+test('live message details use Turn completion identity, independent of an empty current active Turn',()=>{
+ const done=normalizeSnapshot({session:{id:'web',sessionId:'native',turnState:{active:false,turnId:'',lastCompletedTurnId:'done'}},items:[{id:'answer',type:'assistant',phase:'final_answer',text:'done',turnId:'done'}]});
+ assert.equal(done.messages[0].turnStatus,'completed');
+ const finalBeforeCompletion=normalizeSnapshot({session:{id:'web',turnState:{active:true,turnId:'running'}},items:[{id:'final',type:'assistant',phase:'final_answer',text:'answer',turnId:'running'}]});
+ assert.equal(finalBeforeCompletion.messages[0].turnStatus,'inProgress');
+});

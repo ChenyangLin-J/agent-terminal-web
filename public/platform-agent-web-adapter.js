@@ -47,12 +47,24 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
     });
     const items = [...new Map([...base, ...loaded].map(item => [item.id, item])).values()];
     const presentation = presentationFromAgentWeb(snapshot.session || {}, items, snapshot.pendingRequests);
-    return { ...snapshot, items, messages: presentation.messages, technicalItems: presentation.technicalItems, technicalDetailsAvailable: presentation.technicalDetailsAvailable, technicalDetailsLoaded: [...loadedTurns].filter(id => id !== activeTurnId), turnMetadata: presentation.turnMetadata };
+    return { ...snapshot, items, messages: presentation.messages, technicalItems: presentation.technicalItems, technicalDetailsAvailable: [...new Set([...(snapshot.technicalDetailsAvailable || []), ...presentation.technicalDetailsAvailable])], technicalDetailsLoaded: [...loadedTurns].filter(id => id !== activeTurnId), turnMetadata: presentation.turnMetadata };
   };
 
   const emit = (event) => listeners.forEach((listener) => listener(event));
 
   const adapter = {
+    getSnapshotCacheKey(snapshot, rows) {
+      const id = snapshot.sessionId;
+      const summary = rows.find(item => item.id === id) || rows.find(item => snapshot.threadId && (item.threadId || item.sessionId) === snapshot.threadId);
+      if (!summary || !['idle', 'unread'].includes(summary.status) || snapshot.status !== 'idle'
+        || snapshot.session?.turnState?.active || summary.turnState?.active || summary.pendingServerRequestCount
+        || snapshot.pendingRequests?.length || summary.ready === false) return null;
+      const target = targets.get(id) || id;
+      if (snapshot.webSessionId && snapshot.webSessionId !== target) return null;
+      if (snapshot.preview && targets.has(id)) return null;
+      if (summary.attachmentId && snapshot.webSessionId && summary.attachmentId !== snapshot.webSessionId) return null;
+      return JSON.stringify([snapshot.threadId, snapshot.webSessionId || target, catalogVersion(summary)]);
+    },
     submissionMessage(action, payload) {
       if (!['send', 'append', 'queue'].includes(action) || /^\/(?:memories|status|usage|model|permissions|fast|skills|goal|rename|compact|diff|review|mcp|plugins|hooks)(?:\s|$)/.test(payload.text || '')) return null;
       return { role: 'user', content: payload.text || payload.prompt || '', references: payload.references || [],
@@ -585,7 +597,9 @@ export function normalizeSnapshot(value = {}) {
     session: normalizeSession(session),
     items,
     ...presentationFromAgentWeb(session, items, value.pendingRequests),
-    activeTurnId: session.turnState?.turnId || "",
+    technicalDetailsAvailable: [...new Set([...(value.transcript?.technicalDetailsAvailable || []), ...(value.technicalDetailsAvailable || []),
+      ...items.filter(item => item.historical && isNativeTurnId(item.turnId)).map(item => item.turnId)])],
+    activeTurnId: session.turnState?.active ? session.turnState.turnId || "" : "",
     revision: Number(value.revision ?? session.sessionRevision ?? session.outputRevision ?? 0),
     tokenUsage: session.tokenUsage ?? null,
     realtime: value.realtime || session.realtime,
@@ -752,7 +766,7 @@ async function json(url, options = {}) {
   if (/^\/api\/(platform\/sessions\/[^/?]+|session-preview\/[^/?]+)(?:\?|$)/.test(url)) {
     console.info('AgentWebTiming', JSON.stringify({ phase: 'snapshot-read',
       headersMs: Math.round(headersAt - started), bodyMs: Math.round(performance.now() - headersAt),
-      totalMs: Math.round(performance.now() - started), bytes: Number(response.headers?.get('content-length') || 0),
+      totalMs: Math.round(performance.now() - started), bytes: Number(response.headers?.get('x-agent-snapshot-bytes') || response.headers?.get('content-length') || 0),
       serverTiming: response.headers?.get('server-timing') || '' }));
   }
   if (!response.ok) throw Object.assign(new Error(body.error?.message || body.error || `Request failed (${response.status}).`), { knownResult: response.status >= 400 && response.status < 500 });

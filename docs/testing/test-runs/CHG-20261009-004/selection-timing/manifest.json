@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "tool": "workspace-playwright",
+  "name": "session-selection-duration-and-demand-loading",
+  "command": "record",
+  "status": "passed",
+  "startedAt": "2026-10-09T09:00:25.912Z",
+  "finishedAt": "2026-10-09T09:00:31.615Z",
+  "durationMs": 5703,
+  "flow": "/Users/mac/Documents/worktrees/CHG-20261009-004/agent-terminal-web/scripts/testing/session-selection-timing.flow.mjs",
+  "baseUrl": "http://127.0.0.1:4309/",
+  "traceMode": "failure",
+  "profiles": [
+    {
+      "name": "desktop",
+      "status": "passed",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "steps": [
+        {
+          "number": 1,
+          "type": "checkpoint",
+          "title": "首次选中长会话，正文在两秒内显示",
+          "screenshot": "screenshots/01-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        },
+        {
+          "number": 2,
+          "type": "checkpoint",
+          "title": "慢速刷新仍先显示已验证正文，五百毫秒内可见",
+          "screenshot": "screenshots/02-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        },
+        {
+          "number": 3,
+          "type": "checkpoint",
+          "title": "展开执行记录后才读取完整历史详情",
+          "screenshot": "screenshots/03-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        }
+      ],
+      "videos": [
+        {
+          "segment": 1,
+          "file": "video.webm",
+          "bytes": 194878,
+          "finalUrl": "http://127.0.0.1:4309/"
+        }
+      ],
+      "trace": null,
+      "pages": [
+        {
+          "number": 1,
+          "finalUrl": "http://127.0.0.1:4309/"
+        }
+      ],
+      "error": null
+    },
+    {
+      "name": "mobile",
+      "status": "passed",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "steps": [
+        {
+          "number": 1,
+          "type": "checkpoint",
+          "title": "首次选中长会话，正文在两秒内显示",
+          "screenshot": "screenshots/01-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        },
+        {
+          "number": 2,
+          "type": "checkpoint",
+          "title": "慢速刷新仍先显示已验证正文，五百毫秒内可见",
+          "screenshot": "screenshots/02-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        },
+        {
+          "number": 3,
+          "type": "checkpoint",
+          "title": "展开执行记录后才读取完整历史详情",
+          "screenshot": "screenshots/03-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        }
+      ],
+      "videos": [
+        {
+          "segment": 1,
+          "file": "video.webm",
+          "bytes": 81415,
+          "finalUrl": "http://127.0.0.1:4309/"
+        }
+      ],
+      "trace": null,
+      "pages": [
+        {
+          "number": 1,
+          "finalUrl": "http://127.0.0.1:4309/"
+        }
+      ],
+      "error": null
+    }
+  ]
+}

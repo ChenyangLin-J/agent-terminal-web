@@ -24,6 +24,7 @@ const controller = createSessionHostController({
   initialSessionId,
   independentStartup: true,
   submissionFeedback: true,
+  selectedSnapshotCache: true,
   capabilities: {
     attachments: true,
     queue: true,
@@ -51,7 +52,8 @@ controller.subscribe(() => {
   requestAnimationFrame(() => requestAnimationFrame(() => {
     if (selectionMeasurement !== measurement || controller.getSnapshot().selectedId !== measurement.id) return;
     console.info('AgentWebTiming', JSON.stringify({ phase: 'selection-visible',
-      totalMs: Math.round(performance.now() - measurement.started), messages: state.session.messages?.length || 0 }));
+      totalMs: Math.round(performance.now() - measurement.started), cached: Boolean(state.selectedSnapshotCached),
+      messages: state.session.messages?.length || 0 }));
     selectionMeasurement = null;
   }));
 });

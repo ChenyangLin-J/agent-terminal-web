@@ -3,17 +3,19 @@ import path from 'node:path';
 import http from 'node:http';
 import {spawn} from 'node:child_process';
 const root=process.env.CANDIDATE_PREVIEW_ROOT;
+const performanceFixture=process.env.STATE_PERFORMANCE_FIXTURE==='1';
 if(!root||!path.isAbsolute(root))throw new Error('An isolated absolute CANDIDATE_PREVIEW_ROOT is required.');
 const workspace=path.join(root,'workspace'),codex=path.join(root,'codex'),commands=path.join(root,'commands.jsonl');
 await mkdir(workspace,{recursive:true});await mkdir(codex,{recursive:true});await writeFile(commands,'');
 const threads={};const records={};
 for(const [index,profile]of ['desktop','mobile'].entries()){
  const d=String(index+1),id=`${d.repeat(8)}-${d.repeat(4)}-4${d.repeat(3)}-8${d.repeat(3)}-${d.repeat(12)}`;
- const timestamp='2026-10-09T00:00:00Z',turnId=`old-${profile}`;
+ const timestamp='2026-10-09T00:00:00Z',turnId=performanceFixture?`${d.repeat(8)}-${d.repeat(4)}-4${d.repeat(3)}-9${d.repeat(3)}-${d.repeat(12)}`:`old-${profile}`;
  threads[id]=[{id:turnId,status:'completed',items:[{id:`old-user-${profile}`,type:'userMessage',content:[{type:'text',text:`历史问题 ${profile}`}]},{id:`old-answer-${profile}`,type:'agentMessage',phase:'final_answer',text:`历史答复 ${profile}`}]}];
+ if(performanceFixture)threads[id][0].items.splice(1,0,...Array.from({length:315},(_,i)=>({id:`command-${i}`,type:'commandExecution',command:`echo fixture-${i}`,cwd:workspace,status:'completed',aggregatedOutput:'synthetic output '.repeat(1000),exitCode:0})));
  records[`old-${profile}`]={id:`old-${profile}`,sessionId:id,cwd:workspace,title:`状态验收 ${profile}`,transport:'app-server',runtimeKernel:'platform',mode:'resume-id',access:'full',args:['app-server'],released:true,releaseReason:'idle-ttl',startedAt:timestamp,lastActivityAt:timestamp,turnState:{active:false,lastCompletedTurnId:turnId}};
  const dir=path.join(codex,'sessions','2026','10','09');await mkdir(dir,{recursive:true});
- const rows=[{type:'session_meta',payload:{id,cwd:workspace,timestamp}},...threads[id][0].items.map(item=>({timestamp,type:'response_item',payload:{type:'message',role:item.type==='userMessage'?'user':'assistant',phase:item.phase,internal_chat_message_metadata_passthrough:{turn_id:turnId},content:[{type:item.type==='userMessage'?'input_text':'output_text',text:item.text||item.content[0].text}]}}))];
+ const rows=[{type:'session_meta',payload:{id,cwd:workspace,timestamp}},...threads[id][0].items.flatMap(item=>item.type==='commandExecution'?[{timestamp,type:'response_item',payload:{type:'function_call',id:item.id,name:'exec_command',call_id:item.id,arguments:JSON.stringify({cmd:item.command,workdir:workspace}),internal_chat_message_metadata_passthrough:{turn_id:turnId}}},{timestamp,type:'response_item',payload:{type:'function_call_output',call_id:item.id,output:item.aggregatedOutput,internal_chat_message_metadata_passthrough:{turn_id:turnId}}}]:[{timestamp,type:'response_item',payload:{type:'message',role:item.type==='userMessage'?'user':'assistant',phase:item.phase,internal_chat_message_metadata_passthrough:{turn_id:turnId},content:[{type:item.type==='userMessage'?'input_text':'output_text',text:item.text||item.content[0].text}]}}])];
  await writeFile(path.join(dir,`rollout-${id}.jsonl`),rows.map(JSON.stringify).join('\n')+'\n');
 }
 await writeFile(path.join(codex,'agent-web-sessions.json'),JSON.stringify(records));
@@ -27,7 +29,7 @@ setInterval(()=>{const rows=fs.readFileSync(${JSON.stringify(commands)},'utf8').
 readline.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line),p=m.params||{};
 if(m.method==='initialize')send({id:m.id,result:{userAgent:'state-fixture'}});
 else if(m.method==='model/list')send({id:m.id,result:{data:[{id:'fixture',model:'fixture',displayName:'Fixture',defaultReasoningEffort:'medium',supportedReasoningEfforts:[{reasoningEffort:'medium'}]}]}});
-else if(m.method==='config/read')send({id:m.id,result:{config:{model:'fixture',model_reasoning_effort:'medium'}}});
+else if(m.method==='config/read')setTimeout(()=>send({id:m.id,result:{config:{model:'fixture',model_reasoning_effort:'medium'}}}),${performanceFixture?2000:0});
 else if(m.method==='thread/start'){const id=crypto.randomUUID();threads.set(id,[]);attached.add(id);send({id:m.id,result:{thread:{id,turns:[]}}});}
 else if(m.method==='thread/resume'){attached.add(p.threadId);if(!threads.has(p.threadId))threads.set(p.threadId,[]);send({id:m.id,result:{thread:{id:p.threadId,turns:threads.get(p.threadId)},initialTurnsPage:{data:threads.get(p.threadId),nextCursor:null}}});}
 else if(m.method==='thread/read')send({id:m.id,result:{thread:{id:p.threadId,turns:threads.get(p.threadId)||[]}}});

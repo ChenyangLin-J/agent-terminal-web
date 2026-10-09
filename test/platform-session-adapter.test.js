@@ -4,6 +4,21 @@ import test from "node:test";
 import { applyAgentWebEvent, createAgentWebSessionAdapter, normalizeSnapshot, previewSnapshot } from "../public/platform-agent-web-adapter.js";
 import { agentWebSessionContext } from '../public/platform-agent-web-adapter.js';
 
+test('warm body eligibility is pure and rejects unknown, newer active, or replaced native binding', t => {
+  const adapter = createAgentWebSessionAdapter({ clientId: 'cache-key-test', lazyMetadata: true });
+  t.after(() => adapter.dispose());
+  const snapshot = normalizeSnapshot({ session: { id: 'web-a', sessionId: 'native-a', ready: true, turnState: { active: false } } });
+  snapshot.webSessionId = 'web-a';
+  const row = { id: 'web-a', threadId: 'native-a', attachmentId: 'web-a', status: 'idle', sessionRevision: 1 };
+  assert.equal(adapter.getSnapshotCacheKey(snapshot, []), null);
+  const key = adapter.getSnapshotCacheKey(snapshot, [row]);
+  assert.ok(key);
+  assert.notEqual(adapter.getSnapshotCacheKey(snapshot, [{ ...row, sessionRevision: 2 }]), key);
+  assert.equal(adapter.getSnapshotCacheKey(snapshot, [{ ...row, status: 'running', turnState: { active: true } }]), null);
+  assert.equal(adapter.getSnapshotCacheKey(snapshot, [{ ...row, attachmentId: 'replacement' }]), null);
+  assert.equal(snapshot.webSessionId, 'web-a');
+});
+
 test('lazy metadata keeps drafts local, loads only on demand, and deduplicates retriable reads', async t => {
   const originals = { fetch: globalThis.fetch, localStorage: globalThis.localStorage };
   const stored = new Map();
@@ -131,7 +146,7 @@ test('a genuine historical title may be exactly the placeholder text', () => {
 
 test("Platform adapter retains Agent Web session and Codex thread identities", () => {
   const snapshot = normalizeSnapshot({
-    session: { id: "web-a", sessionId: "thread-a", title: "Existing", outputRevision: 8, turnState: { turnId: "turn-a" } },
+    session: { id: "web-a", sessionId: "thread-a", title: "Existing", outputRevision: 8, turnState: { active: true, turnId: "turn-a" } },
     transcript: { items: [{ id: "item-a" }] },
   });
   assert.equal(snapshot.sessionId, "web-a");

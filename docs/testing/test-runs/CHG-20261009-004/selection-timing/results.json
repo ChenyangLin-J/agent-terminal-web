@@ -1,0 +1,50 @@
+[
+  {
+    "profile": "desktop",
+    "network": "loopback Chromium, synthetic native history and 1500ms revalidation delay",
+    "budgetsMs": {
+      "first": 2000,
+      "warm": 500
+    },
+    "first": {
+      "phase": "selection-visible",
+      "totalMs": 54,
+      "cached": false,
+      "messages": 2
+    },
+    "warm": {
+      "phase": "selection-visible",
+      "totalMs": 30,
+      "cached": true,
+      "messages": 2
+    },
+    "snapshotBytes": 3046,
+    "closedExecutionRecords": 315,
+    "processReads": 1,
+    "passed": true
+  },
+  {
+    "profile": "mobile",
+    "network": "loopback Chromium, synthetic native history and 1500ms revalidation delay",
+    "budgetsMs": {
+      "first": 2000,
+      "warm": 500
+    },
+    "first": {
+      "phase": "selection-visible",
+      "totalMs": 40,
+      "cached": false,
+      "messages": 2
+    },
+    "warm": {
+      "phase": "selection-visible",
+      "totalMs": 31,
+      "cached": true,
+      "messages": 2
+    },
+    "snapshotBytes": 3040,
+    "closedExecutionRecords": 315,
+    "processReads": 1,
+    "passed": true
+  }
+]

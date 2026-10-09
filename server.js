@@ -6,6 +6,7 @@ import { presentAppServerUserText } from './lib/app-server-user-message.js';
 import { createSessionReferenceEnvelopeInput, normalizeSessionReferences, parseSessionReferenceEnvelopes, requireReferences, resolveAgentWebReferences, sessionReferenceKey } from './lib/session-references.js';
 import { registerPlatformSessionRoutes } from './lib/platform-session-routes.js';
 import { createPlatformSessionEvents } from './lib/platform-session-events.js';
+import { projectSessionTranscript } from './lib/session-transcript-projection.js';
 import { registerPlatformFilePreviewRoutes } from './lib/platform-file-preview.js';
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -1481,7 +1482,7 @@ registerPlatformSessionRoutes(app, {
   listWebSessions: (snapshot) => [...[...sessions.values()].filter((session) => !session.exited).map((session) => publicSession(session, snapshot)), ...listDetachedSessions(snapshot)],
   listCodexSessions, searchSessions: searchCodexSessions, favoriteIds: (snapshot) => snapshot?.favorites || favoriteSessionIdsForHost(),
   status: appServerStatus, models: appServerModels, metadata: appServerSessionMetadata,
-  context: appServerContext, prepareSnapshot: appServerContext,
+  context: appServerContext, prepareSnapshot: scheduleAppServerContext,
   logSnapshot: fields => logAgentEvent('session-snapshot', fields),
   archiveIds: (snapshot) => new Set(Object.keys(snapshot?.archive || readSessionArchiveSync())),
   resolveReferences: resolveSessionReferences,
@@ -4490,6 +4491,19 @@ async function appServerContext(session) {
     tokenUsage: publicAppTokenUsage(session.appTokenUsage || session.appDiskTokenUsage, session.appConfiguredContextWindow) };
 }
 
+function scheduleAppServerContext(session) {
+  if (session.appContextRead || Date.now() - (session.appContextUpdatedAt || 0) < 30_000) return;
+  const previous = JSON.stringify([session.appConfiguredModel, session.appConfiguredReasoningEffort,
+    session.appConfiguredContextWindow, session.appDiskTokenUsage]);
+  session.appContextRead = appServerContext(session).then(() => {
+    session.appContextUpdatedAt = Date.now();
+    const next = JSON.stringify([session.appConfiguredModel, session.appConfiguredReasoningEffort,
+      session.appConfiguredContextWindow, session.appDiskTokenUsage]);
+    if (!session.exited && previous !== next) broadcast(session, 'status', publicSession(session));
+  }).catch(error => logAgentEvent('session-context-read-failed', { webSessionId: session.id,
+    message: cleanClientLogValue(error.message, 200) })).finally(() => { session.appContextRead = null; });
+}
+
 async function appServerModels(session, argument) {
   const metadata = await appServerSessionMetadata(session.cwd);
   const models = metadata.models;
@@ -4934,7 +4948,7 @@ function publicAppTranscript(session) {
     restoredTurnCount: session.restoredTurnCount || 0,
     hasEarlierTurns: Boolean(session.restoredHistoryHasMore),
     loadingEarlier: Boolean(session.restoredHistoryLoading),
-    items: session.appTranscript.map((item) => ({ ...item })),
+    ...projectSessionTranscript(session.appTranscript, { activeTurnId: runtimeActiveTurnId(session) }),
   };
 }
 

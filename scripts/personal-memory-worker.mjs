@@ -24,6 +24,11 @@ import {
   usageFromCodexEvents,
 } from "../lib/personal-memory-worker.js";
 import {
+  recordSessionMemoryExtraction,
+  sessionMemoryContextFingerprint,
+  validateSessionMemoryReview,
+} from "../lib/session-memory-diagnostics.js";
+import {
   buildNativeMemoryReviewPrompt,
   captureNativeMemorySnapshot,
   nativeMemoryDelta,
@@ -208,19 +213,45 @@ async function run() {
       });
       const extraction = await runExtraction(prompt);
       recordWorkerUsage(runtime, extraction.usage, new Date());
-      const proposals = Array.isArray(extraction.output?.proposals)
-        ? extraction.output.proposals.filter((proposal) => proposal?.scope === "global")
-        : [];
+      const currentStore = await readPersonalMemoryStore(CODEX_HOME);
+      const currentHistory = await readKnowledgeChanges({ codexHome: CODEX_HOME, workspaceRoot: WORKSPACE_ROOT });
+      if (sessionMemoryContextFingerprint(store.entries, reviewHistory.changes) !== sessionMemoryContextFingerprint(currentStore.entries, currentHistory.changes)) {
+        throw new Error("提取期间个人记忆或待审批记录已改变；保留原水位，以最新上下文重试。");
+      }
+      validateSessionMemoryReview(extraction.output, {
+        conversation,
+        existingEntries: currentStore.entries,
+        reviewDecisions: currentHistory.changes,
+      });
+      const proposals = extraction.output.proposals;
+      const expectedTargets = Object.fromEntries(proposals.filter((proposal) => proposal.action !== "create").map((proposal) => [proposal.targetId, store.entries.find((entry) => entry.id === proposal.targetId)]));
       const results = await applyOrMergePersonalMemoryProposals(proposals, {
         threadId: thread.id,
         title: thread.title,
         source: thread.source,
-      });
+      }, { expectedTargets });
+      if (results.length !== proposals.length || results.some((result) => result.action === "merge-skipped")) {
+        throw new Error("个人记忆候选未能完整处理；保留原水位等待重试。");
+      }
       const knowledgeProposals = await recordProjectAndSkillProposals(extraction.output, {
         threadId: thread.id,
         title: thread.title,
         source: thread.source,
       }, { codexHome: CODEX_HOME, workspaceRoot: WORKSPACE_ROOT });
+      const diagnostic = await recordSessionMemoryExtraction({
+        thread,
+        conversation,
+        afterTimestamp: threadState?.lastEventAt || "",
+        prompt,
+        output: extraction.output,
+        personalResults: results,
+        knowledgeResults: knowledgeProposals,
+      }, { codexHome: CODEX_HOME, workspaceRoot: WORKSPACE_ROOT });
+      nextState.lastExtraction = {
+        at: diagnostic.at,
+        assessment: diagnostic.modelReview.assessment,
+        emitted: diagnostic.emitted,
+      };
       summary.processed += 1;
       for (const result of results) {
         if (result.action === "created") summary.created += 1;
@@ -447,7 +478,7 @@ async function reviewHomeCaptures(reviewDecisions, runtime) {
   return { reviewed: batch.captures.length, pending };
 }
 
-async function applyOrMergePersonalMemoryProposals(proposals, source) {
+async function applyOrMergePersonalMemoryProposals(proposals, source, options = {}) {
   const results = [];
   for (const proposal of Array.isArray(proposals) ? proposals : []) {
     const mergePendingId = String(proposal?.mergePendingId || "").trim();
@@ -497,7 +528,8 @@ async function applyOrMergePersonalMemoryProposals(proposals, source) {
       }
       continue;
     }
-    results.push(...await applyPersonalMemoryProposals(CODEX_HOME, [proposal], source));
+    const expected = options.expectedTargets?.[proposal.targetId];
+    results.push(...await applyPersonalMemoryProposals(CODEX_HOME, [proposal], source, expected ? { expectedTargets: { [proposal.targetId]: expected } } : {}));
   }
   return results;
 }

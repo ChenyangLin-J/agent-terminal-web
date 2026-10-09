@@ -78,7 +78,8 @@ never mutates the rollout.
 
 Agent Web process reads reuse completed native thread/turn data before reading a
 Session, coalesce concurrent requests and cap retained results at 50 turns / 8 MiB.
-The shared tabbed detail card starts collapsed for active and completed Turns.
+The shared tabbed detail card opens active Turns and collapses completed Turns
+by default; an explicit user disclosure choice remains authoritative.
 It reads historical execution items only when the execution tab opens, restores
 missing expanded items after refresh, and reports execution counts only after a
 full read. The product-owned memory tab supplies exact citations and the existing

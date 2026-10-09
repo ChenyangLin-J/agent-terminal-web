@@ -4,9 +4,9 @@
   const closeButton = document.querySelector("#integrations-close");
   const content = document.querySelector("#integrations-content");
 
-  if (!openButton || !dialog || !content) return;
+  if (!dialog || !content) return;
 
-  openButton.addEventListener("click", open);
+  openButton?.addEventListener("click", open);
   closeButton?.addEventListener("click", () => dialog.close());
   dialog.addEventListener("click", (event) => {
     if (event.target === dialog) dialog.close();

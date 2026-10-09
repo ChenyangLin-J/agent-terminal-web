@@ -168,3 +168,14 @@ new binding to Platform's selected Session recovery. Old deep-link reads use the
 actual attachment returned by the server before subscribing. Catalogue activity,
 foreground recovery and restart revision changes reconcile only the selected
 body; they do not open connections or load transcripts for other history rows.
+
+Private JSON reads retry one transport/body-parse failure after 150ms, subject
+to the selected read's AbortSignal. HTTP rejections and mutations are not
+automatically retried. Successful responses must parse correctly; a truncated
+body cannot become an empty conversation. Only 404/410 can use the missing
+history fallback. API fetches use manual redirects so the private gate's login
+redirect becomes an explicit authentication message rather than a cross-origin
+fetch failure. The Host retains available body/draft state and displays errors;
+the DOM selection wrapper consumes the already-reported rejection. Regression
+coverage is in `test/platform-transport-recovery.test.js` and the recorded
+desktop/mobile `scripts/testing/session-transport-recovery.flow.mjs` flow.

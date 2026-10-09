@@ -1,0 +1,85 @@
+{
+  "source": "recorded controlled Chromium flow; not a spontaneous production failure",
+  "results": [
+    {
+      "profile": "desktop",
+      "network": "isolated Chromium with failed GET and private-gate redirect injection",
+      "firstVisibleMs": 204,
+      "failures": [
+        {
+          "phase": "request-failed",
+          "method": "GET",
+          "attempt": 1,
+          "kind": "network",
+          "retrying": true
+        },
+        {
+          "phase": "request-failed",
+          "method": "GET",
+          "attempt": 1,
+          "kind": "network",
+          "retrying": true
+        },
+        {
+          "phase": "request-failed",
+          "method": "GET",
+          "attempt": 1,
+          "kind": "network",
+          "retrying": true
+        },
+        {
+          "phase": "request-failed",
+          "method": "GET",
+          "attempt": 2,
+          "kind": "network",
+          "retrying": false
+        }
+      ],
+      "loginRedirects": 2,
+      "followedLogin": 0,
+      "draftRetained": true,
+      "mutationsResent": 0,
+      "passed": true
+    },
+    {
+      "profile": "mobile",
+      "network": "isolated Chromium with failed GET and private-gate redirect injection",
+      "firstVisibleMs": 185,
+      "failures": [
+        {
+          "phase": "request-failed",
+          "method": "GET",
+          "attempt": 1,
+          "kind": "network",
+          "retrying": true
+        },
+        {
+          "phase": "request-failed",
+          "method": "GET",
+          "attempt": 1,
+          "kind": "network",
+          "retrying": true
+        },
+        {
+          "phase": "request-failed",
+          "method": "GET",
+          "attempt": 1,
+          "kind": "network",
+          "retrying": true
+        },
+        {
+          "phase": "request-failed",
+          "method": "GET",
+          "attempt": 2,
+          "kind": "network",
+          "retrying": false
+        }
+      ],
+      "loginRedirects": 2,
+      "followedLogin": 0,
+      "draftRetained": true,
+      "mutationsResent": 0,
+      "passed": true
+    }
+  ]
+}

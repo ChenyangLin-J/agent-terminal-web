@@ -1,0 +1,123 @@
+{
+  "schemaVersion": 1,
+  "tool": "workspace-playwright",
+  "name": "session-transport-recovery",
+  "command": "record",
+  "status": "passed",
+  "startedAt": "2026-10-09T10:51:50.355Z",
+  "finishedAt": "2026-10-09T10:51:54.073Z",
+  "durationMs": 3718,
+  "flow": "/Users/mac/Documents/worktrees/CHG-20261009-004/agent-terminal-web/scripts/testing/session-transport-recovery.flow.mjs",
+  "baseUrl": "http://127.0.0.1:4309/",
+  "traceMode": "failure",
+  "profiles": [
+    {
+      "name": "desktop",
+      "status": "passed",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "steps": [
+        {
+          "number": 1,
+          "type": "checkpoint",
+          "title": "瞬时断网后自动恢复，正文两秒内出现",
+          "screenshot": "screenshots/01-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        },
+        {
+          "number": 2,
+          "type": "checkpoint",
+          "title": "持续断网有明确提示，正文和草稿仍保留",
+          "screenshot": "screenshots/02-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        },
+        {
+          "number": 3,
+          "type": "checkpoint",
+          "title": "连接恢复后切回会话，草稿可以继续编辑",
+          "screenshot": "screenshots/03-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        },
+        {
+          "number": 4,
+          "type": "checkpoint",
+          "title": "登录过期显示明确提示，不再变成跨域读取失败",
+          "screenshot": "screenshots/04-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        }
+      ],
+      "videos": [
+        {
+          "segment": 1,
+          "file": "video.webm",
+          "bytes": 204254,
+          "finalUrl": "http://127.0.0.1:4309/"
+        }
+      ],
+      "trace": null,
+      "pages": [
+        {
+          "number": 1,
+          "finalUrl": "http://127.0.0.1:4309/"
+        }
+      ],
+      "error": null
+    },
+    {
+      "name": "mobile",
+      "status": "passed",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "steps": [
+        {
+          "number": 1,
+          "type": "checkpoint",
+          "title": "瞬时断网后自动恢复，正文两秒内出现",
+          "screenshot": "screenshots/01-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        },
+        {
+          "number": 2,
+          "type": "checkpoint",
+          "title": "持续断网有明确提示，正文和草稿仍保留",
+          "screenshot": "screenshots/02-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        },
+        {
+          "number": 3,
+          "type": "checkpoint",
+          "title": "连接恢复后切回会话，草稿可以继续编辑",
+          "screenshot": "screenshots/03-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        },
+        {
+          "number": 4,
+          "type": "checkpoint",
+          "title": "登录过期显示明确提示，不再变成跨域读取失败",
+          "screenshot": "screenshots/04-checkpoint.png",
+          "url": "http://127.0.0.1:4309/"
+        }
+      ],
+      "videos": [
+        {
+          "segment": 1,
+          "file": "video.webm",
+          "bytes": 116358,
+          "finalUrl": "http://127.0.0.1:4309/"
+        }
+      ],
+      "trace": null,
+      "pages": [
+        {
+          "number": 1,
+          "finalUrl": "http://127.0.0.1:4309/"
+        }
+      ],
+      "error": null
+    }
+  ]
+}

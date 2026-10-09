@@ -41,7 +41,9 @@ const execute = (action, payload) => controller.execute(action, payload);
 let selectionMeasurement = null;
 const selectMeasuredSession = (session) => {
   selectionMeasurement = { id: String(session.id || session.sessionId), started: performance.now(), framePending: false };
-  return controller.select(selectionMeasurement.id);
+  // The Host already publishes selection failures beside the preserved body.
+  // A DOM click must not also create an unhandled rejected Promise.
+  return controller.select(selectionMeasurement.id).catch(() => null);
 };
 controller.subscribe(() => {
   const measurement = selectionMeasurement;

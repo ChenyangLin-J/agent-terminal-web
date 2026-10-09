@@ -178,7 +178,7 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
         const params = new URLSearchParams(sourceSession ? { sourceSession } : {});
         let value;
         try { value = await json(`/api/session-preview/${encodeURIComponent(id.slice(8))}?${params}`, { signal }); }
-        catch (error) { if (!error.knownResult) throw error; value = { conversation: { turns: [] } }; }
+        catch (error) { if (!missingSession(error)) throw error; value = { conversation: { turns: [] } }; }
         const previous = previews.get(id);
         const previewTitle = summaries.get(id)?.title || (previous?.titleIsFallback ? '' : previous?.title) || title;
         const snapshot = previewSnapshot(id, value, { sourceSession, title: previewTitle });
@@ -194,7 +194,7 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
       if (!metadata?.released) {
         try { result = await json(`/api/platform/sessions/${encodeURIComponent(target)}`, { signal }); }
         catch (error) {
-          if (!error.knownResult) throw error;
+          if (!missingSession(error)) throw error;
           await adapter.listSessions({ signal }); metadata = summaries.get(id);
           if (!metadata?.released) throw error;
         }
@@ -204,7 +204,7 @@ export function createAgentWebSessionAdapter({ clientId = browserClientId(), sou
         metadata = result?.session || metadata;
         released.set(id, metadata);
         const value = await json(`/api/session-preview/${encodeURIComponent(metadata.sessionId)}`, { signal }).catch(error => {
-          if (!error.knownResult) throw error;
+          if (!missingSession(error)) throw error;
           return { conversation: { turns: [] } };
         });
         const snapshot = { ...previewSnapshot(`history:${metadata.sessionId}`, value, { title: metadata.title }), sessionId: id, threadId: metadata.sessionId, released: true, status: 'idle', session: metadata, tokenUsage: value.tokenUsage ?? metadata.tokenUsage ?? null };
@@ -766,18 +766,55 @@ function catalogVersion(value = {}) {
 
 async function json(url, options = {}) {
   const started = performance.now();
-  const response = await fetch(url, { headers: { "Content-Type": "application/json" }, ...options });
-  const headersAt = performance.now();
-  const body = await response.json().catch(() => ({}));
-  if (/^\/api\/(platform\/sessions\/[^/?]+|session-preview\/[^/?]+)(?:\?|$)/.test(url)) {
-    console.info('AgentWebTiming', JSON.stringify({ phase: 'snapshot-read',
-      headersMs: Math.round(headersAt - started), bodyMs: Math.round(performance.now() - headersAt),
-      totalMs: Math.round(performance.now() - started), bytes: Number(response.headers?.get('x-agent-snapshot-bytes') || response.headers?.get('content-length') || 0),
-      encodedBytes: Number(response.headers?.get('x-agent-snapshot-encoded-bytes') || response.headers?.get('content-length') || 0),
-      serverTiming: response.headers?.get('server-timing') || '', transport: snapshotTransportTiming(response.url) }));
+  const method = (options.method || 'GET').toUpperCase();
+  const attempts = method === 'GET' ? 2 : 1;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    options.signal?.throwIfAborted();
+    let response, headersAt, body;
+    try {
+      // The private gate redirects expired credentials to a different origin.
+      // Keep API redirects visible instead of following them into a CORS error.
+      response = await fetch(url, { ...options, redirect: 'manual', headers: { 'Content-Type': 'application/json', ...options.headers } });
+      headersAt = performance.now();
+      if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+        throw Object.assign(new Error('登录已过期，请刷新页面重新登录。'), { authRequired: true, knownResult: false });
+      }
+      try { body = await response.json(); }
+      catch (error) {
+        // Preserve explicit HTTP rejection even when its error body is invalid.
+        if (!response.ok && error.name !== 'AbortError' && !options.signal?.aborted) body = {};
+        else throw error;
+      }
+    } catch (error) {
+      if (error.name === 'AbortError' || options.signal?.aborted) throw options.signal?.reason || error;
+      if (error.authRequired) throw error;
+      const kind = error instanceof SyntaxError ? 'invalid-response' : error instanceof TypeError ? 'network' : null;
+      if (!kind) throw error;
+      console.info('AgentWebTiming', JSON.stringify({ phase: 'request-failed', method, attempt, kind, retrying: attempt < attempts }));
+      if (attempt < attempts) { await retryRead(options.signal); continue; }
+      throw Object.assign(new Error(kind === 'invalid-response' ? '服务响应异常，请重试。' : '网络连接中断，请重试。', { cause: error }), { knownResult: false, transportFailure: kind });
+    }
+    if (/^\/api\/(platform\/sessions\/[^/?]+|session-preview\/[^/?]+)(?:\?|$)/.test(url)) {
+      console.info('AgentWebTiming', JSON.stringify({ phase: 'snapshot-read', attempts: attempt,
+        headersMs: Math.round(headersAt - started), bodyMs: Math.round(performance.now() - headersAt),
+        totalMs: Math.round(performance.now() - started), bytes: Number(response.headers?.get('x-agent-snapshot-bytes') || response.headers?.get('content-length') || 0),
+        encodedBytes: Number(response.headers?.get('x-agent-snapshot-encoded-bytes') || response.headers?.get('content-length') || 0),
+        serverTiming: response.headers?.get('server-timing') || '', transport: snapshotTransportTiming(response.url) }));
+    }
+    if (!response.ok) throw Object.assign(new Error(body?.error?.message || body?.error || `Request failed (${response.status}).`), { status: response.status, knownResult: response.status >= 400 && response.status < 500 });
+    return body;
   }
-  if (!response.ok) throw Object.assign(new Error(body.error?.message || body.error || `Request failed (${response.status}).`), { knownResult: response.status >= 400 && response.status < 500 });
-  return body;
+}
+
+function missingSession(error) { return error.status === 404 || error.status === 410; }
+
+function retryRead(signal) {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const abort = () => { clearTimeout(timer); signal.removeEventListener('abort', abort); reject(signal.reason); };
+    const timer = setTimeout(() => { signal?.removeEventListener('abort', abort); resolve(); }, 150);
+    signal?.addEventListener('abort', abort, { once: true });
+  });
 }
 
 function snapshotTransportTiming(url) {
